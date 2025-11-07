@@ -1,4 +1,4 @@
-import {PolyClient, PolySide} from 'src/icu/poly/core/PolyClient.js';
+import { PolyClient, PolySide } from '../core/PolyClient.js';
 
 const polyClient = new PolyClient();
 const tokenIdA = '34867255137037269425915341043331567102849891703547876866504427548331529932296'
@@ -150,13 +150,35 @@ let listCryptoMarketSortedByEndDateTest = () => {
             console.log(ele[0]);
             // console.log(ele[0].outcomePrices);
             // console.log(typeof ele[0].outcomePrices);
-            ele.forEach(ele=>console.log(ele.startDate));
+            ele.forEach(ele => console.log(ele.startDate));
+        });
+}
+let getPricesHistoryTest = () => {
+    polyClient.getPricesHistory('78087950351996133232072167455070038424713819740092043518753101377185211074036')
+        .then(console.log)
+}
+let listCryptoEventsTest = () => {
+    polyClient.listCryptoEvents()
+        .then(ele => {
+            console.log(ele.length);
+            console.log(ele[0]);
+            ele.forEach(ele => {
+                if (!ele.ticker.includes('up')) {
+                    console.log(ele.ticker)
+                }
+            })
         });
 }
 
 
-//
-listCryptoMarketSortedByEndDateTest();
+listCryptoEventsTest();
+
+
+// 获取价格历史
+// getPricesHistoryTest();
+
+// 加密板块市场列表
+// listCryptoMarketSortedByEndDateTest();
 
 // listPositionsTest()
 // 订单列表获取

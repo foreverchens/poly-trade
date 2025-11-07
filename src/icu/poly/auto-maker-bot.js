@@ -1,5 +1,5 @@
-import {appendFile, readFile, writeFile} from "fs/promises";
-import {PolyClient, PolySide} from "src/icu/poly/core/PolyClient.js"; // 按你的文件名改路径
+import { appendFile, readFile, writeFile } from "fs/promises";
+import { PolyClient, PolySide } from "src/icu/poly/core/PolyClient.js"; // 按你的文件名改路径
 
 // 性价比低
 // ===== 写死配置（最小可用）=====
@@ -35,7 +35,7 @@ if (!TOKEN_ID_Y || !TOKEN_ID_N) {
 
 // 示例成交哈希：0x7952d3130ffba2640d4ac25aaea76908e0c7f3b15b0fff9189f8b4e09aa449a3，价格 0.64
 // 示例成交哈希：0xc4383fbf4555d10043c5a3d2cd033644322737e131cd69863b6d4e990edf2e5d，价格 0.31
-const legs = [{tokenId: TOKEN_ID_Y, label: "YES", orderId: null, price: null}, {
+const legs = [{ tokenId: TOKEN_ID_Y, label: "YES", orderId: null, price: null }, {
     tokenId: TOKEN_ID_N,
     label: "NO",
     orderId: null,
@@ -43,14 +43,14 @@ const legs = [{tokenId: TOKEN_ID_Y, label: "YES", orderId: null, price: null}, {
 },];
 
 function logLegs(prefix) {
-    console.log(`${prefix} 挂单=${JSON.stringify(legs.map(({label, orderId, price}) => ({
+    console.log(`${prefix} 挂单=${JSON.stringify(legs.map(({ label, orderId, price }) => ({
         label, orderId, price,
     })))}`);
 }
 
 async function saveLegs() {
     try {
-        await writeFile(STATE_FILE, `${JSON.stringify(legs.map(({label, orderId, price}) => ({
+        await writeFile(STATE_FILE, `${JSON.stringify(legs.map(({ label, orderId, price }) => ({
             label, orderId, price,
         })), null, 2)}\n`);
     } catch (err) {
@@ -62,7 +62,7 @@ async function loadLegs() {
     try {
         const raw = await readFile(STATE_FILE, "utf8");
         const data = JSON.parse(raw);
-        data?.forEach(({label, orderId, price}) => {
+        data?.forEach(({ label, orderId, price }) => {
             const leg = legs.find((item) => item.label === label);
             if (!leg) return;
             leg.orderId = orderId ?? null;
@@ -124,7 +124,7 @@ async function placeBid(leg) {
         }
         const price = Number(priceNum.toFixed(2));
         const depthUsd = Number((price * sizeNum).toFixed(2));
-        return {price, size: sizeNum, depthUsd};
+        return { price, size: sizeNum, depthUsd };
     }).filter(Boolean);
 
     let bestBid = depthLevels[0]?.price;

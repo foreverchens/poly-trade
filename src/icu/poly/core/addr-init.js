@@ -7,7 +7,7 @@ import { ethers } from "ethers";
 const RPC_URL = process.env.RPC_URL || "https://polygon-rpc.com";
 
 //导出的私钥在v6版本下需要加上0x前缀
-const PRIVATE_KEY = '0x'+process.env.PRIVATE_KEY;
+const PRIVATE_KEY = '0x' + process.env.PRIVATE_KEY;
 const PUBLIC_KEY = process.env.PUBLIC_KEY || null; // 可选，不填自动从私钥推导
 const CHAIN_ID = 137; // Polygon
 
@@ -18,13 +18,13 @@ if (!PRIVATE_KEY) {
 
 // ========== 目标合约与地址（来自 Gist） ==========
 const USDC_ADDRESS = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"; // Polygon USDC.e 非原生USDC!!!!
-const CTF_ADDRESS  = "0x4D97DCd97eC945f40cF65F87097ACe5EA0476045"; // CTF(ERC1155)
+const CTF_ADDRESS = "0x4D97DCd97eC945f40cF65F87097ACe5EA0476045"; // CTF(ERC1155)
 
 // 三个需要授权/批准的目标（与 Gist 一致）
 const TARGETS = [
-    { name: "CTF Exchange",        addr: "0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E" },
+    { name: "CTF Exchange", addr: "0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E" },
     { name: "Neg Risk CTF Exchange", addr: "0xC5d563A36AE78145C45a50134d48A1215220f80a" },
-    { name: "Neg Risk Adapter",      addr: "0xd91E80cF2E7be2e162c6513ceD06f1dD0dA35296" },
+    { name: "Neg Risk Adapter", addr: "0xd91E80cF2E7be2e162c6513ceD06f1dD0dA35296" },
 ];
 
 // ========== 轻量 ABI ==========
@@ -49,7 +49,7 @@ async function main() {
     console.log(`POL 余额: ${ethers.formatEther(polBal)} POL`);
 
     const usdc = new ethers.Contract(USDC_ADDRESS, ERC20_ABI, wallet);
-    const ctf  = new ethers.Contract(CTF_ADDRESS,  ERC1155_ABI, wallet);
+    const ctf = new ethers.Contract(CTF_ADDRESS, ERC1155_ABI, wallet);
 
     // 打印 USDC 小数位，方便校验
     const usdcDecimals = await usdc.decimals().catch(() => 6);
@@ -92,5 +92,4 @@ async function main() {
 
 main().catch((e) => {
     console.error(e);
-    process.exit(1);
 });

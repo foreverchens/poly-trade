@@ -3,7 +3,7 @@
   "name": "poly",
   "version": "1.0.0",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "test": "node --test",
     "start": "node src/icu/poly/web-server.js"
   },
   "keywords": [],
@@ -17,8 +17,8 @@
     "axios": "^1.6.8",
     "dotenv": "^17.2.3",
     "ethers": "^6.15.0",
-    "express": "^5.1.0",
+    "express": "^4.19.2",
     "viem": "^2.38.6",
-    "express": "^4.19.2"
+    "zod": "^4.1.12"
   }
 }

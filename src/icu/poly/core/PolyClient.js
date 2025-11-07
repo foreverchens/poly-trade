@@ -1,10 +1,11 @@
 import "dotenv/config";
 import pkg from "@polymarket/clob-client";
-import {SignatureType} from "@polymarket/order-utils";
-import {Wallet} from "@ethersproject/wallet";
+import { PriceHistoryInterval } from "@polymarket/clob-client/dist/types.js";
+import { SignatureType } from "@polymarket/order-utils";
+import { Wallet } from "@ethersproject/wallet";
 import axios from "axios";
 
-const {ClobClient, OrderType, Side, AssetType} = pkg;
+const { ClobClient, OrderType, Side, AssetType } = pkg;
 
 const DEFAULT_HOST = "https://clob.polymarket.com";
 const DEFAULT_CHAIN_ID = 137;
@@ -15,34 +16,25 @@ const DEFAULT_SIGNATURE_TYPE = SignatureType.EOA;
 const DEFAULT_REWARDS_HOST = "https://polymarket.com/api";
 const DEFAULT_DATA_HOST = "https://data-api.polymarket.com";
 const DEFAULT_MARKET_HOST = "https://gamma-api.polymarket.com";
+const VALID_PRICE_HISTORY_INTERVALS = new Set(Object.values(PriceHistoryInterval));
 
 export class PolyClient {
-    constructor({
-                    host = DEFAULT_HOST,
-                    chainId = DEFAULT_CHAIN_ID,
-                    tokenId = DEFAULT_TOKEN_ID,
-                    privateKey = process.env.PRIVATE_KEY,
-                    signatureType = DEFAULT_SIGNATURE_TYPE,
-                    funderAddress,
-                    orderType = DEFAULT_ORDER_TYPE,
-                    rewardsHost = DEFAULT_REWARDS_HOST,
-                    dataHost = DEFAULT_DATA_HOST,
-                    marketHost = DEFAULT_MARKET_HOST,
-                } = {}) {
+    constructor() {
+        const privateKey = process.env.PRIVATE_KEY;
         if (!privateKey) {
             throw new Error("Missing PRIVATE_KEY for PolyClient");
         }
 
-        this.host = host;
-        this.chainId = chainId;
-        this.tokenId = tokenId;
-        this.signatureType = signatureType;
-        this.orderType = orderType;
-        this.rewardsHost = rewardsHost;
-        this.dataHost = dataHost;
-        this.marketHost = marketHost;
+        this.host = DEFAULT_HOST;
+        this.chainId = DEFAULT_CHAIN_ID;
+        this.tokenId = DEFAULT_TOKEN_ID;
+        this.signatureType = DEFAULT_SIGNATURE_TYPE;
+        this.orderType = DEFAULT_ORDER_TYPE;
+        this.rewardsHost = DEFAULT_REWARDS_HOST;
+        this.dataHost = DEFAULT_DATA_HOST;
+        this.marketHost = DEFAULT_MARKET_HOST;
         this.signer = new Wallet(privateKey);
-        this.funderAddress = funderAddress?.trim() || this.signer.address;
+        this.funderAddress = this.signer.address;
         this.clientPromise = null;
     }
 
@@ -59,6 +51,59 @@ export class PolyClient {
 
 
     /*================市场API===================*/
+
+    /**
+     * todo 获取token历史价格
+     * @param market tokenId
+     * @param interval 周期 1h
+     * @returns {Promise<void>｜{
+     *   "history": [
+     *     {
+     *       "t": 1762606026,
+     *       "p": 0.025
+     *     },
+     *     {
+     *       "t": 1762606087,
+     *       "p": 0.023
+     *     },
+     *     {
+     *       "t": 1762606146,
+     *       "p": 0.022
+     *     }
+     *    }}
+     */
+    async getPricesHistory(market, interval) {
+        const normalizeMarket = (value) => {
+            if (typeof value === "string") {
+                return value.trim();
+            }
+            if (typeof value === "number") {
+                return String(value);
+            }
+            return "";
+        };
+
+        const resolvedMarket = normalizeMarket(market) || normalizeMarket(this.tokenId);
+        if (!resolvedMarket) {
+            throw new Error("market is required to fetch price history");
+        }
+
+        const resolvedInterval = interval ?? PriceHistoryInterval.ONE_HOUR;
+        const intervalToUse = typeof resolvedInterval === "string" ? resolvedInterval.trim() : resolvedInterval;
+        if (!VALID_PRICE_HISTORY_INTERVALS.has(intervalToUse)) {
+            throw new Error(`Invalid interval "${interval}" supplied to getPricesHistory`);
+        }
+
+        const client = await this.getClient();
+        const response = await client.getPricesHistory({ market: resolvedMarket, interval: intervalToUse });
+        const history = Array.isArray(response) ? response : response?.history;
+
+        if (!Array.isArray(history)) {
+            throw new Error("Failed to fetch price history: unexpected response shape");
+        }
+
+        return { history };
+    }
 
     /**
      * 获取盘口最优挂单价格
@@ -151,21 +196,21 @@ export class PolyClient {
      * }}
      */
     async listRewardMarket({
-                               orderBy = "rate_per_day",
-                               position = "DESC",
-                               limit = 100,
-                               query = "",
-                               showFavorites = false,
-                               tagSlug = "all",
-                               makerAddress = "",
-                               authenticationType = "eoa",
-                               nextCursor = "MA==",
-                               requestPath = "/rewards/user/markets",
-                               onlyMergeable = false,
-                               noCompetition = false,
-                               onlyOpenOrders = false,
-                               onlyPositions = false,
-                           } = {}) {
+        orderBy = "rate_per_day",
+        position = "DESC",
+        limit = 100,
+        query = "",
+        showFavorites = false,
+        tagSlug = "all",
+        makerAddress = "",
+        authenticationType = "eoa",
+        nextCursor = "MA==",
+        requestPath = "/rewards/user/markets",
+        onlyMergeable = false,
+        noCompetition = false,
+        onlyOpenOrders = false,
+        onlyPositions = false,
+    } = {}) {
         const url = `${this.rewardsHost}/rewards/markets`;
         const response = await axios.get(url, {
             params: {
@@ -199,6 +244,10 @@ export class PolyClient {
 
 
     /**
+     * tags:
+     *  Crypto  21
+     *  Bitcoin 235
+     *  Ethereum 39
      *
      * @returns {Promise<*>|[{
      *   id: '667904',
@@ -233,19 +282,21 @@ export class PolyClient {
      *   eventStartTime: '2025-11-06T17:00:00Z',
      * }]}
      */
-    async listCryptoMarketSortedByEndDate() {
+    async listCryptoMarketSortedByEndDate(tagId = 21) {
         const url = `${this.marketHost}/markets`;
         const endDateMin = new Date().toISOString();
+        const endDateMax = new Date(new Date().getTime() + 1000 * 60 * 60 * 24 * 7).toISOString();
         const startDateMax = new Date(new Date().getTime() - 1000 * 60 * 60 * 24).toISOString();
         const params = {
-            tag_id: 21,
+            tag_id: tagId,
             closed: false,
-            active:true,
-            enableOrderBook:true,
+            active: true,
+            enableOrderBook: true,
             volume_num_min: 0,
             order: 'endDate',
             ascending: true,
             end_date_min: endDateMin,
+            end_date_max: endDateMax,
             start_date_max: startDateMax,
             limit: 100,
         };
@@ -257,12 +308,90 @@ export class PolyClient {
             return result;
         }, {});
 
-        const response = await axios.get(url, {params: filteredParams});
+        const response = await axios.get(url, { params: filteredParams });
         let dataArr = response?.data;
         return dataArr.filter(ele => {
-            // ele.outcomePrices;
-            return ele.lastTradePrice >= 0.01 && ele.lastTradePrice <= 0.99;
+            return (ele.lastTradePrice >= 0.01 && ele.lastTradePrice <= 0.99) && (ele.bestAsk >= 0.01 && ele.bestAsk <= 0.99);
         });
+    }
+
+
+    /**
+     * https://gamma-api.polymarket.com/events?tag_id=235&closed=false&volume_num_min=100000&order=endDate&end_date_min=2025-11-14T12:00:00Z&ascending=true&limit=1
+     * @param tagId
+     * @returns {Promise<*>| {
+     *   id: '70558',
+     *   ticker: 'bitcoin-above-on-november-8',
+     *   slug: 'bitcoin-above-on-november-8',
+     *   title: 'Bitcoin above ___ on November 8?',
+     *   description: 'This market will resolve to "Yes" if the Binance 1 minute candle for BTC/USDT 12:00 in the ET timezone (noon) on the date specified in the title has a final "Close" price higher than the price specified in the title. Otherwise, this market will resolve to "No".\n' +
+     *   startDate: '2025-11-01T16:02:31.831418Z',
+     *   endDate: '2025-11-08T17:00:00Z',
+     *   markets: [
+     *     {
+     *       id: '659979',
+     *       question: 'Will the price of Bitcoin be above $102,000 on November 8?',
+     *       conditionId: '0x234bd2733db8d0dae572c45fb5bcc5352e6a0eb4f8b903b8e14ac985667d49c4',
+     *       slug: 'bitcoin-above-102k-on-november-8',
+     *       endDate: '2025-11-08T17:00:00Z',
+     *       description: 'This market will resolve to "Yes" if the Binance 1 minute candle for BTC/USDT 12:00 in the ET timezone (noon) on the date specified in the title has a final "Close" price higher than the price specified in the title. Otherwise, this market will resolve to "No".\n' +
+     *       outcomes: '["Yes", "No"]',
+     *       outcomePrices: '["0.145", "0.855"]',
+     *     },
+     *     {
+     *       question: 'Will the price of Bitcoin be above $106,000 on November 8?',
+     *     }
+     *   ],
+     *   series: [
+     *     {
+     *       ticker: 'btc-multi-strikes-weekly',
+     *     }
+     *   ],
+     *   tags: [
+     *     {
+     *       id: '235',
+     *       label: 'Bitcoin',
+     *     },
+     *     {
+     *       id: '102264',
+     *       label: 'Weekly',
+     *     },
+     *     {
+     *       id: '21',
+     *       label: 'Crypto',
+     *       slug: 'crypto',
+     *     },
+     *   ]
+     * }}
+     */
+    async listCryptoEvents(tagId = 235) {
+        const url = `${this.marketHost}/events`;
+        const endDateMin = new Date().toISOString();
+        const endDateMax = new Date(new Date().getTime() + 1000 * 60 * 60 * 24 * 7).toISOString();
+        const startDateMax = new Date(new Date().getTime() - 1000 * 60 * 60 * 24).toISOString();
+        const params = {
+            tag_id: tagId,
+            closed: false,
+            active: true,
+            enableOrderBook: true,
+            volume_num_min: 0,
+            order: 'endDate',
+            ascending: true,
+            end_date_min: endDateMin,
+            end_date_max: endDateMax,
+            start_date_max: startDateMax,
+            limit: 100,
+        };
+        // 仅发送有值的查询参数，避免污染默认查询
+        const filteredParams = Object.entries(params).reduce((result, [key, value]) => {
+            if (value !== undefined && value !== null && value !== "") {
+                result[key] = value;
+            }
+            return result;
+        }, {});
+
+        const response = await axios.get(url, { params: filteredParams });
+        return response?.data;
     }
 
 
@@ -274,7 +403,7 @@ export class PolyClient {
      * @param assetId
      * @returns {Promise<import("@polymarket/clob-client").OpenOrder[]>}
      */
-    async listOpenOrders({market, assetId} = {}) {
+    async listOpenOrders({ market, assetId } = {}) {
         const client = await this.getClient();
         const params = {};
         if (market) {
@@ -349,7 +478,7 @@ export class PolyClient {
         }
 
         const client = await this.getClient();
-        return client.cancelOrder({orderID});
+        return client.cancelOrder({ orderID });
     }
 
 
@@ -365,7 +494,7 @@ export class PolyClient {
             sizeThreshold: 1, limit: 100, sortBy: "TOKENS", sortDirection: "DESC", user: address,
         };
 
-        const response = await axios.get(url, {params});
+        const response = await axios.get(url, { params });
         return response?.data;
     }
 
@@ -378,7 +507,7 @@ export class PolyClient {
     async listMyTrades() {
         const client = await this.getClient();
         const address = this.funderAddress || await client.signer.getAddress();
-        const trades = await client.getTrades({maker_address: address});
+        const trades = await client.getTrades({ maker_address: address });
         if (!Array.isArray(trades)) {
             throw new Error("Failed to fetch personal trade history");
         }
@@ -398,7 +527,7 @@ export class PolyClient {
      */
     async getUsdcBalance() {
         const client = await this.getClient();
-        const response = await client.getBalanceAllowance({asset_type: AssetType.COLLATERAL});
+        const response = await client.getBalanceAllowance({ asset_type: AssetType.COLLATERAL });
         if (!response) {
             throw new Error("Failed to fetch USDC balance: empty response");
         }

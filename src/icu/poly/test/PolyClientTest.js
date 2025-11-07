@@ -1,8 +1,8 @@
-import {PolyClient, PolySide} from '../PolyClient.js';
+import {PolyClient, PolySide} from 'src/icu/poly/core/PolyClient.js';
 
 const polyClient = new PolyClient();
-const tokenIdA = '57527508293969725929016010432598810481282998125631347013024726997019637985331'
-const tokenIdB = '4589745821222679801714536143948817055789206104581183883296167003774519971663'
+const tokenIdA = '34867255137037269425915341043331567102849891703547876866504427548331529932296'
+const tokenIdB = '24522672209353958941098640603807044129208567881036115692375517880925138856817'
 
 
 let listRewardMarketTest = () => {
@@ -11,11 +11,11 @@ let listRewardMarketTest = () => {
             // console.log(ele)
             return {
                 // event_id:ele.event_id,
-                market_id:ele.market_id,
+                market_id: ele.market_id,
                 // condition_id:ele.condition_id,
                 question: ele['question'].slice(0, 20),
                 // market_slug:ele.market_slug,
-                volume_24hr:ele.volume_24hr,
+                volume_24hr: ele.volume_24hr,
                 tokenPriceA: ele.tokens[0].outcome.concat('->').concat(ele.tokens[0].price),
                 // tokenIdA: ele.tokens[0].token_id,
                 tokenPriceB: ele.tokens[1].outcome.concat('->').concat(ele.tokens[1].price),
@@ -76,11 +76,11 @@ let listRewardMarketTest = () => {
  * }
  * @param marketId
  */
-let getMarketInfo = (marketId) =>{
+let getMarketInfo = (marketId) => {
     polyClient.listRewardMarket().then(rlt => {
         let data = rlt.slice(0, 20)
-            .filter(ele=>ele.market_id === marketId)
-            .slice(0,1);
+            .filter(ele => ele.market_id === marketId)
+            .slice(0, 1);
         console.log(data[0]);
     }).catch(console.error);
 }
@@ -88,16 +88,16 @@ let getMarketInfo = (marketId) =>{
 let getPriceTest = () => {
     polyClient.getPrice(PolySide.BUY, tokenIdA).then(rlt => {
         console.log('tokenA buy price:' + rlt)
-    }).catch(console.error);
-    polyClient.getPrice(PolySide.SELL, tokenIdA).then(rlt => {
-        console.log('tokenA sell price:' + rlt)
-    }).catch(console.error);
+        polyClient.getPrice(PolySide.SELL, tokenIdA).then(rlt => {
+            console.log('tokenA sell price:' + rlt)
+            polyClient.getPrice(PolySide.BUY, tokenIdB).then(rlt => {
+                console.log('tokenB buy price:' + rlt)
+                polyClient.getPrice(PolySide.SELL, tokenIdB).then(rlt => {
+                    console.log('tokenB sell price:' + rlt)
+                }).catch(console.error);
+            }).catch(console.error);
+        }).catch(console.error);
 
-    polyClient.getPrice(PolySide.BUY, tokenIdB).then(rlt => {
-        console.log('tokenB buy price:' + rlt)
-    }).catch(console.error);
-    polyClient.getPrice(PolySide.SELL, tokenIdB).then(rlt => {
-        console.log('tokenB sell price:' + rlt)
     }).catch(console.error);
 }
 
@@ -133,19 +133,30 @@ let getUsdcBalanceTest = () => {
 }
 
 
-let listOrdersTest = ()=>{
+let listOrdersTest = () => {
     polyClient.listMyTrades().then(rlt => {
-        console.log( rlt[0]);
+        console.log(rlt[0]);
     }).catch(console.error);
 }
 
-let listPositionsTest = ()=>{
+let listPositionsTest = () => {
     polyClient.listPositions().then(console.log)
 }
 
+let listCryptoMarketSortedByEndDateTest = () => {
+    polyClient.listCryptoMarketSortedByEndDate()
+        .then(ele => {
+            console.log(ele.length);
+            console.log(ele[0]);
+            // console.log(ele[0].outcomePrices);
+            // console.log(typeof ele[0].outcomePrices);
+            ele.forEach(ele=>console.log(ele.startDate));
+        });
+}
 
 
-
+//
+listCryptoMarketSortedByEndDateTest();
 
 // listPositionsTest()
 // 订单列表获取
@@ -158,10 +169,10 @@ let listPositionsTest = ()=>{
 // 获取订单簿信息
 // getOrderBookTest();
 // 挂单测试
-const price = '0.4';
-const size = '5';
-const side = PolySide.BUY;
-// placeOrderTest(price, size, side, tokenIdA);
+const price = '0.998';
+const size = '40';
+const side = PolySide.SELL;
+// placeOrderTest(price, size, side, tokenIdB);
 // 取消订单测试
 // polyClient.cancelOrder("0x8e818dd295884776b0929b768ceaa43104ec2a34866127ca3d765280e3498054").then(console.log).catch(console.error);
 // USDC 余额
@@ -183,4 +194,4 @@ const side = PolySide.BUY;
  *   }
  * ]
  */
-listOpenOrdersTest();
+// listOpenOrdersTest();

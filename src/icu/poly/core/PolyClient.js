@@ -14,6 +14,7 @@ const DEFAULT_ORDER_TYPE = OrderType.GTC;
 const DEFAULT_SIGNATURE_TYPE = SignatureType.EOA;
 const DEFAULT_REWARDS_HOST = "https://polymarket.com/api";
 const DEFAULT_DATA_HOST = "https://data-api.polymarket.com";
+const DEFAULT_MARKET_HOST = "https://gamma-api.polymarket.com";
 
 export class PolyClient {
     constructor({
@@ -26,6 +27,7 @@ export class PolyClient {
                     orderType = DEFAULT_ORDER_TYPE,
                     rewardsHost = DEFAULT_REWARDS_HOST,
                     dataHost = DEFAULT_DATA_HOST,
+                    marketHost = DEFAULT_MARKET_HOST,
                 } = {}) {
         if (!privateKey) {
             throw new Error("Missing PRIVATE_KEY for PolyClient");
@@ -38,6 +40,7 @@ export class PolyClient {
         this.orderType = orderType;
         this.rewardsHost = rewardsHost;
         this.dataHost = dataHost;
+        this.marketHost = marketHost;
         this.signer = new Wallet(privateKey);
         this.funderAddress = funderAddress?.trim() || this.signer.address;
         this.clientPromise = null;
@@ -195,6 +198,74 @@ export class PolyClient {
     }
 
 
+    /**
+     *
+     * @returns {Promise<*>|[{
+     *   id: '667904',
+     *   question: 'XRP Up or Down on November 7?',
+     *   conditionId: '0xac55160440e2c4454489876d9d199d1fdd220d15c112ded3f4073d9990872a26',
+     *   slug: 'xrp-up-or-down-on-november-7',
+     *   endDate: '2025-11-07T17:00:00Z',
+     *   startDate: '2025-11-06T15:45:35.060882Z',
+     *   outcomes: '["Up", "Down"]',
+     *   outcomePrices: '["0.235", "0.765"]',
+     *   createdAt: '2025-11-06T15:43:13.836836Z',
+     *   questionID: '0x5a907af36fe26c01bc3e5fd94cf6b2d0b4f88a5745cd237b6a5e7dcc5d75e041',
+     *   volumeNum: 15335.862565,
+     *   liquidityNum: 4729.564,
+     *   endDateIso: '2025-11-07',
+     *   startDateIso: '2025-11-06',
+     *   volume24hr: 5242.988726000001,
+     *   clobTokenIds: '["97711861920064027535319065937365233742617188771659696434894133073960855768916", "68162071516944456424576500851165757545095711828887453678098036980269779289193"]',
+     *   events: [
+     *     {
+     *       id: '74648',
+     *       ticker: 'xrp-up-or-down-on-november-7',
+     *       slug: 'xrp-up-or-down-on-november-7',
+     *       title: 'XRP Up or Down on November 7?',
+     *       startDate: '2025-11-06T15:46:37.460046Z',
+     *       endDate: '2025-11-07T17:00:00Z',
+     *     }
+     *   ],
+     *   lastTradePrice: 0.26,
+     *   bestBid: 0.21,
+     *   bestAsk: 0.26,
+     *   eventStartTime: '2025-11-06T17:00:00Z',
+     * }]}
+     */
+    async listCryptoMarketSortedByEndDate() {
+        const url = `${this.marketHost}/markets`;
+        const endDateMin = new Date().toISOString();
+        const startDateMax = new Date(new Date().getTime() - 1000 * 60 * 60 * 24).toISOString();
+        const params = {
+            tag_id: 21,
+            closed: false,
+            active:true,
+            enableOrderBook:true,
+            volume_num_min: 0,
+            order: 'endDate',
+            ascending: true,
+            end_date_min: endDateMin,
+            start_date_max: startDateMax,
+            limit: 100,
+        };
+        // 仅发送有值的查询参数，避免污染默认查询
+        const filteredParams = Object.entries(params).reduce((result, [key, value]) => {
+            if (value !== undefined && value !== null && value !== "") {
+                result[key] = value;
+            }
+            return result;
+        }, {});
+
+        const response = await axios.get(url, {params: filteredParams});
+        let dataArr = response?.data;
+        return dataArr.filter(ele => {
+            // ele.outcomePrices;
+            return ele.lastTradePrice >= 0.01 && ele.lastTradePrice <= 0.99;
+        });
+    }
+
+
     /*================交易API===================*/
 
     /**
@@ -222,6 +293,7 @@ export class PolyClient {
 
 
     /**
+     * curl --request GET \ --url 'https://data-api.polymarket.com/positions?sizeThreshold=1&limit=100&sortBy=TOKENS&sortDirection=DESC&user=0x'
      * @param price
      * @param size
      * @param side
@@ -232,6 +304,17 @@ export class PolyClient {
      *   takingAmount: '',
      *   makingAmount: '',
      *   status: 'live',
+     *   success: true
+     * }|{
+     *   side: SELL,
+     *   errorMsg: '',
+     *   orderID: '0xa8add687ee56023e70bae2d8220e2f67fa159b1f040568c96baa3c4f6d2e54df',
+     *   takingAmount: '18.3',
+     *   makingAmount: '61',
+     *   status: 'matched',
+     *   transactionsHashes: [
+     *     '0x8c06c5fc194837bcb18a37bb10669b16c772eee76e1d546962f9c23967c35e86'
+     *   ],
      *   success: true
      * }}
      */
@@ -279,15 +362,11 @@ export class PolyClient {
         const address = this.funderAddress || this.signer.address;
         const url = `${this.dataHost}/positions`;
         const params = {
-            sizeThreshold: 1,
-            limit: 100,
-            sortBy: "TOKENS",
-            sortDirection: "DESC",
-            user: address,
+            sizeThreshold: 1, limit: 100, sortBy: "TOKENS", sortDirection: "DESC", user: address,
         };
 
         const response = await axios.get(url, {params});
-        return  response?.data;
+        return response?.data;
     }
 
 

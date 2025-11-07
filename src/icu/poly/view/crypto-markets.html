@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8" />
+    <title>Polymarket 加密市场 · 最小可用</title>
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <style>
+        :root { --bg:#05070b; --card:#0f141c; --line:#1b2330; --muted:#94a3b8; --text:#f1f5f9; --accent:#38bdf8; }
+        html,body{margin:0;padding:0;background:var(--bg);color:var(--text);font:14px/1.5 system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial;}
+        .wrap{max-width:1180px;margin:24px auto;padding:0 16px;}
+        h1{font-size:20px;margin:0 0 12px;}
+        .bar{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px;align-items:center;}
+        button{background:var(--accent);border:none;color:#021018;padding:9px 16px;border-radius:999px;font-weight:600;cursor:pointer;}
+        button:disabled{opacity:.5;cursor:not-allowed;}
+        .status{color:var(--muted);font-size:13px;}
+        table{width:100%;border-collapse:collapse;background:var(--card);border-radius:14px;overflow:hidden;border:1px solid var(--line);}
+        thead{background:rgba(255,255,255,.02);position:sticky;top:0;}
+        th,td{text-align:left;padding:10px;border-bottom:1px solid var(--line);vertical-align:top;}
+        th{font-size:13px;color:var(--muted);white-space:nowrap;}
+        tbody tr:hover{background:rgba(56,189,248,.08);}
+        .muted{color:var(--muted);}
+        .chip{display:inline-block;border:1px solid var(--line);padding:2px 10px;border-radius:999px;font-size:12px;color:var(--muted);margin-left:8px;}
+        .scroll{overflow:auto;border-radius:14px;}
+        code{padding:2px 4px;background:#1e293b;border-radius:4px;}
+        @media (max-width:900px){
+            table,thead,tbody,tr,td,th{display:block;}
+            thead{display:none;}
+            tr{border-bottom:1px solid var(--line);}
+            td{display:flex;justify-content:space-between;gap:12px;}
+            td::before{content:attr(data-th);font-weight:600;color:var(--muted);}
+        }
+    </style>
+</head>
+<body>
+<div class="wrap">
+    <h1>Polymarket 加密市场列表 <span class="chip">最小可用</span></h1>
+    <p class="muted">此页面直接调用公开 API，并复刻 <code>listCryptoMarketSortedByEndDate</code> 的筛选逻辑，仅供快速查看。</p>
+    <div class="bar">
+        <button id="reload">刷新数据</button>
+        <span id="status" class="status"></span>
+    </div>
+    <div class="scroll">
+        <table>
+            <thead>
+            <tr id="cols"></tr>
+            </thead>
+            <tbody id="rows"></tbody>
+        </table>
+    </div>
+</div>
+
+<script>
+    const API = "/api/crypto-markets";
+    const fields = [
+        { key: "id", label: "ID" },
+        { key: "question", label: "问题" },
+        { key: "conditionId", label: "Condition" },
+        { key: "slug", label: "Slug" },
+        { key: "endDate", label: "结束时间" },
+        { key: "startDate", label: "开始时间" },
+        { key: "outcomes", label: "Outcomes" },
+        { key: "outcomePrices", label: "Outcome Prices" },
+        { key: "createdAt", label: "创建时间" },
+        { key: "questionID", label: "Question ID" },
+        { key: "volumeNum", label: "总成交量" },
+        { key: "liquidityNum", label: "流动性" },
+        { key: "endDateIso", label: "结束日" },
+        { key: "startDateIso", label: "开始日" },
+        { key: "volume24hr", label: "24h 交易量" },
+        { key: "clobTokenIds", label: "CLOB Tokens" },
+        { key: "lastTradePrice", label: "最新成交价" },
+        { key: "bestBid", label: "最优买价" },
+        { key: "bestAsk", label: "最优卖价" },
+        { key: "eventStartTime", label: "事件开始" },
+    ];
+
+    const $ = (id) => document.getElementById(id);
+    const cols = $("cols");
+    fields.forEach(f => {
+        const th = document.createElement("th");
+        th.textContent = f.label;
+        cols.appendChild(th);
+    });
+
+    function formatValue(value) {
+        if (value === null || value === undefined || value === "") return "—";
+        if (Array.isArray(value)) return value.join(", ");
+        if (typeof value === "number") {
+            return Math.abs(value) >= 1000 ? value.toLocaleString() : value;
+        }
+        if (typeof value === "string") {
+            try {
+                const parsed = JSON.parse(value);
+                if (Array.isArray(parsed)) return parsed.join(", ");
+            } catch (_) {
+                // keep original string
+            }
+        }
+        return value;
+    }
+
+    async function fetchMarkets() {
+        const res = await fetch(API);
+        if (!res.ok) throw new Error("网络请求失败");
+        const payload = await res.json();
+        const list = Array.isArray(payload) ? payload : [];
+        return list;
+    }
+
+    function render(data) {
+        const tbody = $("rows");
+        tbody.innerHTML = "";
+        data.forEach(item => {
+            const tr = document.createElement("tr");
+            fields.forEach(f => {
+                const td = document.createElement("td");
+                td.dataset.th = f.label;
+                td.textContent = formatValue(item[f.key]);
+                tr.appendChild(td);
+            });
+            tbody.appendChild(tr);
+        });
+    }
+
+    async function load() {
+        const status = $("status");
+        const button = $("reload");
+        status.textContent = "加载中…";
+        button.disabled = true;
+        try {
+            const data = await fetchMarkets();
+            render(data);
+            status.textContent = `已载入 ${data.length} 条记录`;
+        } catch (err) {
+            console.error(err);
+            status.textContent = "加载失败，请稍后重试";
+        } finally {
+            button.disabled = false;
+        }
+    }
+
+    $("reload").addEventListener("click", load);
+    load();
+</script>
+</body>
+</html>

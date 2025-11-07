@@ -1,6 +1,7 @@
 import {appendFile, readFile, writeFile} from "fs/promises";
-import {PolyClient, PolySide} from "./polyClient.js"; // 按你的文件名改路径
+import {PolyClient, PolySide} from "src/icu/poly/core/PolyClient.js"; // 按你的文件名改路径
 
+// 性价比低
 // ===== 写死配置（最小可用）=====
 // 双边做市、双方 ID
 const TOKEN_ID_Y = '57527508293969725929016010432598810481282998125631347013024726997019637985331';

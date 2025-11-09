@@ -3,7 +3,8 @@
   "name": "poly",
   "version": "1.0.0",
   "scripts": {
-    "test": "node --test",
+    "test": "node --test test/**/*.test.js",
+    "test:single": "node --test --test-name-pattern",
     "start": "node src/icu/poly/web-server.js"
   },
   "keywords": [],

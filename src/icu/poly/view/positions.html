@@ -9,10 +9,16 @@
         html,body{margin:0;padding:0;background:var(--bg);color:var(--text);font:14px/1.5 system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial;}
         .wrap{max-width:1080px;margin:24px auto;padding:0 16px;}
         .title{font-size:18px;margin:0 0 12px 0;}
+        .subtitle{font-size:16px;margin:0;}
         .bar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px;}
         input,button{background:#0f141c;border:1px solid var(--line);color:var(--text);padding:8px 10px;border-radius:8px;}
         input{min-width:420px;flex:1 1 420px;}
         button{cursor:pointer}
+        .close-order{display:flex;gap:6px;align-items:center;flex-wrap:wrap;}
+        .close-order input{min-width:80px;flex:0 0 80px;padding:6px 8px;font-size:12px;}
+        .close-order button{min-width:60px;padding:6px 10px;font-size:12px;}
+        .price-cell{display:flex;flex-direction:column;gap:2px;}
+        .price-cell .label{font-size:11px;color:var(--muted);}
         .summary{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:10px 12px;margin:12px 0;display:flex;gap:24px;flex-wrap:wrap}
         .summary div{opacity:.9}
         .green{color:var(--green)} .red{color:var(--red)} .muted{color:var(--muted)}
@@ -27,6 +33,9 @@
         .tip{font-size:12px;color:var(--muted)}
         .chip{display:inline-block;border:1px solid var(--line);border-radius:999px;padding:2px 8px;margin-left:6px;font-size:12px;color:var(--muted)}
         .loading{opacity:.8}
+        .section-head{display:flex;align-items:center;justify-content:space-between;margin:32px 0 8px;gap:12px;flex-wrap:wrap;}
+        a.link{color:#5dade2;text-decoration:none;}
+        a.link:hover{text-decoration:underline;}
         @media (max-width:700px){
             input{min-width:240px}
             thead{display:none}
@@ -61,12 +70,36 @@
             <th>资产</th>
             <th>数量</th>
             <th>成交价</th>
-            <th>当前价</th>
+            <th>最优买价</th>
+            <th>最优卖价</th>
             <th>持有价值</th>
             <th>当前盈亏</th>
+            <th>平仓</th>
         </tr>
         </thead>
         <tbody id="tbody"></tbody>
+    </table>
+
+    <div class="section-head">
+        <h2 class="subtitle">最近成交（3天内，最多 10 条）</h2>
+        <span id="tradeStatus" class="muted">等待加载…</span>
+    </div>
+
+    <table id="tradeTable">
+        <thead>
+        <tr>
+            <th>交易ID</th>
+            <th>方向</th>
+            <th>价格</th>
+            <th>数量</th>
+            <th>成交额</th>
+            <th>成交时间</th>
+            <th>Tx</th>
+        </tr>
+        </thead>
+        <tbody id="tradeBody">
+        <tr><td colspan="7" class="muted" data-th="提示">等待加载…</td></tr>
+        </tbody>
     </table>
 
     <div class="footer">
@@ -75,19 +108,24 @@
 </div>
 
 <script>
-    const $ = (id)=>document.getElementById(id);
-    const f2 = (n)=> Number(n).toFixed(2);
-    const pct = (n)=> (Number(n)*100).toFixed(2)+'%';
-    const fmtMoney = (n)=> isFinite(n) ? '$'+f2(n) : '—';
+    const $ = (id) => document.getElementById(id);
+    const f2 = (n = 0) => Number(n || 0).toFixed(2);
+    const fmtMoney = (n) => Number.isFinite(Number(n)) ? '$' + f2(n) : '—';
+    const formatTs = (ts) => {
+        const date = new Date(ts);
+        return Number.isNaN(date.getTime()) ? '—' : date.toLocaleString('zh-CN', { hour12: false });
+    };
+    const shorten = (text = '', head = 6, tail = 4) => {
+        if (!text) return '—';
+        return text.length <= head + tail ? text : `${text.slice(0, head)}…${text.slice(-tail)}`;
+    };
 
     async function fetchPositions(addr){
         const url = `https://data-api.polymarket.com/positions?sizeThreshold=1&limit=100&sortBy=TOKENS&sortDirection=DESC&user=${addr}`;
         const res = await fetch(url, { mode: 'cors' });
-        // 兼容：若服务端返回的是 JS 风格对象（少引号），尝试直接解析 JSON；失败则做一次“粗糙修复”
         let text = await res.text();
         try { return JSON.parse(text); }
         catch(e){
-            // 粗修：给键名补引号（不严谨，但可兜底示例数据）
             const fixed = text
                 .replace(/([{,\s])(\w+)\s*:/g, '$1"$2":')
                 .replace(/'/g, '"');
@@ -95,24 +133,75 @@
         }
     }
 
-    function render(rows){
+    async function fetchOrderBook(tokenId){
+        if (!tokenId) {
+            return { bestBid: null, bestAsk: null };
+        }
+        try {
+            const res = await fetch(`/api/best-prices/${tokenId}`);
+            if (!res.ok) {
+                const errorText = await res.text();
+                throw new Error(`HTTP ${res.status}: ${errorText}`);
+            }
+            const data = await res.json();
+            return { bestBid: data.bestBid, bestAsk: data.bestAsk };
+        } catch(err) {
+            console.error(`Failed to fetch best prices for ${tokenId}:`, err);
+            return { bestBid: null, bestAsk: null };
+        }
+    }
+
+    async function placeCloseOrder(tokenId, price, size, side){
+        try {
+            const res = await fetch('/api/place-order', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ tokenId, price, size, side })
+            });
+            if (!res.ok) {
+                const error = await res.json();
+                throw new Error(error.message || `HTTP ${res.status}`);
+            }
+            return await res.json();
+        } catch(err) {
+            console.error('Failed to place order:', err);
+            throw err;
+        }
+    }
+
+    async function fetchTrades(addr) {
+        const res = await fetch(`/api/trades?address=${addr}`);
+        if (!res.ok) {
+            const text = await res.text();
+            throw new Error(text || `HTTP ${res.status}`);
+        }
+        return res.json();
+    }
+
+    async function renderPositions(rows){
         const tbody = $('tbody');
         tbody.innerHTML = '';
 
+        const enrichedRows = await Promise.all(rows.map(async (r) => {
+            const tokenId = r.asset || r.tokenId || r.asset_id || r.assetId || r.token_id || '';
+            const { bestBid, bestAsk } = await fetchOrderBook(tokenId);
+            return { ...r, bestBid, bestAsk, tokenId };
+        }));
+
         let totalValue = 0, totalPnl = 0, totalCost = 0;
 
-        rows.forEach(r=>{
+        enrichedRows.forEach(r => {
             const title = r.title || r.slug || r.asset || '—';
             const outcome = r.outcome ? `（${r.outcome}）` : '';
             const icon = r.icon || '';
             const size = Number(r.size ?? 0);
             const avg = Number(r.avgPrice ?? 0);
-            const cur = Number(r.curPrice ?? 0);
-            // 现场计算持有价值与成本，用于汇总更稳妥
+            const tokenId = r.tokenId;
+            const bestBid = r.bestBid;
+            const bestAsk = r.bestAsk;
+            const cur = bestAsk !== null ? bestAsk : Number(r.curPrice ?? 0);
             const holdValue = size * cur;
             const costValue = size * avg;
-
-            // 盈亏优先用接口给的 cashPnl/pct；没有则现场推导
             const cashPnl = isFinite(r.cashPnl) ? Number(r.cashPnl) : (holdValue - costValue);
             const percentPnl = isFinite(r.percentPnl) ? Number(r.percentPnl) : (costValue ? (cashPnl / costValue) : 0);
 
@@ -121,6 +210,8 @@
             totalCost += costValue;
 
             const tr = document.createElement('tr');
+            const rowId = `row-${tokenId || Math.random().toString(36).slice(2, 9)}`;
+            tr.id = rowId;
 
             tr.innerHTML = `
           <td class="asset" data-th="资产">
@@ -132,11 +223,23 @@
           </td>
           <td class="right" data-th="数量">${size}</td>
           <td class="right" data-th="成交价">${f2(avg)}</td>
-          <td class="right" data-th="当前价">${f2(cur)}</td>
+          <td class="right" data-th="最优买价">
+            ${bestBid !== null ? `<span class="green">${f2(bestBid)}</span>` : '<span class="muted">—</span>'}
+          </td>
+          <td class="right" data-th="最优卖价">
+            ${bestAsk !== null ? `<span class="red">${f2(bestAsk)}</span>` : '<span class="muted">—</span>'}
+          </td>
           <td class="right" data-th="持有价值">${fmtMoney(holdValue)}</td>
           <td class="right" data-th="当前盈亏">
             <span class="${cashPnl>=0?'green':'red'}">${(cashPnl>=0?'+':'')+fmtMoney(cashPnl)}</span>
             <span class="${percentPnl>=0?'green':'red'}"> (${(percentPnl>=0?'+':'')+ (percentPnl*1).toFixed(2)}%)</span>
+          </td>
+          <td class="close-order" data-th="平仓">
+            <input type="number" step="0.01" min="0.01" max="0.99" placeholder="价格" 
+                   id="${rowId}-price" value="${bestAsk !== null ? bestAsk.toFixed(2) : ''}" />
+            <input type="number" step="0.01" min="0.01" placeholder="数量" 
+                   id="${rowId}-size" value="${size > 0 ? size.toFixed(2) : ''}" max="${size}" />
+            <button onclick="handleCloseOrder('${tokenId}', '${rowId}', 'SELL')">平仓</button>
           </td>
         `;
             tbody.appendChild(tr);
@@ -148,28 +251,141 @@
         $('sumPnlPct').innerHTML = `<span class="${pnlPct>=0?'green':'red'}">${(pnlPct*100).toFixed(2)}%</span>`;
     }
 
+    function renderTrades(trades){
+        const tbody = $('tradeBody');
+        const status = $('tradeStatus');
+        tbody.innerHTML = '';
+
+        const normalizeNumber = (value) => {
+            if (value === undefined || value === null) return 0;
+            const num = Number(value);
+            return Number.isFinite(num) ? num : 0;
+        };
+
+        const flatTrades = Array.isArray(trades) ? trades.flat() : [];
+
+        if (!flatTrades.length) {
+            status.textContent = '最近3天暂无成交';
+            const tr = document.createElement('tr');
+            tr.innerHTML = `<td colspan="7" class="muted" data-th="提示">最近3天暂无成交</td>`;
+            tbody.appendChild(tr);
+            return;
+        }
+
+        flatTrades.forEach(trade => {
+            const price = normalizeNumber(trade.price ?? trade.order_price);
+            const size = normalizeNumber(trade.matched_amount ?? trade.size ?? trade.amount);
+            const notional = price * size;
+            const matchTime = trade.matchTime ?? trade.match_time ?? Date.now();
+            const trEl = document.createElement('tr');
+            trEl.innerHTML = `
+        <td data-th="交易ID">${shorten(trade.tradeId || trade.id || trade.orderId || trade.order_id)}</td>
+        <td data-th="方向"><span class="${trade.side === 'BUY' ? 'green' : 'red'}">${trade.side || '—'}</span></td>
+        <td data-th="价格" class="right">${f2(price)}</td>
+        <td data-th="数量" class="right">${f2(size)}</td>
+        <td data-th="成交额" class="right">${fmtMoney(notional)}</td>
+        <td data-th="成交时间">${formatTs(matchTime)}</td>
+        <td data-th="Tx">
+          ${trade.transactionHash
+                ? `<a class="link" href="https://polygonscan.com/tx/${trade.transactionHash}" target="_blank" rel="noreferrer">${shorten(trade.transactionHash)}</a>`
+                : '<span class="muted">—</span>'}
+        </td>`;
+            tbody.appendChild(trEl);
+        });
+
+        status.textContent = `最近 ${flatTrades.length} 条成交（≤3天）`;
+    }
+
+    async function handleCloseOrder(tokenId, rowId, side){
+        if (!tokenId) {
+            alert('缺少 tokenId，无法平仓');
+            return;
+        }
+
+        const priceInput = document.getElementById(`${rowId}-price`);
+        const sizeInput = document.getElementById(`${rowId}-size`);
+        const price = Number(priceInput.value);
+        const size = Number(sizeInput.value);
+
+        if (!price || price <= 0 || price >= 1) {
+            alert('请输入有效的价格（0.01 - 0.99）');
+            return;
+        }
+
+        if (!size || size <= 0) {
+            alert('请输入有效的数量');
+            return;
+        }
+
+        if (!confirm(`确认平仓？\n价格: ${price}\n数量: ${size}\n方向: ${side}`)) {
+            return;
+        }
+
+        const button = document.querySelector(`#${rowId}-price`).parentElement.querySelector('button');
+        const originalText = button.textContent;
+        button.disabled = true;
+        button.textContent = '提交中...';
+
+        try {
+            const result = await placeCloseOrder(tokenId, price, size, side);
+            if (result.success) {
+                alert(`平仓成功！\n订单ID: ${result.orderID}\n状态: ${result.status}`);
+                load();
+            } else {
+                alert(`平仓失败: ${result.errorMsg || '未知错误'}`);
+            }
+        } catch(err) {
+            alert(`平仓失败: ${err.message}`);
+        } finally {
+            button.disabled = false;
+            button.textContent = originalText;
+        }
+    }
+
     async function load(){
         const addr = $('addr').value.trim();
         if(!addr || !addr.startsWith('0x') || addr.length<10){
             alert('请输入有效的钱包地址（0x...）'); return;
         }
         const st = $('status');
+        const tradeHint = $('tradeStatus');
         st.textContent = '加载中…';
         st.classList.add('loading');
+        tradeHint.textContent = '加载最近成交…';
+        tradeHint.classList.add('loading');
         try{
-            const rows = await fetchPositions(addr);
-            render(Array.isArray(rows)? rows : []);
+            const [positionResult, tradeResult] = await Promise.allSettled([
+                fetchPositions(addr),
+                fetchTrades(addr)
+            ]);
+
+            if (tradeResult.status === 'fulfilled') {
+                renderTrades(Array.isArray(tradeResult.value) ? tradeResult.value : []);
+            } else {
+                console.error(tradeResult.reason);
+                tradeHint.textContent = '成交加载失败';
+                const tbody = $('tradeBody');
+                tbody.innerHTML = `<tr><td colspan="7" class="muted" data-th="提示">成交列表加载失败</td></tr>`;
+            }
+
+            if (positionResult.status !== 'fulfilled') {
+                throw positionResult.reason;
+            }
+
+            const rows = positionResult.value;
+            await renderPositions(Array.isArray(rows)? rows : []);
             st.textContent = `已加载 ${Array.isArray(rows)? rows.length:0} 条持仓`;
         }catch(err){
             console.error(err);
             st.textContent = '加载失败（请检查网络/CORS 或稍后重试）';
         }finally{
             st.classList.remove('loading');
+            tradeHint.classList.remove('loading');
         }
     }
 
     $('refresh').addEventListener('click', load);
-    // 首次自动加载
+    window.handleCloseOrder = handleCloseOrder;
     load();
 </script>
 </body>

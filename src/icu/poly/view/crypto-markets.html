@@ -7,7 +7,7 @@
     <style>
         :root { --bg:#05070b; --card:#0f141c; --line:#1b2330; --muted:#94a3b8; --text:#f1f5f9; --accent:#38bdf8; }
         html,body{margin:0;padding:0;background:var(--bg);color:var(--text);font:14px/1.5 system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial;}
-        .wrap{max-width:1180px;margin:24px auto;padding:0 16px;}
+        .wrap{max-width:none;width:100%;margin:24px 0;padding:0 24px;box-sizing:border-box;}
         h1{font-size:20px;margin:0 0 12px;}
         .bar{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px;align-items:center;}
         button{background:var(--accent);border:none;color:#021018;padding:9px 16px;border-radius:999px;font-weight:600;cursor:pointer;}
@@ -34,6 +34,21 @@
         .detail-card button{margin:0;}
         .detail-trigger{background:none;border:1px solid var(--line);color:var(--text);padding:4px 10px;border-radius:8px;font-size:12px;}
         .detail-trigger:hover{border-color:var(--accent);color:var(--accent);}
+        .order-card{max-width:480px;}
+        .order-meta{padding:16px;border-bottom:1px solid var(--line);font-size:13px;color:var(--muted);display:flex;flex-direction:column;gap:6px;}
+        .order-form{display:flex;flex-direction:column;gap:12px;padding:16px;}
+        .order-form label{display:flex;flex-direction:column;font-size:13px;color:var(--muted);gap:6px;}
+        .order-form input{padding:8px 10px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--text);}
+        .order-actions{display:flex;gap:8px;justify-content:flex-end;padding:0 16px 16px;}
+        .order-status{padding:0 16px 16px;font-size:13px;color:var(--muted);}
+        .order-token-group{display:flex;gap:12px;align-items:center;}
+        .order-token-option{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--muted);}
+        .order-token-option input{accent-color:var(--accent);}
+        .toast-container{position:fixed;right:24px;bottom:24px;display:flex;flex-direction:column;gap:10px;z-index:40;}
+        .toast{background:rgba(15,20,28,0.95);border:1px solid var(--line);border-radius:10px;padding:12px 16px;min-width:240px;box-shadow:0 10px 30px rgba(0,0,0,0.4);animation:fadeIn .2s ease;}
+        .toast strong{display:block;font-size:14px;margin-bottom:6px;}
+        .toast button{margin-top:8px;padding:4px 8px;font-size:12px;}
+        @keyframes fadeIn{from{opacity:0;transform:translateY(10px);}to{opacity:1;transform:translateY(0);}}
         .chart-section{margin-top:24px;padding:18px;border:1px solid var(--line);border-radius:16px;background:var(--card);display:flex;flex-direction:column;gap:16px;}
         .chart-head{display:flex;flex-wrap:wrap;justify-content:space-between;gap:16px;}
         .chart-title{margin:0;font-size:18px;}
@@ -142,9 +157,52 @@
     </div>
 </div>
 
+<div id="orderPanel" class="detail-panel">
+    <div class="detail-card order-card">
+        <header>
+            <span>下单</span>
+            <button id="orderClose">关闭</button>
+        </header>
+        <div class="order-meta">
+            <strong id="orderQuestion">—</strong>
+            <div class="order-token-group" id="orderTokenGroup"></div>
+            <div>事件：<span id="orderEventSlug" class="muted">—</span></div>
+            <div>当前最优卖价：<span id="orderBestAsk" class="muted">—</span></div>
+        </div>
+        <form id="orderForm" class="order-form">
+            <label>
+                买单价格
+                <input type="number" id="orderBuyPrice" step="0.0001" min="0" required />
+            </label>
+            <label>
+                买单数量
+                <input type="number" id="orderSize" step="1" min="1" required />
+            </label>
+            <label>
+                止盈卖价（可选）
+                <input type="number" id="orderTakeProfit" step="0.0001" min="0" />
+            </label>
+            <div class="order-actions">
+                <button type="submit" id="orderSubmit">提交</button>
+            </div>
+        </form>
+        <p id="orderStatus" class="order-status"></p>
+    </div>
+</div>
+
+<div id="orderToastContainer" class="toast-container"></div>
+
 <script>
     const API = "/api/crypto-markets";
     const PRICE_HISTORY_API = "/api/price-history";
+    const BTC_HISTORY_API = "/api/btc-history";
+    const BTC_SERIES_ID = "btc-usdt";
+    const BTC_SERIES_LABEL = "BTC/USDT（右轴）";
+    const BTC_SERIES_COLOR = "#fbbf24";
+    const BTC_AXIS_LABEL = "BTC 价格 (USDT)";
+    const BTC_INTERVAL_MINUTES = 15;
+    const BTC_INTERVAL_MS = BTC_INTERVAL_MINUTES * 60 * 1000;
+    const POLY_EVENT_BASE_URL = "https://polymarket.com/event/";
     const CHART_INTERVALS = [
         {value: "1h", label: "1 小时"},
         {value: "6h", label: "6 小时"},
@@ -195,6 +253,11 @@
     let timelineDragState = null;
     const selectedChartTokenIds = new Set();
     const chartHistoryCache = new Map();
+    const btcHistoryCache = new Map();
+    let currentBtcInterval = null;
+    let currentBtcBounds = null;
+    let currentBtcCacheKey = null;
+    let currentOrderContext = null;
     const detailKeys = [
         "id",
         "question",
@@ -237,6 +300,19 @@
     const chartTokenList = $("chartTokenList");
     const chartSelectAllBtn = $("chartSelectAll");
     const chartClearAllBtn = $("chartClearAll");
+    const orderPanel = $("orderPanel");
+    const orderCloseBtn = $("orderClose");
+    const orderQuestionEl = $("orderQuestion");
+    const orderTokenGroup = $("orderTokenGroup");
+    const orderEventSlugEl = $("orderEventSlug");
+    const orderBestAskEl = $("orderBestAsk");
+    const orderToastContainer = $("orderToastContainer");
+    const orderForm = $("orderForm");
+    const orderBuyPriceInput = $("orderBuyPrice");
+    const orderSizeInput = $("orderSize");
+    const orderTakeProfitInput = $("orderTakeProfit");
+    const orderStatusEl = $("orderStatus");
+    const orderSubmitBtn = $("orderSubmit");
     fields.forEach(f => {
         const th = document.createElement("th");
         th.textContent = f.label;
@@ -246,6 +322,12 @@
     const detailHead = document.createElement("th");
     detailHead.textContent = "详细";
     cols.appendChild(detailHead);
+    const goHead = document.createElement("th");
+    goHead.textContent = "前往";
+    cols.appendChild(goHead);
+    const orderHead = document.createElement("th");
+    orderHead.textContent = "下单";
+    cols.appendChild(orderHead);
 
     const dateFieldRegex = /(date|time)$/i;
     const compactFormatter = new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 });
@@ -291,12 +373,10 @@
         return Array.isArray(parsed) ? parsed : null;
     }
 
-    function getYesTokenId(item) {
+    function getTokenIds(item) {
         const tokens = parseClobTokenIds(item?.clobTokenIds);
-        if (!tokens || !tokens.length) return null;
-        const tokenId = tokens[0];
-        if (tokenId === undefined || tokenId === null) return null;
-        return String(tokenId);
+        if (!tokens || !tokens.length) return [];
+        return tokens.map(token => token === undefined || token === null ? null : String(token)).filter(Boolean);
     }
 
     function shorten(value) {
@@ -375,6 +455,14 @@
         const event = item.events[0];
         if (!event || typeof event.ticker !== "string") return null;
         const trimmed = event.ticker.trim();
+        return trimmed.length ? trimmed : null;
+    }
+
+    function getPrimaryEventSlug(item) {
+        if (!item || !Array.isArray(item.events) || !item.events.length) return null;
+        const slug = item.events[0]?.slug;
+        if (typeof slug !== "string") return null;
+        const trimmed = slug.trim();
         return trimmed.length ? trimmed : null;
     }
 
@@ -522,12 +610,19 @@
     function collectYesTokens(list) {
         const map = new Map();
         list.forEach(item => {
-            const tokenId = getYesTokenId(item);
-            if (!tokenId || map.has(tokenId)) return;
-            map.set(tokenId, {
-                tokenId,
-                ticker: extractEventTicker(item),
-                question: typeof item.question === "string" ? item.question.trim() : "",
+            const tokens = getTokenIds(item);
+            const bestAsks = [extractOutcomePrice(item, 0), extractOutcomePrice(item, 1)];
+            if (!tokens.length) return;
+            const ticker = extractEventTicker(item);
+            const question = typeof item.question === "string" ? item.question.trim() : "";
+            tokens.forEach((tokenId, idx) => {
+                if (!tokenId || map.has(tokenId)) return;
+                map.set(tokenId, {
+                    tokenId,
+                    ticker: ticker ? `${ticker}-${idx === 0 ? "YES" : "NO"}` : null,
+                    question: idx === 0 ? `${question} · YES` : `${question} · NO`,
+                    bestAsk: bestAsks[idx] ?? null,
+                });
             });
         });
         const tokens = [...map.values()];
@@ -553,7 +648,7 @@
         if (!prices || prices.length <= index) return null;
         const value = Number(prices[index]);
         if (!Number.isFinite(value)) return null;
-        return Math.round(value * 100);
+        return value;
     }
 
     function buildHistoryKey(tokenId, interval) {
@@ -580,6 +675,52 @@
                 chartHistoryCache.delete(key);
             }
         }
+    }
+
+    function getCachedIntervalBounds(interval) {
+        let min = Number.POSITIVE_INFINITY;
+        let max = Number.NEGATIVE_INFINITY;
+        chartTokens.forEach(token => {
+            const points = getHistoryPoints(token.tokenId, interval);
+            if (!points || !points.length) return;
+            const firstTime = points[0].time;
+            const lastTime = points[points.length - 1].time;
+            if (firstTime < min) min = firstTime;
+            if (lastTime > max) max = lastTime;
+        });
+        if (!Number.isFinite(min) || !Number.isFinite(max) || max <= min) return null;
+        return {min, max};
+    }
+
+    function isValidBounds(bounds) {
+        if (!bounds) return false;
+        const {min, max} = bounds;
+        return Number.isFinite(min) && Number.isFinite(max) && max - min >= BTC_INTERVAL_MS;
+    }
+
+    function buildBtcHistoryKey(interval, bounds) {
+        if (!isValidBounds(bounds)) {
+            return `${interval}::default`;
+        }
+        const startBucket = Math.floor(bounds.min / BTC_INTERVAL_MS);
+        const endBucket = Math.floor(bounds.max / BTC_INTERVAL_MS);
+        return `${interval}::${startBucket}::${endBucket}`;
+    }
+
+    function setBtcHistoryPoints(interval, bounds, history) {
+        const key = buildBtcHistoryKey(interval, bounds);
+        const points = buildPoints(history);
+        btcHistoryCache.set(key, points);
+        return key;
+    }
+
+    function getBtcHistoryPoints(interval) {
+        if (!currentBtcCacheKey || currentBtcInterval !== interval) return null;
+        return btcHistoryCache.get(currentBtcCacheKey) || null;
+    }
+
+    function hasBtcHistory(interval, bounds) {
+        return btcHistoryCache.has(buildBtcHistoryKey(interval, bounds));
     }
 
     function syncChartTokens(tokens) {
@@ -653,7 +794,21 @@ function handleTokenSelectionChange(tokenId, checked) {
                 points,
             };
         }).filter(Boolean);
-        return {datasets, totalCount: chartTokens.length, selectedCount: selectedTokens.length};
+        let hasBtc = false;
+        if (datasets.length) {
+            const btcPoints = getBtcHistoryPoints(chartInterval);
+            if (btcPoints && btcPoints.length) {
+                datasets.push({
+                    label: BTC_SERIES_LABEL,
+                    tokenId: BTC_SERIES_ID,
+                    color: BTC_SERIES_COLOR,
+                    points: btcPoints,
+                    scale: "btc",
+                });
+                hasBtc = true;
+            }
+        }
+        return {datasets, totalCount: chartTokens.length, selectedCount: selectedTokens.length, hasBtc};
     }
 
     function getChartColorForToken(tokenId) {
@@ -661,7 +816,7 @@ function handleTokenSelectionChange(tokenId, checked) {
         return getChartColor(index >= 0 ? index : chartTokens.length);
     }
 
-    function renderChartFromCache({failureCount = 0} = {}) {
+    function renderChartFromCache({failureCount = 0, btcFailed = false} = {}) {
         const {datasets, totalCount, selectedCount} = buildDatasetsFromCache();
         let message;
         if (!totalCount) {
@@ -679,6 +834,9 @@ function handleTokenSelectionChange(tokenId, checked) {
         }
         if (failureCount) {
             message = `${message}，${failureCount} 个加载失败`;
+        }
+        if (btcFailed) {
+            message = `${message}，BTC 曲线加载失败`;
         }
         setChartStatus(message);
         renderChart(datasets);
@@ -705,8 +863,13 @@ function handleTokenSelectionChange(tokenId, checked) {
         setChartStatus(`共 ${tokens.length} 个 YES token，加载价格数据…`);
         try {
             const {failureCount} = await loadHistoriesForTokens(tokens, chartInterval, signal);
+            const cachedBounds = getCachedIntervalBounds(chartInterval);
+            currentBtcInterval = chartInterval;
+            currentBtcBounds = isValidBounds(cachedBounds) ? cachedBounds : null;
+            currentBtcCacheKey = buildBtcHistoryKey(chartInterval, currentBtcBounds);
+            const btcResult = await ensureBtcHistory(chartInterval, signal, currentBtcBounds);
             if (requestId !== chartRequestId) return;
-            renderChartFromCache({failureCount});
+            renderChartFromCache({failureCount, btcFailed: btcResult.failed});
         } catch (err) {
             if (err.name === "AbortError") return;
             console.error(err);
@@ -738,6 +901,35 @@ function handleTokenSelectionChange(tokenId, checked) {
             setHistoryPoints(result.token.tokenId, interval, result.history);
         });
         return {failureCount};
+    }
+
+    async function ensureBtcHistory(interval, signal, bounds) {
+        if (hasBtcHistory(interval, bounds)) return {failed: false};
+        try {
+            const history = await fetchBtcHistory(interval, bounds, signal);
+            currentBtcCacheKey = setBtcHistoryPoints(interval, bounds, history);
+            return {failed: false};
+        } catch (err) {
+            if (err.name === "AbortError") throw err;
+            console.error("加载 BTC 价格失败:", err);
+            return {failed: true};
+        }
+    }
+
+    async function fetchBtcHistory(interval, bounds, signal) {
+        const params = new URLSearchParams();
+        params.append("interval", interval);
+        if (isValidBounds(bounds)) {
+            params.append("start", Math.floor(bounds.min));
+            params.append("end", Math.floor(bounds.max));
+        }
+        const res = await fetch(`${BTC_HISTORY_API}?${params.toString()}`, {signal});
+        if (!res.ok) {
+            const payload = await safeJson(res);
+            throw new Error(payload?.message || "请求失败");
+        }
+        const data = await res.json();
+        return Array.isArray(data?.history) ? data.history : [];
     }
 
     async function fetchYesTokenHistory(tokenId, interval, signal) {
@@ -799,13 +991,8 @@ function handleTokenSelectionChange(tokenId, checked) {
 
     function formatTimelineLabel(value) {
         if (!Number.isFinite(value)) return "";
-        return new Intl.DateTimeFormat("zh-CN", {
-            month: "2-digit",
-            day: "2-digit",
-            hour: "2-digit",
-            minute: "2-digit",
-            hour12: false,
-        }).format(new Date(value));
+        const date = new Date(value);
+        return String(date.getHours()).padStart(2, "0");
     }
 
     function formatDuration(ms) {
@@ -968,7 +1155,7 @@ function handleTokenSelectionChange(tokenId, checked) {
         ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
         ctx.clearRect(0, 0, width, TOTAL_CANVAS_HEIGHT);
 
-        const padding = {top: 18, right: 56, bottom: 28, left: 56};
+        const padding = {top: 18, right: 84, bottom: 28, left: 56};
         const chartWidth = width - padding.left - padding.right;
         const chartHeight = MAIN_CHART_HEIGHT - padding.top - padding.bottom;
 
@@ -983,10 +1170,21 @@ function handleTokenSelectionChange(tokenId, checked) {
 
         const clampPrice = price => Math.min(priceMax, Math.max(priceMin, price));
         const xFor = time => padding.left + ((time - timeMin) / timeRange) * chartWidth;
-        const yFor = price => padding.top + chartHeight * (1 - (clampPrice(price) - priceMin) / priceRange);
+        const yForPrimary = price => padding.top + chartHeight * (1 - (clampPrice(price) - priceMin) / priceRange);
+        const secondaryScale = computeSecondaryScale(series);
+        const yForSecondary = secondaryScale
+            ? (price => {
+                const clamped = Math.min(secondaryScale.max, Math.max(secondaryScale.min, price));
+                const range = secondaryScale.max - secondaryScale.min || 1;
+                return padding.top + chartHeight * (1 - (clamped - secondaryScale.min) / range);
+            })
+            : null;
 
-        drawGrid(ctx, padding, chartWidth, chartHeight, priceMin, priceMax);
-        series.forEach(set => drawLineSeries(ctx, set, xFor, yFor, padding, chartHeight));
+        drawGrid(ctx, padding, chartWidth, chartHeight, priceMin, priceMax, secondaryScale);
+        series.forEach(set => {
+            const yAccessor = set.scale === "btc" && yForSecondary ? yForSecondary : yForPrimary;
+            drawLineSeries(ctx, set, xFor, yAccessor, padding, chartHeight);
+        });
     }
 
     function drawTimeline() {
@@ -1179,8 +1377,9 @@ function handleTokenSelectionChange(tokenId, checked) {
         return Math.max(0, Math.min(maxStart, normalized));
     }
 
-    function drawGrid(ctx, padding, width, height, priceMin, priceMax) {
+    function drawGrid(ctx, padding, width, height, priceMin, priceMax, secondaryScale) {
         const steps = PRICE_GRID_STEPS; // e.g. 0.05 increments across [0, 1]
+        ctx.save();
         ctx.strokeStyle = "rgba(255,255,255,0.08)";
         ctx.lineWidth = 1;
         ctx.setLineDash([4, 6]);
@@ -1192,16 +1391,63 @@ function handleTokenSelectionChange(tokenId, checked) {
         }
         ctx.stroke();
         ctx.setLineDash([]);
+        ctx.restore();
 
+        ctx.save();
         ctx.fillStyle = "#94a3b8";
         ctx.font = "12px system-ui";
-        ctx.textAlign = "right";
-        ctx.textBaseline = "middle";
         for (let i = 0; i <= steps; i++) {
             const price = priceMax - ((priceMax - priceMin) / steps) * i;
             const y = padding.top + (height / steps) * i;
+            ctx.textAlign = "right";
+            ctx.textBaseline = "middle";
             ctx.fillText(price.toFixed(2), padding.left - 6, y);
+            if (secondaryScale) {
+                const secondaryValue = secondaryScale.max - ((secondaryScale.max - secondaryScale.min) / steps) * i;
+                ctx.textAlign = "left";
+                ctx.fillText(formatBtcAxisValue(secondaryValue), padding.left + width + 6, y);
+            }
         }
+        if (secondaryScale) {
+            ctx.textAlign = "left";
+            ctx.textBaseline = "top";
+            ctx.fillText(secondaryScale.label || BTC_AXIS_LABEL, padding.left + width + 6, padding.top);
+        }
+        ctx.restore();
+    }
+
+    function formatBtcAxisValue(value) {
+        if (!Number.isFinite(value)) return "";
+        const abs = Math.abs(value);
+        if (abs >= 100000) return value.toFixed(0);
+        if (abs >= 1000) return Math.round(value).toLocaleString("en-US");
+        if (abs >= 100) return value.toFixed(1);
+        return value.toFixed(2);
+    }
+
+    function computeSecondaryScale(series) {
+        const values = series
+            .filter(dataset => dataset.scale === "btc")
+            .flatMap(dataset => (dataset.points || []).map(point => point.price))
+            .filter(value => Number.isFinite(value));
+        if (!values.length) return null;
+        let min = values[0];
+        let max = values[0];
+        values.forEach(value => {
+            if (value < min) min = value;
+            if (value > max) max = value;
+        });
+        if (!Number.isFinite(min) || !Number.isFinite(max)) return null;
+        if (min === max) {
+            const delta = Math.max(1, Math.abs(min) * 0.01 || 1);
+            min -= delta;
+            max += delta;
+        } else {
+            const pad = Math.max(1, (max - min) * 0.05);
+            min -= pad;
+            max += pad;
+        }
+        return {min, max, label: BTC_AXIS_LABEL};
     }
 
     function drawLineSeries(ctx, series, xFor, yFor, padding, chartHeight) {
@@ -1451,6 +1697,28 @@ function handleTokenSelectionChange(tokenId, checked) {
             btn.addEventListener("click", () => showDetail(item));
             detailTd.appendChild(btn);
             tr.appendChild(detailTd);
+            const goTd = document.createElement("td");
+            goTd.dataset.th = "前往";
+            const slug = getPrimaryEventSlug(item);
+            if (slug) {
+                const link = document.createElement("a");
+                link.href = `${POLY_EVENT_BASE_URL}${encodeURIComponent(slug)}`;
+                link.target = "_blank";
+                link.rel = "noopener noreferrer";
+                link.textContent = "前往";
+                goTd.appendChild(link);
+            } else {
+                goTd.textContent = "—";
+            }
+            tr.appendChild(goTd);
+            const orderTd = document.createElement("td");
+            orderTd.dataset.th = "下单";
+            const orderBtn = document.createElement("button");
+            orderBtn.className = "detail-trigger";
+            orderBtn.textContent = "下单";
+            orderBtn.addEventListener("click", () => openOrderPanel(item));
+            orderTd.appendChild(orderBtn);
+            tr.appendChild(orderTd);
             tbody.appendChild(tr);
         });
     }
@@ -1484,6 +1752,147 @@ function handleTokenSelectionChange(tokenId, checked) {
 
     function hideDetail() {
         $("detailPanel").classList.remove("active");
+    }
+
+    function getTokenOptions(item) {
+        const tokens = getTokenIds(item);
+        const outcomes = parseOutcomes(item?.outcomes);
+        return tokens.map((tokenId, idx) => ({
+            tokenId,
+            label: outcomes && outcomes[idx] ? outcomes[idx] : idx === 0 ? "YES" : "NO",
+            bestAsk: extractOutcomePrice(item, idx),
+        }));
+    }
+
+    function updateOrderTokenOptions(item) {
+        if (!orderTokenGroup) return;
+        const options = getTokenOptions(item);
+        orderTokenGroup.innerHTML = "";
+        options.forEach((opt, idx) => {
+            const wrapper = document.createElement("label");
+            wrapper.className = "order-token-option";
+            const radio = document.createElement("input");
+            radio.type = "radio";
+            radio.name = "orderTokenChoice";
+            radio.value = opt.tokenId;
+            if (opt.bestAsk !== null && opt.bestAsk !== undefined) {
+                radio.dataset.bestAsk = String(opt.bestAsk);
+            }
+            radio.dataset.label = opt.label;
+            if (idx === 1 || (idx === 0 && options.length === 1)) {
+                radio.checked = true;
+            }
+            radio.addEventListener("change", () => updateOrderBestAskDisplay({writeToInput: true}));
+            const span = document.createElement("span");
+            span.textContent = `${opt.label} (${shorten(opt.tokenId)})`;
+            wrapper.appendChild(radio);
+            wrapper.appendChild(span);
+            orderTokenGroup.appendChild(wrapper);
+        });
+        updateOrderBestAskDisplay({writeToInput: true});
+    }
+
+    function formatBestAsk(value) {
+        if (!Number.isFinite(value)) return "—";
+        if (value >= 1) return value.toFixed(2);
+        return (value * 100).toFixed(2) + "%";
+    }
+
+    function formatPriceInput(value) {
+        if (!Number.isFinite(value)) return "";
+        if (value >= 1) return value.toFixed(2);
+        return value.toFixed(4);
+    }
+
+    function updateOrderBestAskDisplay({writeToInput = false} = {}) {
+        if ((!orderBestAskEl && !writeToInput) || !orderTokenGroup) return;
+        const selected = orderTokenGroup.querySelector("input[name='orderTokenChoice']:checked");
+        if (!selected) {
+            if (orderBestAskEl) orderBestAskEl.textContent = "—";
+            if (writeToInput && orderBuyPriceInput) orderBuyPriceInput.value = "";
+            return;
+        }
+        const bestAsk = Number(selected.dataset.bestAsk);
+        const display = Number.isFinite(bestAsk) ? formatBestAsk(bestAsk) : "—";
+        if (orderBestAskEl) orderBestAskEl.textContent = display;
+        if (writeToInput && orderBuyPriceInput) {
+            orderBuyPriceInput.value = Number.isFinite(bestAsk) ? formatPriceInput(bestAsk) : "";
+        }
+    }
+
+    function openOrderPanel(item) {
+        if (!orderPanel) return;
+        const tokens = getTokenIds(item);
+        if (!tokens.length) {
+            setOrderStatus("无法获取 token，暂时无法下单", true);
+            orderPanel.classList.add("active");
+            return;
+        }
+        currentOrderContext = {
+            question: item.question || "",
+            slug: getPrimaryEventSlug(item),
+            item,
+        };
+        orderQuestionEl.textContent = currentOrderContext.question || "—";
+        orderEventSlugEl.textContent = currentOrderContext.slug || "—";
+        orderBuyPriceInput.value = "";
+        orderSizeInput.value = "";
+        orderTakeProfitInput.value = "";
+        setOrderStatus("");
+        updateOrderTokenOptions(item);
+        orderPanel.classList.add("active");
+        orderBuyPriceInput.focus();
+    }
+
+    function closeOrderPanel() {
+        if (!orderPanel) return;
+        orderPanel.classList.remove("active");
+        currentOrderContext = null;
+        setOrderStatus("");
+    }
+
+    function setOrderStatus(message, isError = false) {
+        if (!orderStatusEl) return;
+        orderStatusEl.textContent = message || "";
+        orderStatusEl.style.color = isError ? "#f87171" : "var(--muted)";
+    }
+
+    async function submitOrderRequest(payload, signal) {
+        const res = await fetch("/api/place-order", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify(payload),
+            signal,
+        });
+        if (!res.ok) {
+            const data = await safeJson(res);
+            throw new Error(data?.message || "下单失败");
+        }
+        return res.json();
+    }
+
+    function showOrderToast({title = "提示", message = "", actionLabel, onAction}) {
+        if (!orderToastContainer) return;
+        const toast = document.createElement("div");
+        toast.className = "toast";
+        toast.innerHTML = `
+            <strong>${title}</strong>
+            <div>${message}</div>
+        `;
+        if (actionLabel && typeof onAction === "function") {
+            const btn = document.createElement("button");
+            btn.type = "button";
+            btn.textContent = actionLabel;
+            btn.addEventListener("click", () => {
+                onAction();
+                toast.remove();
+            });
+            toast.appendChild(btn);
+        }
+        orderToastContainer.appendChild(toast);
+        setTimeout(() => {
+            toast.remove();
+        }, 4000);
     }
 
     function updateStatus(visibleCount) {
@@ -1571,6 +1980,65 @@ function handleTokenSelectionChange(tokenId, checked) {
     $("detailPanel").addEventListener("click", (evt) => {
         if (evt.target === evt.currentTarget) hideDetail();
     });
+    if (orderCloseBtn) {
+        orderCloseBtn.addEventListener("click", closeOrderPanel);
+    }
+    if (orderPanel) {
+        orderPanel.addEventListener("click", (evt) => {
+            if (evt.target === evt.currentTarget) closeOrderPanel();
+        });
+    }
+    if (orderForm) {
+        orderForm.addEventListener("submit", async (evt) => {
+            evt.preventDefault();
+            if (!currentOrderContext) {
+                setOrderStatus("请先选择需要下单的市场", true);
+                return;
+            }
+            const price = Number(orderBuyPriceInput.value);
+            const size = Number(orderSizeInput.value);
+            const takeProfitPrice = orderTakeProfitInput.value ? Number(orderTakeProfitInput.value) : null;
+            if (!Number.isFinite(price) || price <= 0) {
+                setOrderStatus("请输入有效的买单价格", true);
+                return;
+            }
+            if (!Number.isFinite(size) || size <= 0) {
+                setOrderStatus("请输入有效的买单数量", true);
+                return;
+            }
+            if (orderTakeProfitInput.value && (!Number.isFinite(takeProfitPrice) || takeProfitPrice <= 0)) {
+                setOrderStatus("请输入有效的止盈卖价", true);
+                return;
+            }
+            const tokenInput = orderTokenGroup?.querySelector("input[name='orderTokenChoice']:checked");
+            const tokenId = tokenInput?.value;
+            if (!tokenId) {
+                setOrderStatus("请选择 token", true);
+                return;
+            }
+
+            const finalize = (success = false) => {
+                orderSubmitBtn.disabled = false;
+                if (success) {
+                    const label = tokenInput?.dataset.label || "Token";
+                    showOrderToast({
+                        title: "买单成功",
+                        message: `${label} · 价格 ${formatPriceInput(price)} · 数量 ${size}`,
+                    });
+                    closeOrderPanel();
+                }
+            };
+            orderSubmitBtn.disabled = true;
+            setOrderStatus("提交买单中…");
+            try {
+                await submitOrderRequest({price, size, side: "buy", tokenId});
+                finalize(true);
+            } catch (err) {
+                setOrderStatus(err?.message || "下单失败", true);
+                finalize(false);
+            }
+        });
+    }
     window.addEventListener("resize", () => {
         if (lastChartDatasets.length) {
             drawChartWithView(lastChartDatasets);

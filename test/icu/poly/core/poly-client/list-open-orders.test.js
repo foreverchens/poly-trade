@@ -16,6 +16,7 @@ test('should return open orders list', async () => {
         assert(order.side, 'Order should have side');
         assert(order.price, 'Order should have price');
         assert(order.original_size, 'Order should have original_size');
+        console.log(orders)
     }
 });
 

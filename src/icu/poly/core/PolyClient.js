@@ -316,6 +316,16 @@ export class PolyClient {
     }
 
 
+    async getMarketByConditionId(conditionIds) {
+        const url = `${this.marketHost}/markets`;
+        const params = {
+            condition_ids: conditionIds,
+        }
+        const response = await axios.get(url, {params: params});
+        let dataArr = response?.data;
+        return dataArr.length ? dataArr[0] : null;
+    }
+
     /**
      * https://gamma-api.polymarket.com/events?tag_id=235&closed=false&volume_num_min=100000&order=endDate&end_date_min=2025-11-14T12:00:00Z&ascending=true&limit=1
      * @param tagId
@@ -448,6 +458,7 @@ export class PolyClient {
      * }}
      */
     async placeOrder(price, size, side, tokenId = this.tokenId) {
+        side = side.toUpperCase();
         const client = await this.getClient();
         const [tickSize, negRisk] = await Promise.all([client.getTickSize(tokenId), client.getNegRisk(tokenId),]);
 
@@ -522,28 +533,39 @@ export class PolyClient {
         if (!Array.isArray(trades)) {
             throw new Error("Failed to fetch personal trade history");
         }
-        let rlt = trades.reduce((rlt, trade,) => {
-            if(trade.maker_address === makerAddress){
+        const cache = new Map();
+        const rlt = [];
+        for (let trade of trades) {
+            let conditionId = trade.market;
+            let market = cache.get(conditionId);
+            if (!market) {
+                market = await this.getMarketByConditionId(conditionId);
+                cache.set(conditionId, market);
+            }
+            if (trade.maker_address === makerAddress) {
                 rlt.push({
-                    "order_id":trade.taker_order_id,
-                    "owner":trade.owner,
-                    "maker_address":makerAddress,
-                    "matched_amount":trade.size,
-                    "price":trade.price,
-                    "asset_id":trade.asset_id,
-                    "outcome":trade.outcome,
-                    "side":trade.side
+                    "question": market.question,
+                    "order_id": trade.taker_order_id,
+                    "owner": trade.owner,
+                    "maker_address": makerAddress,
+                    "matched_amount": trade.size,
+                    "price": trade.price,
+                    "asset_id": trade.asset_id,
+                    "outcome": trade.outcome,
+                    "side": trade.side,
+                    "transaction_hash":trade.transaction_hash
                 })
-            }else {
+            } else {
                 let makerOrders = trade.maker_orders.filter(order => {
                     return order.maker_address === makerAddress
-                }).map(order=>{
+                }).map(order => {
+                    order.question = market.question;
+                    order.transaction_hash = trade.transaction_hash;
                     return order;
                 });
                 rlt.push(...makerOrders);
             }
-            return rlt;
-        }, []);
+        }
         return rlt;
     }
 

@@ -25,6 +25,8 @@
         table{width:100%;border-collapse:collapse;overflow:hidden;background:var(--card);border:1px solid var(--line);border-radius:12px;}
         thead th{font-weight:600;text-align:left;padding:10px;border-bottom:1px solid var(--line);white-space:nowrap}
         tbody td{padding:10px;border-top:1px solid var(--line);vertical-align:middle}
+        #tradeTable th,#tradeTable td{text-align:center;}
+        #tradeTable td.right{text-align:right;}
         .asset{display:flex;align-items:center;gap:10px;}
         .icon{width:28px;height:28px;border-radius:6px;object-fit:cover;border:1px solid var(--line)}
         .outcome{font-size:12px;color:var(--muted)}
@@ -34,8 +36,14 @@
         .chip{display:inline-block;border:1px solid var(--line);border-radius:999px;padding:2px 8px;margin-left:6px;font-size:12px;color:var(--muted)}
         .loading{opacity:.8}
         .section-head{display:flex;align-items:center;justify-content:space-between;margin:32px 0 8px;gap:12px;flex-wrap:wrap;}
+        .section-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
         a.link{color:#5dade2;text-decoration:none;}
         a.link:hover{text-decoration:underline;}
+        .toast-container{position:fixed;right:24px;bottom:24px;display:flex;flex-direction:column;gap:10px;z-index:50;}
+        .toast{background:rgba(18,24,33,0.96);border:1px solid var(--line);border-radius:10px;padding:12px 16px;min-width:240px;box-shadow:0 10px 30px rgba(0,0,0,0.35);animation:fadeIn .2s ease;}
+        .toast strong{display:block;font-size:14px;margin-bottom:6px;}
+        .toast button{margin-top:8px;padding:4px 8px;font-size:12px;}
+        @keyframes fadeIn{from{opacity:0;transform:translateY(12px);}to{opacity:1;transform:translateY(0);}}
         @media (max-width:700px){
             input{min-width:240px}
             thead{display:none}
@@ -64,6 +72,11 @@
         <div class="muted">仅展示 size ≥ 1 的持仓</div>
     </div>
 
+    <div class="section-head">
+        <h2 class="subtitle">资产</h2>
+        <button id="positionRefresh">刷新资产</button>
+    </div>
+
     <table id="tbl">
         <thead>
         <tr>
@@ -81,14 +94,45 @@
     </table>
 
     <div class="section-head">
+        <h2 class="subtitle">当前挂单</h2>
+        <div class="section-actions">
+            <span id="openOrderStatus" class="muted">等待加载…</span>
+            <button id="openOrderRefresh">刷新挂单</button>
+        </div>
+    </div>
+
+    <table id="openOrderTable">
+        <thead>
+        <tr>
+            <th>订单ID</th>
+            <th>市场</th>
+            <th>方向</th>
+            <th>价格</th>
+            <th>剩余数量</th>
+            <th>初始数量</th>
+            <th>状态</th>
+            <th>创建时间</th>
+            <th>操作</th>
+        </tr>
+        </thead>
+        <tbody id="openOrderBody">
+        <tr><td colspan="8" class="muted" data-th="提示">等待加载…</td></tr>
+        </tbody>
+    </table>
+
+    <div class="section-head">
         <h2 class="subtitle">最近成交（3天内，最多 10 条）</h2>
-        <span id="tradeStatus" class="muted">等待加载…</span>
+        <div class="section-actions">
+            <span id="tradeStatus" class="muted">等待加载…</span>
+            <button id="tradeRefresh">刷新成交</button>
+        </div>
     </div>
 
     <table id="tradeTable">
         <thead>
         <tr>
-            <th>交易ID</th>
+            <th>市场</th>
+            <th>订单ID</th>
             <th>方向</th>
             <th>价格</th>
             <th>数量</th>
@@ -98,7 +142,7 @@
         </tr>
         </thead>
         <tbody id="tradeBody">
-        <tr><td colspan="7" class="muted" data-th="提示">等待加载…</td></tr>
+        <tr><td colspan="8" class="muted" data-th="提示">等待加载…</td></tr>
         </tbody>
     </table>
 
@@ -106,6 +150,8 @@
         <div class="tip">说明：持有价值按 <code>size × curPrice</code> 现场计算；盈亏使用接口返回 <code>cashPnl / percentPnl</code>，若缺失则现场推导。</div>
     </div>
 </div>
+
+<div id="toastContainer" class="toast-container"></div>
 
 <script>
     const $ = (id) => document.getElementById(id);
@@ -171,6 +217,15 @@
 
     async function fetchTrades(addr) {
         const res = await fetch(`/api/trades?address=${addr}`);
+        if (!res.ok) {
+            const text = await res.text();
+            throw new Error(text || `HTTP ${res.status}`);
+        }
+        return res.json();
+    }
+
+    async function fetchOpenOrders() {
+        const res = await fetch(`/api/open-orders`);
         if (!res.ok) {
             const text = await res.text();
             throw new Error(text || `HTTP ${res.status}`);
@@ -251,6 +306,165 @@
         $('sumPnlPct').innerHTML = `<span class="${pnlPct>=0?'green':'red'}">${(pnlPct*100).toFixed(2)}%</span>`;
     }
 
+    function parseOrderTime(value) {
+        if (!value) return '—';
+        if (typeof value === 'number') {
+            return formatTs(value > 1e12 ? value : value * 1000);
+        }
+        const asNumber = Number(value);
+        if (!Number.isNaN(asNumber)) {
+            return formatTs(asNumber > 1e12 ? asNumber : asNumber * 1000);
+        }
+        const parsed = Date.parse(value);
+        return Number.isNaN(parsed) ? '—' : formatTs(parsed);
+    }
+
+    function renderOpenOrders(orders = []) {
+        const tbody = $('openOrderBody');
+        const status = $('openOrderStatus');
+        tbody.innerHTML = '';
+        if (!Array.isArray(orders) || !orders.length) {
+            status.textContent = '暂无挂单';
+            const tr = document.createElement('tr');
+            tr.innerHTML = `<td colspan="9" class="muted" data-th="提示">暂无挂单</td>`;
+            tbody.appendChild(tr);
+            return;
+        }
+        status.textContent = `共有 ${orders.length} 条挂单`;
+        orders.forEach(order => {
+            const sideLabel = (order.side || order.action || '—').toUpperCase();
+            const price = Number(order.price ?? order.limit_price ?? 0);
+            const remaining = Number(order.remaining_size ?? order.remaining ?? order.size ?? 0);
+            const original = Number(order.original_size ?? order.making_amount ?? order.total_size ?? remaining);
+            const tr = document.createElement('tr');
+            tr.innerHTML = `
+        <td data-th="订单ID">${shorten(order.id || order.order_id || '')}</td>
+        <td data-th="市场">${order.market || order.ticker || order.question || '—'}</td>
+        <td data-th="方向"><span class="${sideLabel.includes('BUY') || sideLabel.includes('BID') ? 'green' : 'red'}">${sideLabel}</span></td>
+        <td data-th="价格" class="right">${f2(price)}</td>
+        <td data-th="剩余数量" class="right">${f2(remaining)}</td>
+        <td data-th="初始数量" class="right">${f2(original)}</td>
+        <td data-th="状态">${order.status || order.state || 'live'}</td>
+        <td data-th="创建时间">${parseOrderTime(order.created_time || order.created_at || order.timestamp)}</td>
+        <td data-th="操作">
+          <button class="cancel-btn" data-order-id="${order.id || order.order_id || ''}">撤单</button>
+        </td>
+      `;
+            tbody.appendChild(tr);
+        });
+
+        tbody.querySelectorAll('.cancel-btn').forEach(button => {
+            button.addEventListener('click', () => {
+                const orderId = button.dataset.orderId;
+                if (!orderId) {
+                    alert('缺少 orderId，无法撤单');
+                    return;
+                }
+                cancelOpenOrder(orderId, button);
+            });
+        });
+    }
+
+    async function refreshOpenOrdersSection() {
+        const status = $('openOrderStatus');
+        if (status) {
+            status.textContent = '刷新挂单…';
+            status.classList.add('loading');
+        }
+        try {
+            const orders = await fetchOpenOrders();
+            renderOpenOrders(Array.isArray(orders) ? orders : []);
+        } catch (err) {
+            console.error('Failed to refresh open orders:', err);
+            if (status) status.textContent = '挂单刷新失败';
+            const tbody = $('openOrderBody');
+            if (tbody) {
+                tbody.innerHTML = `<tr><td colspan="9" class="muted" data-th="提示">挂单刷新失败</td></tr>`;
+            }
+        } finally {
+            if (status) status.classList.remove('loading');
+        }
+    }
+
+    async function refreshTradesSection(addr) {
+        const tradeHint = $('tradeStatus');
+        if (tradeHint) {
+            tradeHint.textContent = '刷新成交…';
+            tradeHint.classList.add('loading');
+        }
+        try {
+            const trades = await fetchTrades(addr);
+            renderTrades(Array.isArray(trades) ? trades : []);
+        } catch (err) {
+            console.error('Failed to refresh trades:', err);
+            if (tradeHint) tradeHint.textContent = '成交刷新失败';
+            const tbody = $('tradeBody');
+            if (tbody) {
+                tbody.innerHTML = `<tr><td colspan="8" class="muted" data-th="提示">成交刷新失败</td></tr>`;
+            }
+        } finally {
+            if (tradeHint) tradeHint.classList.remove('loading');
+        }
+    }
+
+    async function refreshPositionsSection(addr) {
+        const st = $('status');
+        if (st) {
+            st.textContent = '刷新资产…';
+            st.classList.add('loading');
+        }
+        try {
+            const rows = await fetchPositions(addr);
+            await renderPositions(Array.isArray(rows) ? rows : []);
+            if (st) st.textContent = `已加载 ${Array.isArray(rows)? rows.length:0} 条持仓`;
+        } catch (err) {
+            console.error('Failed to refresh positions:', err);
+            if (st) st.textContent = '资产刷新失败';
+        } finally {
+            if (st) st.classList.remove('loading');
+        }
+    }
+
+    const toastContainer = $('toastContainer');
+
+    function showToast({title = '提示', message = ''}) {
+        if (!toastContainer) return;
+        const toast = document.createElement('div');
+        toast.className = 'toast';
+        toast.innerHTML = `<strong>${title}</strong><div>${message}</div>`;
+        toastContainer.appendChild(toast);
+        setTimeout(() => {
+            toast.remove();
+        }, 4000);
+    }
+
+    async function cancelOpenOrder(orderId, button) {
+        if (!orderId) return;
+        const confirmed = confirm(`确认撤销订单 ${shorten(orderId)} 吗？`);
+        if (!confirmed) return;
+        const originalText = button.textContent;
+        button.disabled = true;
+        button.textContent = "撤单中…";
+        try {
+            const res = await fetch("/api/cancel-order", {
+                method: "POST",
+                headers: {"Content-Type": "application/json"},
+                body: JSON.stringify({orderId}),
+            });
+            if (!res.ok) {
+                const body = await res.json().catch(() => ({}));
+                throw new Error(body?.message || body?.error || `HTTP ${res.status}`);
+            }
+            await refreshOpenOrdersSection();
+            showToast({title: '撤单成功', message: `订单 ${shorten(orderId)} 已撤销`});
+        } catch (err) {
+            alert(`撤单失败：${err.message || err}`);
+        } finally {
+            button.disabled = false;
+            button.textContent = originalText;
+        }
+    }
+
     function renderTrades(trades){
         const tbody = $('tradeBody');
         const status = $('tradeStatus');
@@ -267,7 +481,7 @@
         if (!flatTrades.length) {
             status.textContent = '最近3天暂无成交';
             const tr = document.createElement('tr');
-            tr.innerHTML = `<td colspan="7" class="muted" data-th="提示">最近3天暂无成交</td>`;
+            tr.innerHTML = `<td colspan="8" class="muted" data-th="提示">最近3天暂无成交</td>`;
             tbody.appendChild(tr);
             return;
         }
@@ -277,9 +491,12 @@
             const size = normalizeNumber(trade.matched_amount ?? trade.size ?? trade.amount);
             const notional = price * size;
             const matchTime = trade.matchTime ?? trade.match_time ?? Date.now();
+            const marketLabel = trade.question || '—';
+            const orderIdLabel = shorten(trade.order_id || trade.orderId || '');
             const trEl = document.createElement('tr');
             trEl.innerHTML = `
-        <td data-th="交易ID">${shorten(trade.tradeId || trade.id || trade.orderId || trade.order_id)}</td>
+        <td data-th="市场">${marketLabel}</td>
+        <td data-th="订单ID">${orderIdLabel}</td>
         <td data-th="方向"><span class="${trade.side === 'BUY' ? 'green' : 'red'}">${trade.side || '—'}</span></td>
         <td data-th="价格" class="right">${f2(price)}</td>
         <td data-th="数量" class="right">${f2(size)}</td>
@@ -328,14 +545,23 @@
 
         try {
             const result = await placeCloseOrder(tokenId, price, size, side);
-            if (result.success) {
-                alert(`平仓成功！\n订单ID: ${result.orderID}\n状态: ${result.status}`);
-                load();
+            console.log(result);
+            if (result.error) {
+                alert(`平仓失败: ${result.error || '未知错误'}`);
             } else {
-                alert(`平仓失败: ${result.errorMsg || '未知错误'}`);
+                await refreshOpenOrdersSection();
+                showToast({
+                    title: '平仓成功',
+                    message: `订单 ${shorten(result.orderID || '')} 状态 ${result.status}`,
+                });
+                load();
             }
         } catch(err) {
-            alert(`平仓失败: ${err.message}`);
+            if (err?.code === 'not enough balance / allowance' || err?.message?.includes('not enough balance')) {
+                alert('平仓失败：账户余额或授权不足，请先补充/授权后再试。');
+            } else {
+                alert(`平仓失败: ${err?.message || '未知错误'}`);
+            }
         } finally {
             button.disabled = false;
             button.textContent = originalText;
@@ -349,13 +575,17 @@
         }
         const st = $('status');
         const tradeHint = $('tradeStatus');
+        const openOrderHint = $('openOrderStatus');
         st.textContent = '加载中…';
         st.classList.add('loading');
         tradeHint.textContent = '加载最近成交…';
         tradeHint.classList.add('loading');
+        openOrderHint.textContent = '加载挂单…';
+        openOrderHint.classList.add('loading');
         try{
-            const [positionResult, tradeResult] = await Promise.allSettled([
+            const [positionResult, openOrderResult, tradeResult] = await Promise.allSettled([
                 fetchPositions(addr),
+                fetchOpenOrders(),
                 fetchTrades(addr)
             ]);
 
@@ -365,7 +595,16 @@
                 console.error(tradeResult.reason);
                 tradeHint.textContent = '成交加载失败';
                 const tbody = $('tradeBody');
-                tbody.innerHTML = `<tr><td colspan="7" class="muted" data-th="提示">成交列表加载失败</td></tr>`;
+                tbody.innerHTML = `<tr><td colspan="8" class="muted" data-th="提示">成交列表加载失败</td></tr>`;
+            }
+
+            if (openOrderResult.status === 'fulfilled') {
+                renderOpenOrders(Array.isArray(openOrderResult.value) ? openOrderResult.value : []);
+            } else {
+                console.error(openOrderResult.reason);
+                openOrderHint.textContent = '挂单加载失败';
+                const openBody = $('openOrderBody');
+                openBody.innerHTML = `<tr><td colspan="8" class="muted" data-th="提示">挂单列表加载失败</td></tr>`;
             }
 
             if (positionResult.status !== 'fulfilled') {
@@ -381,10 +620,14 @@
         }finally{
             st.classList.remove('loading');
             tradeHint.classList.remove('loading');
+            openOrderHint.classList.remove('loading');
         }
     }
 
     $('refresh').addEventListener('click', load);
+    $('positionRefresh').addEventListener('click', () => refreshPositionsSection($('addr').value.trim()));
+    $('openOrderRefresh').addEventListener('click', () => refreshOpenOrdersSection());
+    $('tradeRefresh').addEventListener('click', () => refreshTradesSection($('addr').value.trim()));
     window.handleCloseOrder = handleCloseOrder;
     load();
 </script>

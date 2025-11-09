@@ -28,14 +28,14 @@ test('should place a buy order', async () => {
 
 test('should place a sell order', async () => {
     const polyClient = createPolyClient();
-    const price = '0.998';
-    const size = '40';
+    const price = '0.1';
+    const size = '8.35';
     const side = PolySide.SELL;
     
     // Note: This test may fail if there's insufficient balance or other issues
     try {
-        const result = await polyClient.placeOrder(price, size, side, tokenIdB);
-        
+        const result = await polyClient.placeOrder(price, size, side, '30678145720978986870531729996086321665047614270476574779108834454414336028793');
+        console.log(result)
         assert(result, 'Order result should be returned');
         assert(result.success !== false, 'Order should be successful or pending');
     } catch (error) {

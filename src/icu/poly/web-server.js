@@ -1,9 +1,30 @@
 import express from "express";
 import path from "path";
 import { fileURLToPath } from "url";
+import axios from "axios";
 import { PolyClient } from "./core/PolyClient.js";
 
 const PORT = process.env.PORT || 3001;
+const BTC_PRICE_SOURCE = process.env.BTC_PRICE_SOURCE || "https://api.binance.com/api/v3/klines";
+const BTC_PRICE_SYMBOL = process.env.BTC_PRICE_SYMBOL || "BTCUSDT";
+const BTC_HISTORY_CACHE_TTL_MS = 60 * 1000;
+const MINUTE_MS = 60 * 1000;
+const HOUR_MS = 60 * MINUTE_MS;
+const DAY_MS = 24 * HOUR_MS;
+const BTC_CANDLE_INTERVAL_MINUTES = 15;
+const BTC_PROVIDER_INTERVAL = "15m";
+const BTC_PROVIDER_INTERVAL_MS = BTC_CANDLE_INTERVAL_MINUTES * MINUTE_MS;
+const BTC_CACHE_VERSION = "v15m";
+const BTC_INTERVAL_CONFIG = {
+    "1h": { durationMs: HOUR_MS },
+    "6h": { durationMs: 6 * HOUR_MS },
+    "1d": { durationMs: DAY_MS },
+    "1w": { durationMs: 7 * DAY_MS },
+    max: { durationMs: 180 * DAY_MS },
+};
+const DEFAULT_BTC_INTERVAL = "1d";
+const MAX_BINANCE_LIMIT = 1000;
+const MAX_BINANCE_BATCHES = 24;
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -17,9 +38,8 @@ const DEFAULT_TAG_ID = 235;
 const CLIENT_ERROR_PATTERNS = [/market is required/i, /Invalid interval/i];
 const PAGE_ROUTES = [
     { label: "Crypto Markets", path: "/" },
-    { label: "Positions", path: "/positions" },
+    { label: "dashboard", path: "/dashboard" },
 ];
-const DAY_MS = 24 * 60 * 60 * 1000;
 const TRADE_LOOKBACK_DAYS = 3;
 const MAX_TRADE_ITEMS = 10;
 
@@ -50,6 +70,21 @@ app.get("/api/price-history", async (req, res) => {
         const status = isClientError ? 400 : err.response?.status || 500;
         res.status(status).json({
             error: "failed_to_fetch_price_history",
+            message: err.response?.data || err.message,
+        });
+    }
+});
+
+app.get("/api/btc-history", async (req, res) => {
+    try {
+        const interval = normalizeBtcInterval(req.query.interval);
+        const customRange = normalizeBtcRange(req.query.start, req.query.end);
+        const history = await getBtcHistory(interval, customRange);
+        res.json({ history });
+    } catch (err) {
+        console.error("Failed to fetch BTC price history:", err.message);
+        res.status(err.response?.status || 500).json({
+            error: "failed_to_fetch_btc_history",
             message: err.response?.data || err.message,
         });
     }
@@ -87,6 +122,23 @@ app.get("/api/trades", async (req, res) => {
         console.error("Failed to fetch trades:", err.message);
         res.status(err.response?.status || 500).json({
             error: "failed_to_fetch_trades",
+            message: err.response?.data || err.message,
+        });
+    }
+});
+
+app.get("/api/open-orders", async (req, res) => {
+    try {
+        const { market, assetId } = req.query;
+        const orders = await polyClient.listOpenOrders({
+            market: market || undefined,
+            assetId: assetId || undefined,
+        });
+        res.json(orders);
+    } catch (err) {
+        console.error("Failed to fetch open orders:", err.message);
+        res.status(err.response?.status || 500).json({
+            error: "failed_to_fetch_open_orders",
             message: err.response?.data || err.message,
         });
     }
@@ -171,15 +223,139 @@ app.post("/api/place-order", async (req, res) => {
     }
 });
 
+app.post("/api/cancel-order", async (req, res) => {
+    try {
+        const { orderId } = req.body;
+        if (!orderId) {
+            return res.status(400).json({
+                error: "missing_order_id",
+                message: "orderId is required",
+            });
+        }
+        const result = await polyClient.cancelOrder(orderId);
+        res.json(result);
+    } catch (err) {
+        console.error("Failed to cancel order:", err.message);
+        res.status(err.response?.status || 500).json({
+            error: "failed_to_cancel_order",
+            message: err.response?.data || err.message,
+        });
+    }
+});
+
 
 app.use(express.static(viewDir));
+const btcHistoryCache = new Map();
+
+function normalizeBtcInterval(value) {
+    const key = typeof value === "string" ? value.trim().toLowerCase() : "";
+    if (key && BTC_INTERVAL_CONFIG[key]) {
+        return key;
+    }
+    return DEFAULT_BTC_INTERVAL;
+}
+
+function normalizeBtcRange(startValue, endValue) {
+    if (startValue === undefined || endValue === undefined) return null;
+    const startNum = Number(startValue);
+    const endNum = Number(endValue);
+    if (!Number.isFinite(startNum) || !Number.isFinite(endNum)) return null;
+    const orderedStart = Math.min(startNum, endNum);
+    const orderedEnd = Math.max(startNum, endNum);
+    const now = Date.now();
+    const safeEnd = Math.min(orderedEnd, now);
+    const safeStart = Math.max(0, Math.min(orderedStart, safeEnd - BTC_PROVIDER_INTERVAL_MS));
+    if (safeEnd - safeStart < BTC_PROVIDER_INTERVAL_MS) {
+        return {
+            startTime: safeStart,
+            endTime: safeStart + BTC_PROVIDER_INTERVAL_MS,
+        };
+    }
+    return {
+        startTime: safeStart,
+        endTime: safeEnd,
+    };
+}
+
+async function getBtcHistory(interval, customRange = null) {
+    const key = interval || DEFAULT_BTC_INTERVAL;
+    const useCache = !customRange;
+    const cacheKey = `${BTC_CACHE_VERSION}:${key}`;
+    if (useCache) {
+        const cached = btcHistoryCache.get(cacheKey);
+        if (cached && Date.now() - cached.timestamp < BTC_HISTORY_CACHE_TTL_MS) {
+            return cached.history;
+        }
+    }
+    const config = BTC_INTERVAL_CONFIG[key] || BTC_INTERVAL_CONFIG[DEFAULT_BTC_INTERVAL];
+    const defaultDuration = config.durationMs ?? DAY_MS;
+    const now = Date.now();
+    const targetEnd = customRange?.endTime ?? now;
+    const durationMs = customRange
+        ? Math.max(BTC_PROVIDER_INTERVAL_MS, customRange.endTime - customRange.startTime)
+        : defaultDuration;
+    const targetStart = customRange?.startTime ?? Math.max(0, targetEnd - durationMs);
+    const normalizedStart = Math.floor(targetStart / BTC_PROVIDER_INTERVAL_MS) * BTC_PROVIDER_INTERVAL_MS;
+    const totalRange = Math.max(BTC_PROVIDER_INTERVAL_MS, (targetEnd - normalizedStart));
+    const requiredCandles = Math.max(2, Math.ceil(totalRange / BTC_PROVIDER_INTERVAL_MS) + 2);
+    const history = await fetchBtcCandles({
+        startTime: normalizedStart,
+        endTime: targetEnd,
+        requiredCandles,
+    });
+    const filtered = history
+        .filter(point => point.t >= targetStart && point.t <= targetEnd + BTC_PROVIDER_INTERVAL_MS);
+    if (useCache) {
+        btcHistoryCache.set(cacheKey, { timestamp: now, history: filtered });
+    }
+    return filtered;
+}
+
+async function fetchBtcCandles({ startTime, endTime, requiredCandles }) {
+    const points = [];
+    let nextStart = startTime;
+    let batchCount = 0;
+    while (nextStart < endTime && points.length < requiredCandles && batchCount < MAX_BINANCE_BATCHES) {
+        const remaining = requiredCandles - points.length;
+        const limit = Math.min(MAX_BINANCE_LIMIT, Math.max(remaining, 10));
+        const params = {
+            symbol: BTC_PRICE_SYMBOL,
+            interval: BTC_PROVIDER_INTERVAL,
+            limit,
+            startTime: nextStart,
+        };
+        const response = await axios.get(BTC_PRICE_SOURCE, { params, timeout: 10_000 });
+        if (!Array.isArray(response.data) || !response.data.length) break;
+        const batchPoints = response.data.map(entry => ({
+            t: Number(entry?.[0]),
+            p: Number(entry?.[4]),
+        })).filter(point => Number.isFinite(point.t) && Number.isFinite(point.p));
+        if (!batchPoints.length) break;
+        points.push(...batchPoints);
+        const lastTime = batchPoints[batchPoints.length - 1].t;
+        if (!Number.isFinite(lastTime)) break;
+        nextStart = lastTime + BTC_PROVIDER_INTERVAL_MS;
+        batchCount++;
+    }
+    return dedupeCandles(points).filter(point => point.t <= endTime + BTC_PROVIDER_INTERVAL_MS);
+}
+
+function dedupeCandles(points) {
+    const seen = new Set();
+    return points.filter(point => {
+        const key = point.t;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+    });
+}
 
 app.get("/", (_req, res) => {
     res.sendFile(path.join(viewDir, "crypto-markets.html"));
 });
 
-app.get("/positions", (_req, res) => {
-    res.sendFile(path.join(viewDir, "positions.html"));
+app.get("/dashboard", (_req, res) => {
+    res.sendFile(path.join(viewDir, "dashboard.html"));
 });
 
 app.listen(PORT, () => {

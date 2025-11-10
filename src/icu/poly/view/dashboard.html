@@ -69,12 +69,12 @@
     <div class="summary" id="summary">
         <div>持有价值：<b id="sumValue">—</b></div>
         <div>当前盈亏：<b id="sumPnl">—</b>（<span id="sumPnlPct">—</span>）</div>
-        <div class="muted">仅展示 size ≥ 1 的持仓</div>
+        <div class="muted">仅展示 size ≥ 1 且 currentValue > 1 的持仓</div>
     </div>
 
     <div class="section-head">
-        <h2 class="subtitle">资产</h2>
-        <button id="positionRefresh">刷新资产</button>
+        <h2 class="subtitle">持仓</h2>
+        <button id="positionRefresh">刷新持仓</button>
     </div>
 
     <table id="tbl">
@@ -157,6 +157,21 @@
     const $ = (id) => document.getElementById(id);
     const f2 = (n = 0) => Number(n || 0).toFixed(2);
     const fmtMoney = (n) => Number.isFinite(Number(n)) ? '$' + f2(n) : '—';
+    const PRICE_DISPLAY_MULTIPLIER = 100;
+    const PRICE_DISPLAY_DECIMALS = 1;
+    const formatPrice = (value, {fallback = '—', withUnit = true} = {}) => {
+        const num = Number(value);
+        if (!Number.isFinite(num)) return fallback;
+        const scaled = (num * PRICE_DISPLAY_MULTIPLIER).toFixed(PRICE_DISPLAY_DECIMALS);
+        return withUnit ? `${scaled}%` : scaled;
+    };
+    const formatPriceInput = (value) => {
+        return formatPrice(value, {fallback: '', withUnit: false});
+    };
+    const parsePriceInput = (value) => {
+        const num = Number(value);
+        return Number.isFinite(num) ? num / PRICE_DISPLAY_MULTIPLIER : Number.NaN;
+    };
     const formatTs = (ts) => {
         const date = new Date(ts);
         return Number.isNaN(date.getTime()) ? '—' : date.toLocaleString('zh-CN', { hour12: false });
@@ -165,18 +180,35 @@
         if (!text) return '—';
         return text.length <= head + tail ? text : `${text.slice(0, head)}…${text.slice(-tail)}`;
     };
+    const POLY_EVENT_BASE_URL = "https://polymarket.com/event/";
+    const MIN_CURRENT_VALUE = 1;
 
     async function fetchPositions(addr){
         const url = `https://data-api.polymarket.com/positions?sizeThreshold=1&limit=100&sortBy=TOKENS&sortDirection=DESC&user=${addr}`;
         const res = await fetch(url, { mode: 'cors' });
         let text = await res.text();
-        try { return JSON.parse(text); }
+        let data;
+        try { data = JSON.parse(text); }
         catch(e){
             const fixed = text
                 .replace(/([{,\s])(\w+)\s*:/g, '$1"$2":')
                 .replace(/'/g, '"');
-            return JSON.parse(fixed);
+            data = JSON.parse(fixed);
         }
+        if (Array.isArray(data)) {
+            return data.filter((item) => {
+                const currentValue = Number(item?.currentValue ?? item?.current_value ?? 0);
+                if (!Number.isFinite(currentValue) || currentValue <= MIN_CURRENT_VALUE) {
+                    return false;
+                }
+                const price = Number(item?.curPrice);
+                if (!Number.isFinite(price)) {
+                    return true;
+                }
+                return price !== 0 && price !== 1;
+            });
+        }
+        return data;
     }
 
     async function fetchOrderBook(tokenId){
@@ -277,12 +309,12 @@
             </div>
           </td>
           <td class="right" data-th="数量">${size}</td>
-          <td class="right" data-th="成交价">${f2(avg)}</td>
+          <td class="right" data-th="成交价">${formatPrice(avg)}</td>
           <td class="right" data-th="最优买价">
-            ${bestBid !== null ? `<span class="green">${f2(bestBid)}</span>` : '<span class="muted">—</span>'}
+            ${Number.isFinite(bestBid) ? `<span class="green">${formatPrice(bestBid)}</span>` : '<span class="muted">—</span>'}
           </td>
           <td class="right" data-th="最优卖价">
-            ${bestAsk !== null ? `<span class="red">${f2(bestAsk)}</span>` : '<span class="muted">—</span>'}
+            ${Number.isFinite(bestAsk) ? `<span class="red">${formatPrice(bestAsk)}</span>` : '<span class="muted">—</span>'}
           </td>
           <td class="right" data-th="持有价值">${fmtMoney(holdValue)}</td>
           <td class="right" data-th="当前盈亏">
@@ -290,8 +322,8 @@
             <span class="${percentPnl>=0?'green':'red'}"> (${(percentPnl>=0?'+':'')+ (percentPnl*1).toFixed(2)}%)</span>
           </td>
           <td class="close-order" data-th="平仓">
-            <input type="number" step="0.01" min="0.01" max="0.99" placeholder="价格" 
-                   id="${rowId}-price" value="${bestAsk !== null ? bestAsk.toFixed(2) : ''}" />
+            <input type="number" step="0.1" min="0.1" max="100" placeholder="价格（%）" 
+                   id="${rowId}-price" value="${formatPriceInput(bestAsk)}" />
             <input type="number" step="0.01" min="0.01" placeholder="数量" 
                    id="${rowId}-size" value="${size > 0 ? size.toFixed(2) : ''}" max="${size}" />
             <button onclick="handleCloseOrder('${tokenId}', '${rowId}', 'SELL')">平仓</button>
@@ -336,12 +368,17 @@
             const price = Number(order.price ?? order.limit_price ?? 0);
             const remaining = Number(order.remaining_size ?? order.remaining ?? order.size ?? 0);
             const original = Number(order.original_size ?? order.making_amount ?? order.total_size ?? remaining);
+            const slug = order.marketSlug || order.slug || null;
+            const marketLabel = order.marketQuestion || order.question || order.market || (slug ? shorten(slug) : '—');
+            const marketCell = slug
+                ? `<a class="link" href="${POLY_EVENT_BASE_URL}${slug}" target="_blank" rel="noreferrer">${marketLabel}</a>`
+                : marketLabel;
             const tr = document.createElement('tr');
             tr.innerHTML = `
         <td data-th="订单ID">${shorten(order.id || order.order_id || '')}</td>
-        <td data-th="市场">${order.market || order.ticker || order.question || '—'}</td>
+        <td data-th="市场">${marketCell}</td>
         <td data-th="方向"><span class="${sideLabel.includes('BUY') || sideLabel.includes('BID') ? 'green' : 'red'}">${sideLabel}</span></td>
-        <td data-th="价格" class="right">${f2(price)}</td>
+        <td data-th="价格" class="right">${formatPrice(price)}</td>
         <td data-th="剩余数量" class="right">${f2(remaining)}</td>
         <td data-th="初始数量" class="right">${f2(original)}</td>
         <td data-th="状态">${order.status || order.state || 'live'}</td>
@@ -490,7 +527,11 @@
             const price = normalizeNumber(trade.price ?? trade.order_price);
             const size = normalizeNumber(trade.matched_amount ?? trade.size ?? trade.amount);
             const notional = price * size;
-            const matchTime = trade.matchTime ?? trade.match_time ?? Date.now();
+            const rawMatchTime = trade.match_time ?? trade.matchTime;
+            const numericMatchTime = Number(rawMatchTime);
+            const matchTime = Number.isFinite(numericMatchTime) && numericMatchTime > 0
+                ? numericMatchTime * 1000
+                : undefined;
             const marketLabel = trade.question || '—';
             const orderIdLabel = shorten(trade.order_id || trade.orderId || '');
             const trEl = document.createElement('tr');
@@ -498,7 +539,7 @@
         <td data-th="市场">${marketLabel}</td>
         <td data-th="订单ID">${orderIdLabel}</td>
         <td data-th="方向"><span class="${trade.side === 'BUY' ? 'green' : 'red'}">${trade.side || '—'}</span></td>
-        <td data-th="价格" class="right">${f2(price)}</td>
+        <td data-th="价格" class="right">${formatPrice(price)}</td>
         <td data-th="数量" class="right">${f2(size)}</td>
         <td data-th="成交额" class="right">${fmtMoney(notional)}</td>
         <td data-th="成交时间">${formatTs(matchTime)}</td>
@@ -521,11 +562,11 @@
 
         const priceInput = document.getElementById(`${rowId}-price`);
         const sizeInput = document.getElementById(`${rowId}-size`);
-        const price = Number(priceInput.value);
+        const price = parsePriceInput(priceInput.value);
         const size = Number(sizeInput.value);
 
-        if (!price || price <= 0 || price >= 1) {
-            alert('请输入有效的价格（0.01 - 0.99）');
+        if (!Number.isFinite(price) || price <= 0 || price >= 1) {
+            alert('请输入有效的价格（0% - 100%）');
             return;
         }
 
@@ -534,7 +575,7 @@
             return;
         }
 
-        if (!confirm(`确认平仓？\n价格: ${price}\n数量: ${size}\n方向: ${side}`)) {
+        if (!confirm(`确认平仓？\n价格: ${formatPrice(price)}\n数量: ${size}\n方向: ${side}`)) {
             return;
         }
 
@@ -625,9 +666,18 @@
     }
 
     $('refresh').addEventListener('click', load);
-    $('positionRefresh').addEventListener('click', () => refreshPositionsSection($('addr').value.trim()));
-    $('openOrderRefresh').addEventListener('click', () => refreshOpenOrdersSection());
-    $('tradeRefresh').addEventListener('click', () => refreshTradesSection($('addr').value.trim()));
+    const positionRefreshBtn = $('positionRefresh');
+    if (positionRefreshBtn) {
+        positionRefreshBtn.addEventListener('click', () => refreshPositionsSection($('addr').value.trim()));
+    }
+    const openOrderRefreshBtn = $('openOrderRefresh');
+    if (openOrderRefreshBtn) {
+        openOrderRefreshBtn.addEventListener('click', () => refreshOpenOrdersSection());
+    }
+    const tradeRefreshBtn = $('tradeRefresh');
+    if (tradeRefreshBtn) {
+        tradeRefreshBtn.addEventListener('click', () => refreshTradesSection($('addr').value.trim()));
+    }
     window.handleCloseOrder = handleCloseOrder;
     load();
 </script>

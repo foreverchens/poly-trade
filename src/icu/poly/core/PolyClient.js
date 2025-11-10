@@ -4,6 +4,7 @@ import {PriceHistoryInterval} from "@polymarket/clob-client/dist/types.js";
 import {SignatureType} from "@polymarket/order-utils";
 import {Wallet} from "@ethersproject/wallet";
 import axios from "axios";
+import dayjs from 'dayjs';
 
 const {ClobClient, OrderType, Side, AssetType} = pkg;
 
@@ -51,6 +52,13 @@ export class PolyClient {
 
 
     /*================市场API===================*/
+
+
+    async getEventBySlug(slug) {
+        const url = `${this.marketHost}/events/slug/${slug}`;
+        const response = await axios.get(url);
+        return response?.data;
+    }
 
     /**
      * todo 获取token历史价格
@@ -310,20 +318,30 @@ export class PolyClient {
 
         const response = await axios.get(url, {params: filteredParams});
         let dataArr = response?.data;
-        return dataArr.filter(ele => {
+        dataArr = dataArr.filter(ele => {
             return (ele.lastTradePrice >= 0.01 && ele.lastTradePrice <= 0.99) && (ele.bestAsk >= 0.01 && ele.bestAsk <= 0.99);
         });
+        // for (let market of dataArr) {
+        //     const [yesId, noId] = JSON.parse(market.clobTokenIds);
+        //     let yseAsks = (await this.getOrderBook(yesId)).asks;
+        //     let noAsks = (await this.getOrderBook(noId)).asks;
+        //     const bestYesAskPrice = yseAsks.length ? yseAsks[yseAsks.length - 1].price : 0;
+        //     const bestNoAskPrice = noAsks.length ? noAsks[noAsks.length - 1].price : 0;
+        //     market.bestAsks = [bestYesAskPrice, bestNoAskPrice]
+        // }
+        return dataArr;
     }
 
 
     async getMarketByConditionId(conditionIds) {
-        const url = `${this.marketHost}/markets`;
-        const params = {
-            condition_ids: conditionIds,
+        if (!Array.isArray(conditionIds)) {
+            conditionIds = [conditionIds];
         }
+        const params = new URLSearchParams();
+        conditionIds.forEach(id => params.append('condition_ids', id));
+        const url = `${this.marketHost}/markets?${params.toString()}`;
         const response = await axios.get(url, {params: params});
-        let dataArr = response?.data;
-        return dataArr.length ? dataArr[0] : null;
+        return response?.data;
     }
 
     /**
@@ -529,44 +547,76 @@ export class PolyClient {
     async listMyTrades({makerAddress} = {}) {
         const client = await this.getClient();
         const resolvedAddress = (makerAddress || this.funderAddress || await client.signer.getAddress()).toLowerCase();
-        const trades = await client.getTrades({maker_address: resolvedAddress});
+        const trades = await client.getTrades({
+            maker_address: resolvedAddress, after: '' + dayjs().subtract(3, 'day').unix()
+        });
         if (!Array.isArray(trades)) {
             throw new Error("Failed to fetch personal trade history");
         }
         const cache = new Map();
-        const rlt = [];
+        const conditionIds = new Set();
+        const rlt = new Map();
         for (let trade of trades) {
             let conditionId = trade.market;
-            let market = cache.get(conditionId);
-            if (!market) {
-                market = await this.getMarketByConditionId(conditionId);
-                cache.set(conditionId, market);
-            }
+            conditionIds.add(conditionId);
             if (trade.maker_address === makerAddress) {
-                rlt.push({
-                    "question": market.question,
-                    "order_id": trade.taker_order_id,
-                    "owner": trade.owner,
-                    "maker_address": makerAddress,
-                    "matched_amount": trade.size,
-                    "price": trade.price,
-                    "asset_id": trade.asset_id,
-                    "outcome": trade.outcome,
-                    "side": trade.side,
-                    "transaction_hash":trade.transaction_hash
-                })
+                let order = rlt.get(trade.taker_order_id);
+                if (order) {
+                    order.matched_amount += Number(trade.size);
+                } else {
+                    if (rlt.size === 10) {
+                        break;
+                    }
+                    rlt.set(trade.taker_order_id, {
+                        "conditionId": conditionId,
+                        "question": 'market.question',
+                        "order_id": trade.taker_order_id,
+                        "owner": trade.owner,
+                        "maker_address": makerAddress,
+                        "matched_amount": Number(trade.size),
+                        "price": trade.price,
+                        "asset_id": trade.asset_id,
+                        "outcome": trade.outcome,
+                        "side": trade.side,
+                        "transaction_hash": trade.transaction_hash,
+                        "match_time": Number(trade.match_time)
+                    })
+                }
             } else {
-                let makerOrders = trade.maker_orders.filter(order => {
-                    return order.maker_address === makerAddress
-                }).map(order => {
-                    order.question = market.question;
-                    order.transaction_hash = trade.transaction_hash;
-                    return order;
-                });
-                rlt.push(...makerOrders);
+                for (let makerOrder of trade.maker_orders) {
+                    if (makerOrder.maker_address !== makerAddress) {
+                        continue;
+                    }
+                    makerOrder.question = '';
+                    makerOrder.transaction_hash = trade.transaction_hash;
+                    makerOrder.match_time = Number(trade.match_time);
+                    makerOrder.matched_amount = Number(makerOrder.matched_amount);
+                    makerOrder.conditionId = conditionId;
+
+                    let rltOrder = rlt.get(makerOrder.order_id);
+                    if (rltOrder) {
+                        rltOrder.matched_amount += Number(makerOrder.matched_amount);
+                        rlt.set(makerOrder.order_id, rltOrder);
+                    } else {
+                        if (rlt.size === 10) {
+                            break;
+                        }
+                        rlt.set(makerOrder.order_id, makerOrder);
+                    }
+                }
             }
         }
-        return rlt;
+        let markets = await this.getMarketByConditionId([...conditionIds]);
+        let conditionIdMap = markets.reduce((rlt, cur) => {
+            rlt[cur.conditionId] = cur.question;
+            return rlt;
+        }, {});
+
+        let rltArr = [...rlt.values()];
+        rltArr.forEach(ele => {
+            ele.question = conditionIdMap[ele.conditionId];
+        })
+        return rltArr;
     }
 
     /**

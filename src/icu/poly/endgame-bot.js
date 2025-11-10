@@ -40,7 +40,7 @@ const STATE_FILE = path.resolve(__dirname, './data/endgame-bot-state.json');
 // 执行周期间隔，单位：毫秒
 const LOOP_MS = Number(process.env.POLY_ENDGAME_LOOP_MS ?? 1_000 * 60);
 // 触发价格，单位：USDC
-const ENTRY_TRIGGER = Number(process.env.POLY_ENDGAME_TRIGGER ?? 0.8);
+const ENTRY_TRIGGER = Number(process.env.POLY_ENDGAME_TRIGGER ?? 0.9);
 // 首仓金额，单位：USDC
 const BASE_USDC = Number(process.env.POLY_ENDGAME_BASE_SIZE ?? 20);
 // 补仓金额，单位：USDC
@@ -52,7 +52,7 @@ const MAX_ADDS = Number(process.env.POLY_ENDGAME_MAX_ADDS ?? 3);
 // 止盈价格，单位：USDC
 const TAKE_PROFIT_PRICE = Number(process.env.POLY_ENDGAME_TP ?? 0.99);
 // 最大剩余时间，单位：小时
-const MAX_HOURS_TO_END = Number(process.env.POLY_ENDGAME_MAX_HOURS ?? 4);
+const MAX_HOURS_TO_END = Number(process.env.POLY_ENDGAME_MAX_HOURS ?? 2);
 // 请求超时时间，单位：毫秒
 const HTTP_TIMEOUT = Number(process.env.POLY_ENDGAME_HTTP_TIMEOUT ?? 10_000);
 // 是否测试模式
@@ -81,7 +81,7 @@ class EndgameStrategy {
         } catch (err) {
             this.stateFileData = { slugList: [], runtime: [] };
             this.whitelist = [];
-        }
+        }q
     }
 
     async start() {
@@ -258,7 +258,6 @@ class EndgameStrategy {
         await writeFile(STATE_FILE, `${JSON.stringify(payload, null, 2)}\n`);
     }
 }
-
 const bot = new EndgameStrategy();
 bot.start().catch((err) => {
     console.error("[终局策略] 致命错误", err);

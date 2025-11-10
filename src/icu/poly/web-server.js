@@ -1,8 +1,8 @@
 import express from "express";
 import path from "path";
-import { fileURLToPath } from "url";
+import {fileURLToPath} from "url";
 import axios from "axios";
-import { PolyClient } from "./core/PolyClient.js";
+import {PolyClient} from "./core/PolyClient.js";
 
 const PORT = process.env.PORT || 3001;
 const BTC_PRICE_SOURCE = process.env.BTC_PRICE_SOURCE || "https://api.binance.com/api/v3/klines";
@@ -16,11 +16,11 @@ const BTC_PROVIDER_INTERVAL = "15m";
 const BTC_PROVIDER_INTERVAL_MS = BTC_CANDLE_INTERVAL_MINUTES * MINUTE_MS;
 const BTC_CACHE_VERSION = "v15m";
 const BTC_INTERVAL_CONFIG = {
-    "1h": { durationMs: HOUR_MS },
-    "6h": { durationMs: 6 * HOUR_MS },
-    "1d": { durationMs: DAY_MS },
-    "1w": { durationMs: 7 * DAY_MS },
-    max: { durationMs: 180 * DAY_MS },
+    "1h": {durationMs: HOUR_MS},
+    "6h": {durationMs: 6 * HOUR_MS},
+    "1d": {durationMs: DAY_MS},
+    "1w": {durationMs: 7 * DAY_MS},
+    max: {durationMs: 180 * DAY_MS},
 };
 const DEFAULT_BTC_INTERVAL = "1d";
 const MAX_BINANCE_LIMIT = 1000;
@@ -37,8 +37,8 @@ const SUPPORTED_TAGS = new Set([21, 235, 39]);
 const DEFAULT_TAG_ID = 235;
 const CLIENT_ERROR_PATTERNS = [/market is required/i, /Invalid interval/i];
 const PAGE_ROUTES = [
-    { label: "Crypto Markets", path: "/" },
-    { label: "dashboard", path: "/dashboard" },
+    {label: "Crypto Markets", path: "/"},
+    {label: "dashboard", path: "/dashboard"},
 ];
 const TRADE_LOOKBACK_DAYS = 3;
 const MAX_TRADE_ITEMS = 10;
@@ -61,7 +61,7 @@ app.get("/api/crypto-markets", async (req, res) => {
 
 app.get("/api/price-history", async (req, res) => {
     try {
-        const { market, interval } = req.query;
+        const {market, interval} = req.query;
         const payload = await polyClient.getPricesHistory(market, interval);
         res.json(payload);
     } catch (err) {
@@ -80,7 +80,7 @@ app.get("/api/btc-history", async (req, res) => {
         const interval = normalizeBtcInterval(req.query.interval);
         const customRange = normalizeBtcRange(req.query.start, req.query.end);
         const history = await getBtcHistory(interval, customRange);
-        res.json({ history });
+        res.json({history});
     } catch (err) {
         console.error("Failed to fetch BTC price history:", err.message);
         res.status(err.response?.status || 500).json({
@@ -92,7 +92,7 @@ app.get("/api/btc-history", async (req, res) => {
 
 app.get("/api/orderbook/:tokenId", async (req, res) => {
     try {
-        const { tokenId } = req.params;
+        const {tokenId} = req.params;
         const orderBook = await polyClient.getOrderBook(tokenId);
         res.json(orderBook);
     } catch (err) {
@@ -106,17 +106,17 @@ app.get("/api/orderbook/:tokenId", async (req, res) => {
 
 app.get("/api/trades", async (req, res) => {
     try {
-        const { address } = req.query;
+        const {address} = req.query;
         if (!address || typeof address !== "string") {
-            return res.status(400).json({ error: "missing_address", message: "address is required" });
+            return res.status(400).json({error: "missing_address", message: "address is required"});
         }
 
         const normalized = address.trim();
         if (!/^0x[0-9a-fA-F]{40}$/.test(normalized)) {
-            return res.status(400).json({ error: "invalid_address", message: "address must be a valid EVM address" });
+            return res.status(400).json({error: "invalid_address", message: "address must be a valid EVM address"});
         }
 
-        const trades = await polyClient.listMyTrades({ makerAddress: normalized });
+        const trades = await polyClient.listMyTrades({makerAddress: normalized});
         res.json(trades);
     } catch (err) {
         console.error("Failed to fetch trades:", err.message);
@@ -129,12 +129,13 @@ app.get("/api/trades", async (req, res) => {
 
 app.get("/api/open-orders", async (req, res) => {
     try {
-        const { market, assetId } = req.query;
+        const {market, assetId} = req.query;
         const orders = await polyClient.listOpenOrders({
             market: market || undefined,
             assetId: assetId || undefined,
         });
-        res.json(orders);
+        const enriched = await enrichOrdersWithMarketMeta(orders);
+        res.json(enriched);
     } catch (err) {
         console.error("Failed to fetch open orders:", err.message);
         res.status(err.response?.status || 500).json({
@@ -165,6 +166,7 @@ function parseTradeTimestamp(value) {
 
     return Date.now();
 }
+
 /**
  * 获取最优买卖价格
  * @route GET /api/best-prices/:tokenId
@@ -176,7 +178,7 @@ function parseTradeTimestamp(value) {
  */
 app.get("/api/best-prices/:tokenId", async (req, res) => {
     try {
-        const { tokenId } = req.params;
+        const {tokenId} = req.params;
         const orderBook = await polyClient.getOrderBook(tokenId);
 
         // 提取最优买价和最优卖价
@@ -205,7 +207,7 @@ app.get("/api/best-prices/:tokenId", async (req, res) => {
 
 app.post("/api/place-order", async (req, res) => {
     try {
-        const { price, size, side, tokenId } = req.body;
+        const {price, size, side, tokenId} = req.body;
         if (!price || !size || !side || !tokenId) {
             return res.status(400).json({
                 error: "missing_parameters",
@@ -225,7 +227,7 @@ app.post("/api/place-order", async (req, res) => {
 
 app.post("/api/cancel-order", async (req, res) => {
     try {
-        const { orderId } = req.body;
+        const {orderId} = req.body;
         if (!orderId) {
             return res.status(400).json({
                 error: "missing_order_id",
@@ -306,12 +308,12 @@ async function getBtcHistory(interval, customRange = null) {
     const filtered = history
         .filter(point => point.t >= targetStart && point.t <= targetEnd + BTC_PROVIDER_INTERVAL_MS);
     if (useCache) {
-        btcHistoryCache.set(cacheKey, { timestamp: now, history: filtered });
+        btcHistoryCache.set(cacheKey, {timestamp: now, history: filtered});
     }
     return filtered;
 }
 
-async function fetchBtcCandles({ startTime, endTime, requiredCandles }) {
+async function fetchBtcCandles({startTime, endTime, requiredCandles}) {
     const points = [];
     let nextStart = startTime;
     let batchCount = 0;
@@ -324,7 +326,7 @@ async function fetchBtcCandles({ startTime, endTime, requiredCandles }) {
             limit,
             startTime: nextStart,
         };
-        const response = await axios.get(BTC_PRICE_SOURCE, { params, timeout: 10_000 });
+        const response = await axios.get(BTC_PRICE_SOURCE, {params, timeout: 10_000});
         if (!Array.isArray(response.data) || !response.data.length) break;
         const batchPoints = response.data.map(entry => ({
             t: Number(entry?.[0]),
@@ -350,6 +352,14 @@ function dedupeCandles(points) {
     });
 }
 
+async function enrichOrdersWithMarketMeta(orders) {
+    for (let order of orders) {
+        let conditionId = order.market;
+        order.market = (await polyClient.getMarketByConditionId(conditionId))[0].slug;
+    }
+    return orders;
+}
+
 app.get("/", (_req, res) => {
     res.sendFile(path.join(viewDir, "crypto-markets.html"));
 });
@@ -362,7 +372,7 @@ app.listen(PORT, () => {
     const baseUrl = `http://localhost:${PORT}`;
     console.log(`Poly crypto markets server running at ${baseUrl}`);
     console.log("Available pages:");
-    PAGE_ROUTES.forEach(({ label, path }) => {
+    PAGE_ROUTES.forEach(({label, path}) => {
         console.log(` - ${label}: ${baseUrl}${path}`);
     });
 });

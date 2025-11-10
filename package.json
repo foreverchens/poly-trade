@@ -16,6 +16,7 @@
     "@polymarket/clob-client": "^4.22.8",
     "@polymarket/order-utils": "^2.1.0",
     "axios": "^1.6.8",
+    "dayjs": "^1.11.19",
     "dotenv": "^17.2.3",
     "ethers": "^6.15.0",
     "express": "^4.19.2",

@@ -10,6 +10,7 @@
         .wrap{max-width:none;width:100%;margin:24px 0;padding:0 24px;box-sizing:border-box;}
         h1{font-size:20px;margin:0 0 12px;}
         .bar{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px;align-items:center;}
+        .bar-event-group{display:flex;gap:10px;flex-wrap:wrap;align-items:center;}
         button{background:var(--accent);border:none;color:#021018;padding:9px 16px;border-radius:999px;font-weight:600;cursor:pointer;}
         button:disabled{opacity:.5;cursor:not-allowed;}
         .status{color:var(--muted);font-size:13px;}
@@ -60,6 +61,10 @@
         .chart-visual{border:1px solid var(--line);border-radius:16px;padding:16px;background:rgba(255,255,255,0.01);display:flex;flex-direction:column;gap:16px;}
         .chart-main{display:flex;flex-direction:column;gap:12px;}
         .chart-main-canvas{position:relative;}
+        .chart-hover-label{position:absolute;min-width:160px;max-width:220px;padding:10px 12px;border-radius:10px;background:rgba(5,7,11,0.92);border:1px solid rgba(56,189,248,0.4);box-shadow:0 8px 30px rgba(0,0,0,0.45);font-size:12px;color:var(--text);pointer-events:none;opacity:0;transform:translate(-50%,-120%);transition:opacity .12s ease,transform .12s ease;display:none;z-index:2;}
+        .chart-hover-label.active{display:block;opacity:1;transform:translate(-50%,-140%);}
+        .chart-hover-label strong{display:block;font-size:13px;margin-bottom:2px;color:var(--accent);}
+        .chart-hover-label span{display:block;color:var(--muted);}
         #yesTokenChart{width:100%;height:1120px;border-radius:12px;border:1px solid var(--line);background:linear-gradient(180deg,#07101d,#02060c);display:block;}
         #chartEmpty{position:absolute;top:0;left:0;right:0;height:1000px;display:flex;align-items:center;justify-content:center;font-size:13px;color:var(--muted);pointer-events:none;}
         .chart-legend{display:flex;flex-wrap:wrap;gap:12px;font-size:12px;color:var(--muted);}
@@ -95,10 +100,12 @@
 <div class="wrap">
     <h1>Polymarket 加密市场列表 <span class="chip">末日市场</span></h1>
     <div class="bar">
-        <button id="reload">刷新数据</button>
         <button id="outcomeToggle">筛选：YES/NO</button>
         <select id="tagSelect" aria-label="标签筛选"></select>
-        <select id="eventSelect" aria-label="事件筛选"></select>
+        <div class="bar-event-group">
+            <select id="eventSelect" aria-label="事件筛选"></select>
+            <button id="reload">刷新数据</button>
+        </div>
         <span id="status" class="status"></span>
     </div>
     <div class="scroll">
@@ -138,6 +145,11 @@
             <div class="chart-main">
                 <div class="chart-main-canvas">
                     <canvas id="yesTokenChart" width="2000" height="1120" role="img" aria-label="市场 YES token 价格曲线"></canvas>
+                    <div id="chartHoverLabel" class="chart-hover-label" aria-hidden="true">
+                        <strong id="chartHoverLabelTitle"></strong>
+                        <span id="chartHoverLabelTime"></span>
+                        <span id="chartHoverLabelPrice"></span>
+                    </div>
                     <div id="chartEmpty">暂无可绘制的 YES token</div>
                 </div>
                 <span class="timeline-hint">拖动底部选择框即可缩放/移动时间区间</span>
@@ -171,16 +183,16 @@
         </div>
         <form id="orderForm" class="order-form">
             <label>
-                买单价格
-                <input type="number" id="orderBuyPrice" step="0.0001" min="0" required />
+                买单价格（%）
+                <input type="number" id="orderBuyPrice" step="0.1" min="0.1" max="100" required />
             </label>
             <label>
                 买单数量
                 <input type="number" id="orderSize" step="1" min="1" required />
             </label>
             <label>
-                止盈卖价（可选）
-                <input type="number" id="orderTakeProfit" step="0.0001" min="0" />
+                止盈卖价（%，可选）
+                <input type="number" id="orderTakeProfit" step="0.1" min="0" max="100" />
             </label>
             <div class="order-actions">
                 <button type="submit" id="orderSubmit">提交</button>
@@ -194,14 +206,9 @@
 
 <script>
     const API = "/api/crypto-markets";
+    const ORDERBOOK_API = "/api/orderbook";
+    const ORDERBOOK_BATCH_SIZE = 8;
     const PRICE_HISTORY_API = "/api/price-history";
-    const BTC_HISTORY_API = "/api/btc-history";
-    const BTC_SERIES_ID = "btc-usdt";
-    const BTC_SERIES_LABEL = "BTC/USDT（右轴）";
-    const BTC_SERIES_COLOR = "#fbbf24";
-    const BTC_AXIS_LABEL = "BTC 价格 (USDT)";
-    const BTC_INTERVAL_MINUTES = 15;
-    const BTC_INTERVAL_MS = BTC_INTERVAL_MINUTES * 60 * 1000;
     const POLY_EVENT_BASE_URL = "https://polymarket.com/event/";
     const CHART_INTERVALS = [
         {value: "1h", label: "1 小时"},
@@ -218,18 +225,31 @@
     const TIMELINE_GAP = 20;
     const TOTAL_CANVAS_HEIGHT = MAIN_CHART_HEIGHT + TIMELINE_GAP + TIMELINE_HEIGHT;
     const CHART_COLORS = ["#22d3ee", "#fb7185", "#a78bfa", "#34d399", "#f472b6", "#f97316", "#38bdf8", "#facc15"];
+    const CHART_HOVER_MAX_DISTANCE = 32;
+    const BTC_HISTORY_API = "/api/btc-history";
+    const BTC_SERIES_ID = "btc-usdt";
+    const BTC_SERIES_LABEL = "BTC/USDT（右轴）";
+    const BTC_SERIES_COLOR = "#fbbf24";
+    const BTC_AXIS_LABEL = "BTC 价格 (USDT)";
+    const BTC_INTERVAL_MINUTES = 15;
+    const BTC_INTERVAL_MS = BTC_INTERVAL_MINUTES * 60 * 1000;
     const fields = [
         { key: "question", label: "问题", className: "col-question" },
         { key: "outcomes", label: "结果" },
         { key: "endDate", label: "结束时间", className: "col-time" },
         { key: "yesBestAsk", label: "YES最优卖价" },
+        { key: "yesBestBid", label: "YES最优买价" },
         { key: "noBestAsk", label: "NO最优卖价" },
+        { key: "noBestBid", label: "NO最优买价" },
         { key: "volume24hr", label: "24h 交易量", compact: true },
         { key: "liquidityNum", label: "流动性", compact: true },
     ];
     const compactNumberKeys = new Set(fields.filter(f => f.compact).map(f => f.key));
     const priceMultiplierKeys = new Set(["lastTradePrice"]);
     const PRICE_MULTIPLIER = 100;
+    const PRICE_DISPLAY_MULTIPLIER = 100;
+    const PRICE_DISPLAY_DECIMALS = 1;
+    const PRICE_FIELD_KEYS = new Set(["yesBestAsk", "yesBestBid", "noBestAsk", "noBestBid"]);
     const TAG_OPTIONS = [
         { id: 21, label: "Crypto" },
         { id: 235, label: "Bitcoin" },
@@ -251,9 +271,19 @@
     let chartViewOffsetRatio = 0;
     let chartCurrentWindow = null;
     let timelineDragState = null;
+    let chartRenderState = null;
+    let chartHoverData = null;
     const selectedChartTokenIds = new Set();
     const chartHistoryCache = new Map();
     const btcHistoryCache = new Map();
+    const tokenBestAskCache = new Map();
+    const tokenBestBidCache = new Map();
+    const tokenOrderBookRequests = new Map();
+    const tokenOrderBookQueue = [];
+    const tokenOrderBookQueued = new Set();
+    let pendingOrderBookRefresh = false;
+    let orderBookRefreshTimer = null;
+    let orderBookVersion = 0;
     let currentBtcInterval = null;
     let currentBtcBounds = null;
     let currentBtcCacheKey = null;
@@ -300,6 +330,10 @@
     const chartTokenList = $("chartTokenList");
     const chartSelectAllBtn = $("chartSelectAll");
     const chartClearAllBtn = $("chartClearAll");
+    const chartHoverLabel = $("chartHoverLabel");
+    const chartHoverLabelTitle = $("chartHoverLabelTitle");
+    const chartHoverLabelTime = $("chartHoverLabelTime");
+    const chartHoverLabelPrice = $("chartHoverLabelPrice");
     const orderPanel = $("orderPanel");
     const orderCloseBtn = $("orderClose");
     const orderQuestionEl = $("orderQuestion");
@@ -376,7 +410,10 @@
     function getTokenIds(item) {
         const tokens = parseClobTokenIds(item?.clobTokenIds);
         if (!tokens || !tokens.length) return [];
-        return tokens.map(token => token === undefined || token === null ? null : String(token)).filter(Boolean);
+        return tokens
+            .map(token => (token === undefined || token === null ? null : String(token)))
+            .filter(Boolean)
+            .slice(0, 2);
     }
 
     function shorten(value) {
@@ -393,61 +430,10 @@
         return shorten(tokenId);
     }
 
-    function buildTickerDifferenceLabels(tickers) {
-        const uniqueTickers = [...new Set(tickers.filter(ticker => typeof ticker === "string" && ticker.trim().length))];
-        if (uniqueTickers.length <= 1) return new Map();
-        const normalized = uniqueTickers.map(ticker => ticker.trim());
-        const comparable = normalized.map(ticker => ticker.toLowerCase());
-        const prefixLen = findCommonPrefixLength(comparable);
-        const suffixLen = findCommonSuffixLength(comparable);
-        const result = new Map();
-        normalized.forEach((ticker, idx) => {
-            const original = uniqueTickers[idx];
-            let slice = original.slice(prefixLen);
-            if (suffixLen) {
-                slice = slice.slice(0, Math.max(0, slice.length - suffixLen));
-            }
-            slice = slice.replace(/[-_]+/g, " ").trim();
-            if (!slice) {
-                slice = original.replace(/[-_]+/g, " ").trim();
-            }
-            result.set(original, slice);
-        });
-        return result;
-    }
-
-    function findCommonPrefixLength(list) {
-        if (!list.length) return 0;
-        let prefix = list[0];
-        for (let i = 1; i < list.length; i++) {
-            const current = list[i];
-            let j = 0;
-            while (j < prefix.length && j < current.length && prefix[j] === current[j]) {
-                j++;
-            }
-            prefix = prefix.slice(0, j);
-            if (!prefix) break;
-        }
-        return prefix.length;
-    }
-
-    function findCommonSuffixLength(list) {
-        if (!list.length) return 0;
-        let suffix = list[0];
-        for (let i = 1; i < list.length; i++) {
-            const current = list[i];
-            let j = 0;
-            while (
-                j < suffix.length &&
-                j < current.length &&
-                suffix[suffix.length - 1 - j] === current[current.length - 1 - j]
-            ) {
-                j++;
-            }
-            suffix = suffix.slice(suffix.length - j);
-            if (!suffix) break;
-        }
-        return suffix.length;
+    function extractMarketTicker(item) {
+        if (!item || typeof item.ticker !== "string") return null;
+        const trimmed = item.ticker.trim();
+        return trimmed.length ? trimmed : null;
     }
 
     function extractEventTicker(item) {
@@ -456,6 +442,44 @@
         if (!event || typeof event.ticker !== "string") return null;
         const trimmed = event.ticker.trim();
         return trimmed.length ? trimmed : null;
+    }
+
+    function getMarketLabelSource(item) {
+        const question = typeof item?.question === "string" ? item.question.trim() : "";
+        if (question) return question;
+        const marketTicker = extractMarketTicker(item);
+        if (marketTicker) return marketTicker;
+        return extractEventTicker(item);
+    }
+
+    function sliceBetweenBeAndOn(text) {
+        if (typeof text !== "string") return null;
+        const lower = text.toLowerCase();
+        const beIndex = lower.indexOf(" be ");
+        if (beIndex === -1) return null;
+        const onIndex = lower.indexOf(" on ", beIndex + 4);
+        if (onIndex === -1) return null;
+        const start = beIndex + 4;
+        const raw = text.slice(start, onIndex).replace(/\?+$/, "").trim();
+        return raw.length ? raw : null;
+    }
+
+    function normalizeTickerLabel(value) {
+        if (typeof value !== "string") return value;
+        const trimmed = value.trim();
+        if (!trimmed) return null;
+        const between = sliceBetweenBeAndOn(trimmed);
+        if (between) return between;
+        const currencyMatch = trimmed.match(/\$[\d,]+(?:\.\d+)?/);
+        if (currencyMatch) {
+            const digits = currencyMatch[0].replace(/[$,]/g, "");
+            return digits ? `$${digits}` : null;
+        }
+        const plainNumber = trimmed.replace(/,/g, "");
+        if (/^\d+(?:\.\d+)?$/.test(plainNumber)) {
+            return plainNumber;
+        }
+        return trimmed;
     }
 
     function getPrimaryEventSlug(item) {
@@ -562,6 +586,13 @@
         }).format(date);
     }
 
+    function formatPrice(value, {fallback = "—", withUnit = true} = {}) {
+        const numeric = typeof value === "number" ? value : Number(value);
+        if (!Number.isFinite(numeric)) return fallback;
+        const scaled = (numeric * PRICE_DISPLAY_MULTIPLIER).toFixed(PRICE_DISPLAY_DECIMALS);
+        return withUnit ? `${scaled}%` : scaled;
+    }
+
     function formatValue(value, field) {
         const key = typeof field === "string" ? field : field?.key;
         if (value === null || value === undefined || value === "") return "—";
@@ -582,6 +613,9 @@
             }
             if (Array.isArray(parsed)) return parsed.join(" / ");
             return displayValue;
+        }
+        if (key && PRICE_FIELD_KEYS.has(key)) {
+            return formatPrice(displayValue);
         }
         if (Array.isArray(displayValue)) return displayValue.join(", ");
         if (typeof displayValue === "number") {
@@ -611,36 +645,180 @@
         const map = new Map();
         list.forEach(item => {
             const tokens = getTokenIds(item);
-            const bestAsks = [extractOutcomePrice(item, 0), extractOutcomePrice(item, 1)];
-            if (!tokens.length) return;
-            const ticker = extractEventTicker(item);
+            const yesTokenId = tokens[0];
+            if (!yesTokenId || map.has(yesTokenId)) return;
             const question = typeof item.question === "string" ? item.question.trim() : "";
-            tokens.forEach((tokenId, idx) => {
-                if (!tokenId || map.has(tokenId)) return;
-                map.set(tokenId, {
-                    tokenId,
-                    ticker: ticker ? `${ticker}-${idx === 0 ? "YES" : "NO"}` : null,
-                    question: idx === 0 ? `${question} · YES` : `${question} · NO`,
-                    bestAsk: bestAsks[idx] ?? null,
-                });
+            const labelSource = getMarketLabelSource(item);
+            const fallbackPrice = extractOutcomePrice(item, 0);
+            map.set(yesTokenId, {
+                tokenId: yesTokenId,
+                ticker: labelSource,
+                question,
+                bestAsk: resolveBestAskForToken(yesTokenId, fallbackPrice),
             });
         });
         const tokens = [...map.values()];
-        const tickerLabels = buildTickerDifferenceLabels(tokens.map(token => token.ticker));
         return tokens.map(token => ({
             tokenId: token.tokenId,
             ticker: token.ticker,
-            label: buildFallbackLabel(token, token.tokenId, tickerLabels.get(token.ticker)),
+            label: buildFallbackLabel(token, token.tokenId, normalizeTickerLabel(token.ticker ?? token.question)),
             question: token.question,
         }));
     }
 
     function enrichMarketStats(list) {
         return list.map(item => {
-            const yesAsk = extractOutcomePrice(item, 0);
-            const noAsk = extractOutcomePrice(item, 1);
-            return {...item, yesBestAsk: yesAsk, noBestAsk: noAsk};
+            const tokens = getTokenIds(item);
+            const yesTokenId = tokens[0];
+            const noTokenId = tokens[1];
+            const yesAsk = resolveBestAskForToken(yesTokenId, extractOutcomePrice(item, 0));
+            const noAsk = resolveBestAskForToken(noTokenId, extractOutcomePrice(item, 1));
+            const yesBid = resolveBestBidForToken(yesTokenId);
+            const noBid = resolveBestBidForToken(noTokenId);
+            return {
+                ...item,
+                yesBestAsk: yesAsk,
+                yesBestBid: yesBid,
+                noBestAsk: noAsk,
+                noBestBid: noBid,
+            };
         });
+    }
+
+    function resolveBestAskForToken(tokenId, fallbackPrice = null) {
+        if (!tokenId) return Number.isFinite(fallbackPrice) ? fallbackPrice : null;
+        if (tokenBestAskCache.has(tokenId)) {
+            const cached = tokenBestAskCache.get(tokenId);
+            return Number.isFinite(cached) ? cached : null;
+        }
+        return Number.isFinite(fallbackPrice) ? fallbackPrice : null;
+    }
+
+    function resolveBestBidForToken(tokenId, fallbackPrice = null) {
+        if (!tokenId) return Number.isFinite(fallbackPrice) ? fallbackPrice : null;
+        if (tokenBestBidCache.has(tokenId)) {
+            const cached = tokenBestBidCache.get(tokenId);
+            return Number.isFinite(cached) ? cached : null;
+        }
+        return Number.isFinite(fallbackPrice) ? fallbackPrice : null;
+    }
+
+    function hasTokenBestQuotes(tokenId) {
+        return tokenBestAskCache.has(tokenId) || tokenBestBidCache.has(tokenId);
+    }
+
+    function setTokenBestAsk(tokenId, price, version) {
+        if (!tokenId || version !== orderBookVersion) return;
+        const normalized = Number.isFinite(price) ? price : null;
+        tokenBestAskCache.set(tokenId, normalized);
+        if (orderTokenGroup) {
+            const radios = Array.from(orderTokenGroup.querySelectorAll("input[name='orderTokenChoice']"));
+            const radio = radios.find(input => input.value === tokenId);
+            if (radio) {
+                if (Number.isFinite(normalized)) {
+                    radio.dataset.bestAsk = String(normalized);
+                } else {
+                    delete radio.dataset.bestAsk;
+                }
+                if (radio.checked) {
+                    updateOrderBestAskDisplay({writeToInput: true});
+                }
+            }
+        }
+    }
+
+    function setTokenBestBid(tokenId, price, version) {
+        if (!tokenId || version !== orderBookVersion) return;
+        const normalized = Number.isFinite(price) ? price : null;
+        tokenBestBidCache.set(tokenId, normalized);
+    }
+
+    function extractBestAskFromOrderBook(payload) {
+        const asks = Array.isArray(payload?.asks) ? payload.asks : [];
+        if (!asks.length) return null;
+        const last = asks[asks.length - 1];
+        const price = Number(last?.price);
+        return Number.isFinite(price) ? price : null;
+    }
+
+    function extractBestBidFromOrderBook(payload) {
+        const bids = Array.isArray(payload?.bids) ? payload.bids : [];
+        if (!bids.length) return null;
+        const last = bids[bids.length - 1];
+        const price = Number(last?.price);
+        return Number.isFinite(price) ? price : null;
+    }
+
+    async function fetchOrderBookBestQuotes(tokenId, version) {
+        if (!tokenId) {
+            return null;
+        }
+        try {
+            const res = await fetch(`${ORDERBOOK_API}/${encodeURIComponent(tokenId)}`);
+            if (!res.ok) {
+                throw new Error(`HTTP ${res.status}`);
+            }
+            const data = await res.json();
+            const price = extractBestAskFromOrderBook(data);
+            const bid = extractBestBidFromOrderBook(data);
+            setTokenBestAsk(tokenId, price, version);
+            setTokenBestBid(tokenId, bid, version);
+            return {bestAsk: price, bestBid: bid};
+        } catch (err) {
+            console.warn("Failed to fetch order book for", tokenId, err);
+            setTokenBestAsk(tokenId, null, version);
+            setTokenBestBid(tokenId, null, version);
+            return null;
+        }
+    }
+
+    function ensureOrderBooksForMarkets(markets) {
+        if (!Array.isArray(markets) || !markets.length) return;
+        const tokenIds = [];
+        markets.forEach(item => {
+            tokenIds.push(...getTokenIds(item));
+        });
+        ensureOrderBooksForTokens(tokenIds);
+    }
+
+    function ensureOrderBooksForTokens(tokenIds) {
+        if (!Array.isArray(tokenIds) || !tokenIds.length) return;
+        tokenIds.forEach(tokenId => {
+            if (!tokenId) return;
+            if (hasTokenBestQuotes(tokenId) || tokenOrderBookRequests.has(tokenId) || tokenOrderBookQueued.has(tokenId)) return;
+            tokenOrderBookQueue.push(tokenId);
+            tokenOrderBookQueued.add(tokenId);
+        });
+        drainOrderBookQueue();
+    }
+
+    function drainOrderBookQueue() {
+        if (!tokenOrderBookQueue.length) return;
+        while (tokenOrderBookRequests.size < ORDERBOOK_BATCH_SIZE && tokenOrderBookQueue.length) {
+            const tokenId = tokenOrderBookQueue.shift();
+            if (!tokenId) continue;
+            tokenOrderBookQueued.delete(tokenId);
+            if (hasTokenBestQuotes(tokenId) || tokenOrderBookRequests.has(tokenId)) continue;
+            const version = orderBookVersion;
+            const request = fetchOrderBookBestQuotes(tokenId, version).finally(() => {
+                tokenOrderBookRequests.delete(tokenId);
+                if (version === orderBookVersion) {
+                    scheduleOrderBookDrivenRefresh();
+                }
+                drainOrderBookQueue();
+            });
+            tokenOrderBookRequests.set(tokenId, request);
+        }
+    }
+
+    function scheduleOrderBookDrivenRefresh() {
+        if (pendingOrderBookRefresh) return;
+        pendingOrderBookRefresh = true;
+        orderBookRefreshTimer = setTimeout(() => {
+            pendingOrderBookRefresh = false;
+            orderBookRefreshTimer = null;
+            refreshView({skipChart: true});
+        }, 0);
     }
 
     function extractOutcomePrice(item, index) {
@@ -665,6 +843,14 @@
 
     function hasHistory(tokenId, interval) {
         return chartHistoryCache.has(buildHistoryKey(tokenId, interval));
+    }
+
+    function resetChartCaches() {
+        chartHistoryCache.clear();
+        btcHistoryCache.clear();
+        currentBtcCacheKey = null;
+        currentBtcInterval = null;
+        currentBtcBounds = null;
     }
 
     function pruneHistoryCache(validTokenIds) {
@@ -1040,6 +1226,8 @@ function handleTokenSelectionChange(tokenId, checked) {
         const {series, viewWindow} = applyViewWindow(datasets);
         const hasPoints = series.some(dataset => dataset.points && dataset.points.length);
         if (!hasPoints) {
+            chartRenderState = null;
+            clearChartHover();
             chartCanvas.style.display = "none";
             if (chartEmpty) chartEmpty.style.display = "flex";
             setChartRangeLabel(viewWindow?.start, viewWindow?.end);
@@ -1146,6 +1334,8 @@ function handleTokenSelectionChange(tokenId, checked) {
         if (!chartCanvas) return;
         const ctx = chartCanvas.getContext("2d");
         if (!ctx) return;
+        chartRenderState = null;
+        clearChartHover();
         const ratio = window.devicePixelRatio || 1;
         const width = chartCanvas.clientWidth || chartCanvas.width;
         chartCanvas.width = width * ratio;
@@ -1179,12 +1369,28 @@ function handleTokenSelectionChange(tokenId, checked) {
                 return padding.top + chartHeight * (1 - (clamped - secondaryScale.min) / range);
             })
             : null;
-
         drawGrid(ctx, padding, chartWidth, chartHeight, priceMin, priceMax, secondaryScale);
+        const renderedSeries = [];
         series.forEach(set => {
             const yAccessor = set.scale === "btc" && yForSecondary ? yForSecondary : yForPrimary;
-            drawLineSeries(ctx, set, xFor, yAccessor, padding, chartHeight);
+            drawLineSeries(ctx, set, xFor, yAccessor, padding, chartHeight, renderedSeries);
         });
+        chartRenderState = {
+            width,
+            padding,
+            chartWidth,
+            chartHeight,
+            areaTop: 0,
+            areaBottom: MAIN_CHART_HEIGHT,
+            timeMin,
+            timeMax,
+            timeRange,
+            priceMin,
+            priceMax,
+            priceRange,
+            secondaryScale,
+            series: renderedSeries,
+        };
     }
 
     function drawTimeline() {
@@ -1401,7 +1607,7 @@ function handleTokenSelectionChange(tokenId, checked) {
             const y = padding.top + (height / steps) * i;
             ctx.textAlign = "right";
             ctx.textBaseline = "middle";
-            ctx.fillText(price.toFixed(2), padding.left - 6, y);
+            ctx.fillText(formatPrice(price, {fallback: ""}), padding.left - 6, y);
             if (secondaryScale) {
                 const secondaryValue = secondaryScale.max - ((secondaryScale.max - secondaryScale.min) / steps) * i;
                 ctx.textAlign = "left";
@@ -1450,13 +1656,15 @@ function handleTokenSelectionChange(tokenId, checked) {
         return {min, max, label: BTC_AXIS_LABEL};
     }
 
-    function drawLineSeries(ctx, series, xFor, yFor, padding, chartHeight) {
+    function drawLineSeries(ctx, series, xFor, yFor, padding, chartHeight, renderedSeries) {
+        const pixelPoints = [];
         ctx.beginPath();
         ctx.strokeStyle = series.color;
         ctx.lineWidth = 2;
         series.points.forEach((point, idx) => {
             const x = xFor(point.time);
             const y = yFor(point.price);
+            pixelPoints.push({time: point.time, price: point.price, x, y});
             if (idx === 0) {
                 ctx.moveTo(x, y);
             } else {
@@ -1465,6 +1673,15 @@ function handleTokenSelectionChange(tokenId, checked) {
         });
         ctx.stroke();
         drawSeriesLabel(ctx, series, xFor, yFor, padding, chartHeight);
+        if (renderedSeries) {
+            renderedSeries.push({
+                tokenId: series.tokenId,
+                label: series.label,
+                color: series.color,
+                scale: series.scale,
+                points: pixelPoints,
+            });
+        }
     }
 
     function drawSeriesLabel(ctx, series, xFor, yFor, padding, chartHeight) {
@@ -1480,6 +1697,131 @@ function handleTokenSelectionChange(tokenId, checked) {
         ctx.textAlign = "left";
         ctx.textBaseline = "middle";
         ctx.fillText(series.label, x, clampedY);
+    }
+
+    function handleChartPointerMove(event) {
+        if (!chartRenderState || !chartCanvas || timelineDragState) return;
+        const pos = getChartPointerPosition(event);
+        if (!isPointInChartArea(pos.y)) {
+            clearChartHover();
+            return;
+        }
+        const target = findChartHoverTarget(pos);
+        if (target) {
+            applyChartHover(target, pos);
+        } else {
+            clearChartHover();
+        }
+    }
+
+    function handleChartPointerDown(event) {
+        if (!chartRenderState || !chartCanvas) return;
+        const pos = getChartPointerPosition(event);
+        if (!isPointInChartArea(pos.y) || isPointInTimeline(pos.y)) return;
+        const target = findChartHoverTarget(pos);
+        if (target) {
+            applyChartHover(target, pos);
+        } else {
+            clearChartHover();
+        }
+    }
+
+    function handleChartPointerLeave() {
+        clearChartHover();
+    }
+
+    function getChartPointerPosition(event) {
+        if (!chartCanvas) return {x: 0, y: 0};
+        const rect = chartCanvas.getBoundingClientRect();
+        return {
+            x: event.clientX - rect.left,
+            y: event.clientY - rect.top,
+        };
+    }
+
+    function isPointInChartArea(y) {
+        return y >= 0 && y <= MAIN_CHART_HEIGHT;
+    }
+
+    function findChartHoverTarget(pos) {
+        if (!chartRenderState?.series?.length) return null;
+        const {series} = chartRenderState;
+        let nearest = null;
+        series.forEach(dataset => {
+            if (!dataset?.points?.length) return;
+            const candidate = findNearestPointByX(dataset.points, pos.x);
+            if (!candidate) return;
+            const distance = Math.hypot(candidate.x - pos.x, candidate.y - pos.y);
+            if (distance > CHART_HOVER_MAX_DISTANCE) return;
+            if (!nearest || distance < nearest.distance) {
+                nearest = {dataset, point: candidate, distance};
+            }
+        });
+        return nearest;
+    }
+
+    function findNearestPointByX(points, targetX) {
+        if (!points.length) return null;
+        let left = 0;
+        let right = points.length - 1;
+        while (left < right) {
+            const mid = Math.floor((left + right) / 2);
+            if (points[mid].x < targetX) {
+                left = mid + 1;
+            } else {
+                right = mid;
+            }
+        }
+        const candidates = [points[left]];
+        if (left > 0) candidates.push(points[left - 1]);
+        if (left + 1 < points.length) candidates.push(points[left + 1]);
+        let best = null;
+        candidates.forEach(point => {
+            if (!point) return;
+            if (!best || Math.abs(point.x - targetX) < Math.abs(best.x - targetX)) {
+                best = point;
+            }
+        });
+        return best;
+    }
+
+    function applyChartHover(target, pointer) {
+        if (!chartHoverLabel || !chartRenderState) return;
+        const {dataset, point} = target;
+        const width = chartCanvas?.clientWidth || chartRenderState.width || 0;
+        const clampedX = Math.max(16, Math.min(width - 16, pointer.x));
+        const clampedY = Math.max(16, Math.min(MAIN_CHART_HEIGHT - 16, pointer.y));
+        if (chartHoverLabelTitle) chartHoverLabelTitle.textContent = dataset.label || "—";
+        if (chartHoverLabelTime) chartHoverLabelTime.textContent = formatChartTimestamp(point.time);
+        if (chartHoverLabelPrice) chartHoverLabelPrice.textContent = `价格：${formatChartHoverPrice(dataset, point.price)}`;
+        chartHoverLabel.style.left = `${clampedX}px`;
+        chartHoverLabel.style.top = `${clampedY}px`;
+        chartHoverLabel.classList.add("active");
+        chartHoverLabel.setAttribute("aria-hidden", "false");
+        chartHoverData = {
+            tokenId: dataset.tokenId || dataset.label,
+            time: point.time,
+            price: point.price,
+            x: clampedX,
+            y: clampedY,
+        };
+    }
+
+    function clearChartHover() {
+        if (!chartHoverLabel) return;
+        chartHoverData = null;
+        chartHoverLabel.classList.remove("active");
+        chartHoverLabel.setAttribute("aria-hidden", "true");
+        chartHoverLabel.style.left = "-9999px";
+        chartHoverLabel.style.top = "-9999px";
+    }
+
+    function formatChartHoverPrice(dataset, price) {
+        if (dataset.scale === "btc") {
+            const value = Number(price);
+            return Number.isFinite(value) ? `${formatBtcAxisValue(value)} USDT` : "—";
+        }
+        return formatPrice(price) || "—";
     }
 
     function handleTimelinePointerDown(event) {
@@ -1631,6 +1973,9 @@ function handleTokenSelectionChange(tokenId, checked) {
         chartCanvas.addEventListener("pointerup", handleTimelinePointerUp);
         chartCanvas.addEventListener("pointercancel", handleTimelinePointerUp);
         chartCanvas.addEventListener("pointerleave", handleTimelinePointerUp);
+        chartCanvas.addEventListener("pointermove", handleChartPointerMove);
+        chartCanvas.addEventListener("pointerdown", handleChartPointerDown);
+        chartCanvas.addEventListener("pointerleave", handleChartPointerLeave);
     }
     if (chartSelectAllBtn) {
         chartSelectAllBtn.addEventListener("click", () => {
@@ -1760,7 +2105,7 @@ function handleTokenSelectionChange(tokenId, checked) {
         return tokens.map((tokenId, idx) => ({
             tokenId,
             label: outcomes && outcomes[idx] ? outcomes[idx] : idx === 0 ? "YES" : "NO",
-            bestAsk: extractOutcomePrice(item, idx),
+            bestAsk: resolveBestAskForToken(tokenId, extractOutcomePrice(item, idx)),
         }));
     }
 
@@ -1793,15 +2138,16 @@ function handleTokenSelectionChange(tokenId, checked) {
     }
 
     function formatBestAsk(value) {
-        if (!Number.isFinite(value)) return "—";
-        if (value >= 1) return value.toFixed(2);
-        return (value * 100).toFixed(2) + "%";
+        return formatPrice(value);
     }
 
     function formatPriceInput(value) {
-        if (!Number.isFinite(value)) return "";
-        if (value >= 1) return value.toFixed(2);
-        return value.toFixed(4);
+        return formatPrice(value, {fallback: "", withUnit: false});
+    }
+
+    function parsePriceInput(value) {
+        const numeric = Number(value);
+        return Number.isFinite(numeric) ? numeric / PRICE_DISPLAY_MULTIPLIER : Number.NaN;
     }
 
     function updateOrderBestAskDisplay({writeToInput = false} = {}) {
@@ -1828,6 +2174,7 @@ function handleTokenSelectionChange(tokenId, checked) {
             orderPanel.classList.add("active");
             return;
         }
+        ensureOrderBooksForTokens(tokens);
         currentOrderContext = {
             question: item.question || "",
             slug: getPrimaryEventSlug(item),
@@ -1912,15 +2259,19 @@ function handleTokenSelectionChange(tokenId, checked) {
         statusEl.textContent = parts.join("，");
     }
 
-    function refreshView() {
+    function refreshView({skipChart = false} = {}) {
         const outcomeFiltered = filterByOutcomeMode(currentData);
         updateEventFilterOptions(outcomeFiltered);
         const byEvent = filterByEvent(outcomeFiltered);
         const sorted = sortMarkets(byEvent);
-        render(sorted);
+        const enriched = enrichMarketStats(sorted);
+        render(enriched);
         updateStatus(sorted.length);
         lastRenderedMarkets = sorted;
-        refreshYesTokenChart(sorted);
+        ensureOrderBooksForMarkets(sorted);
+        if (!skipChart) {
+            refreshYesTokenChart(sorted);
+        }
     }
 
     function normalizeTagId(tagId) {
@@ -1928,7 +2279,8 @@ function handleTokenSelectionChange(tokenId, checked) {
         return matched ? matched.id : DEFAULT_TAG_ID;
     }
 
-    async function load(tagId = currentTagId) {
+    async function load(tagId = currentTagId, options = {}) {
+        const {forceChartReload = false} = options;
         currentTagId = normalizeTagId(tagId);
         if (tagSelect) tagSelect.value = String(currentTagId);
         statusEl.textContent = "加载中…";
@@ -1936,9 +2288,27 @@ function handleTokenSelectionChange(tokenId, checked) {
         outcomeToggleBtn.disabled = true;
         if (tagSelect) tagSelect.disabled = true;
         if (eventSelect) eventSelect.disabled = true;
+        if (forceChartReload) {
+            resetChartCaches();
+            if (chartAbortController) {
+                chartAbortController.abort();
+                chartAbortController = null;
+            }
+        }
         try {
+            orderBookVersion += 1;
+            tokenBestAskCache.clear();
+            tokenBestBidCache.clear();
+            tokenOrderBookRequests.clear();
+            tokenOrderBookQueue.length = 0;
+            tokenOrderBookQueued.clear();
+            pendingOrderBookRefresh = false;
+            if (orderBookRefreshTimer) {
+                clearTimeout(orderBookRefreshTimer);
+                orderBookRefreshTimer = null;
+            }
             const data = await fetchMarkets(currentTagId);
-            currentData = enrichMarketStats(data);
+            currentData = data;
             refreshView();
         } catch (err) {
             console.error(err);
@@ -1958,7 +2328,7 @@ function handleTokenSelectionChange(tokenId, checked) {
         outcomeToggleBtn.textContent = outcomeMode === "yesno" ? "筛选：YES/NO" : "筛选：Up/Down";
     }
 
-    $("reload").addEventListener("click", () => load());
+    $("reload").addEventListener("click", () => load(currentTagId, {forceChartReload: true}));
     $("outcomeToggle").addEventListener("click", () => {
         outcomeMode = outcomeMode === "yesno" ? "updown" : "yesno";
         updateOutcomeButton();
@@ -1995,11 +2365,15 @@ function handleTokenSelectionChange(tokenId, checked) {
                 setOrderStatus("请先选择需要下单的市场", true);
                 return;
             }
-            const price = Number(orderBuyPriceInput.value);
+            const price = parsePriceInput(orderBuyPriceInput.value);
             const size = Number(orderSizeInput.value);
-            const takeProfitPrice = orderTakeProfitInput.value ? Number(orderTakeProfitInput.value) : null;
+            const takeProfitPrice = orderTakeProfitInput.value ? parsePriceInput(orderTakeProfitInput.value) : null;
             if (!Number.isFinite(price) || price <= 0) {
-                setOrderStatus("请输入有效的买单价格", true);
+                setOrderStatus("请输入有效的买单价格（> 0%）", true);
+                return;
+            }
+            if (price >= 1) {
+                setOrderStatus("请输入低于 100% 的买单价格", true);
                 return;
             }
             if (!Number.isFinite(size) || size <= 0) {
@@ -2007,7 +2381,11 @@ function handleTokenSelectionChange(tokenId, checked) {
                 return;
             }
             if (orderTakeProfitInput.value && (!Number.isFinite(takeProfitPrice) || takeProfitPrice <= 0)) {
-                setOrderStatus("请输入有效的止盈卖价", true);
+                setOrderStatus("请输入有效的止盈卖价（> 0%）", true);
+                return;
+            }
+            if (Number.isFinite(takeProfitPrice) && takeProfitPrice >= 1) {
+                setOrderStatus("止盈卖价需低于 100%", true);
                 return;
             }
             const tokenInput = orderTokenGroup?.querySelector("input[name='orderTokenChoice']:checked");
@@ -2023,7 +2401,7 @@ function handleTokenSelectionChange(tokenId, checked) {
                     const label = tokenInput?.dataset.label || "Token";
                     showOrderToast({
                         title: "买单成功",
-                        message: `${label} · 价格 ${formatPriceInput(price)} · 数量 ${size}`,
+                        message: `${label} · 价格 ${formatPrice(price)} · 数量 ${size}`,
                     });
                     closeOrderPanel();
                 }

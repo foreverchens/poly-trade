@@ -1,12 +1,12 @@
 import "dotenv/config";
 import pkg from "@polymarket/clob-client";
-import {PriceHistoryInterval} from "@polymarket/clob-client/dist/types.js";
-import {SignatureType} from "@polymarket/order-utils";
-import {Wallet} from "@ethersproject/wallet";
+import { PriceHistoryInterval } from "@polymarket/clob-client/dist/types.js";
+import { SignatureType } from "@polymarket/order-utils";
+import { Wallet } from "@ethersproject/wallet";
 import axios from "axios";
 import dayjs from 'dayjs';
 
-const {ClobClient, OrderType, Side, AssetType} = pkg;
+const { ClobClient, OrderType, Side, AssetType } = pkg;
 
 const DEFAULT_HOST = "https://clob.polymarket.com";
 const DEFAULT_CHAIN_ID = 137;
@@ -104,14 +104,14 @@ export class PolyClient {
         }
 
         const client = await this.getClient();
-        const response = await client.getPricesHistory({market: resolvedMarket, interval: intervalToUse});
+        const response = await client.getPricesHistory({ market: resolvedMarket, interval: intervalToUse });
         const history = Array.isArray(response) ? response : response?.history;
 
         if (!Array.isArray(history)) {
             throw new Error("Failed to fetch price history: unexpected response shape");
         }
 
-        return {history};
+        return { history };
     }
 
     /**
@@ -162,7 +162,7 @@ export class PolyClient {
      * @param tokenId
      * @returns {Promise<(number|number)[]|number>}
      */
-    async fetchBestPrice(tokenId) {
+    async getBestPrice(tokenId) {
         const orderBook = await this.getOrderBook(tokenId);
         if (!orderBook) {
             return 0;
@@ -222,21 +222,21 @@ export class PolyClient {
      * }}
      */
     async listRewardMarket({
-                               orderBy = "rate_per_day",
-                               position = "DESC",
-                               limit = 100,
-                               query = "",
-                               showFavorites = false,
-                               tagSlug = "all",
-                               makerAddress = "",
-                               authenticationType = "eoa",
-                               nextCursor = "MA==",
-                               requestPath = "/rewards/user/markets",
-                               onlyMergeable = false,
-                               noCompetition = false,
-                               onlyOpenOrders = false,
-                               onlyPositions = false,
-                           } = {}) {
+        orderBy = "rate_per_day",
+        position = "DESC",
+        limit = 100,
+        query = "",
+        showFavorites = false,
+        tagSlug = "all",
+        makerAddress = "",
+        authenticationType = "eoa",
+        nextCursor = "MA==",
+        requestPath = "/rewards/user/markets",
+        onlyMergeable = false,
+        noCompetition = false,
+        onlyOpenOrders = false,
+        onlyPositions = false,
+    } = {}) {
         const url = `${this.rewardsHost}/rewards/markets`;
         const response = await axios.get(url, {
             params: {
@@ -334,7 +334,7 @@ export class PolyClient {
             return result;
         }, {});
 
-        const response = await axios.get(url, {params: filteredParams});
+        const response = await axios.get(url, { params: filteredParams });
         let dataArr = response?.data;
         dataArr = dataArr.filter(ele => {
             return (ele.lastTradePrice >= 0.01 && ele.lastTradePrice <= 0.99) && (ele.bestAsk >= 0.01 && ele.bestAsk <= 0.99);
@@ -358,7 +358,7 @@ export class PolyClient {
         const params = new URLSearchParams();
         conditionIds.forEach(id => params.append('condition_ids', id));
         const url = `${this.marketHost}/markets?${params.toString()}`;
-        const response = await axios.get(url, {params: params});
+        const response = await axios.get(url, { params: params });
         return response?.data;
     }
 
@@ -436,7 +436,7 @@ export class PolyClient {
             return result;
         }, {});
 
-        const response = await axios.get(url, {params: filteredParams});
+        const response = await axios.get(url, { params: filteredParams });
         return response?.data;
     }
 
@@ -449,7 +449,7 @@ export class PolyClient {
      * @param assetId
      * @returns {Promise<import("@polymarket/clob-client").OpenOrder[]>}
      */
-    async listOpenOrders({market, assetId} = {}) {
+    async listOpenOrders({ market, assetId, id } = {}) {
         const client = await this.getClient();
         const params = {};
         if (market) {
@@ -458,7 +458,9 @@ export class PolyClient {
         if (assetId) {
             params.asset_id = assetId;
         }
-
+        if (id) {
+            params.id = id;
+        }
         const orders = await client.getOpenOrders(Object.keys(params).length ? params : undefined);
         if (!Array.isArray(orders)) {
             throw new Error("Failed to fetch open orders");
@@ -495,7 +497,7 @@ export class PolyClient {
      */
     async placeOrder(price, size, side, tokenId = this.tokenId) {
         if (this.mock) {
-            return {orderID: "0x8e818dd295884776b0929b768ceaa43104ec2a34866127ca3d765280e3498054"};
+            return { orderID: "0x8e818dd295884776b0929b768ceaa43104ec2a34866127ca3d765280e3498054" };
         }
         side = side.toUpperCase();
         const client = await this.getClient();
@@ -528,7 +530,7 @@ export class PolyClient {
         }
 
         const client = await this.getClient();
-        return client.cancelOrder({orderID});
+        return client.cancelOrder({ orderID });
     }
 
 
@@ -544,12 +546,35 @@ export class PolyClient {
             sizeThreshold: 1, limit: 100, sortBy: "TOKENS", sortDirection: "DESC", user: address,
         };
 
-        const response = await axios.get(url, {params});
+        const response = await axios.get(url, { params });
         return response?.data;
     }
 
 
     /*================订单API===================*/
+
+
+    /**
+     * 获取挂单根据订单Id
+     * 如果已成交、返回null、
+     * 否则返回挂单信息、未成交状态LIVE、已取消状态CANCELED、
+     *  
+     * @param {} orderId 
+     * @returns {Promise<import("@polymarket/clob-client").OpenOrder>}
+     */
+    async getOrder(orderId) {
+        const client = await this.getClient();
+        // 只会返回一个openOrder 如果挂单被成交、则会返回其他openOrder、需要从成交列表中继续查询我们需要的订单信息
+
+        // const rlt = await client.getOrder({ orderId }); 该API有BUG
+        const rlt = await client.listOpenOrders({ id: orderId });
+        if (rlt.length === 0) {
+            // 已成交、即使取消也能查询到、status = canceled 
+            return null;
+        }
+        return rlt[0];
+    }
+
     /**
      *
      * 获取自身相关的成交记录（仅限作为做市方时）
@@ -565,7 +590,7 @@ export class PolyClient {
      *         "side": "SELL"
      *     }]}
      */
-    async listMyTrades({makerAddress} = {}) {
+    async listMyTrades({ makerAddress } = {}) {
         const client = await this.getClient();
         const resolvedAddress = (makerAddress || this.funderAddress || await client.signer.getAddress()).toLowerCase();
         const trades = await client.getTrades({
@@ -646,7 +671,7 @@ export class PolyClient {
      */
     async getUsdcBalance() {
         const client = await this.getClient();
-        const response = await client.getBalanceAllowance({asset_type: AssetType.COLLATERAL});
+        const response = await client.getBalanceAllowance({ asset_type: AssetType.COLLATERAL });
         if (!response) {
             throw new Error("Failed to fetch USDC balance: empty response");
         }

@@ -1,12 +1,33 @@
 {
-    "slugList": [
-        "bitcoin-up-or-down-on-november-9"
-    ],
-    "runtime": [
-        {
-            "tokenId": "105165553321039703998642662980715548079401423982436479056728401620251275461058",
-            "count": 1,
-            "lastEntryPrice": 0.82
-        }
-    ]
+    "config": {
+        "positionSizeUsdc": 10,
+        "triggerPriceGt": 0.9,
+        "triggerPriceLt": 0.99,
+        "takeProfitPrice": 0.998,
+        "maxHoursToEnd": 26,
+        "test": true,
+        "slugList": [
+            "bitcoin-above-on-november-${day}"
+        ]
+    },
+    "orders": {
+        "bitcoin-above-on-november-15": [
+            {
+                "marketSlug": "bitcoin-above-on-november-15",
+                "side": "YES",
+                "orderId": "105165553321039703998642662980715548079401423982436479056728401620251275461058",
+                "price": 0.82,
+                "size": 10
+            }
+        ],
+        "bitcoin-above-on-november-16": [
+            {
+                "marketSlug": "bitcoin-above-100k-on-november-16",
+                "side": "NO",
+                "orderId": "test-1763224391084",
+                "price": 0.983,
+                "size": 10
+            }
+        ]
+    }
 }

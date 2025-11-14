@@ -20,7 +20,7 @@ const DEFAULT_MARKET_HOST = "https://gamma-api.polymarket.com";
 const VALID_PRICE_HISTORY_INTERVALS = new Set(Object.values(PriceHistoryInterval));
 
 export class PolyClient {
-    constructor() {
+    constructor(mock) {
         const privateKey = process.env.PRIVATE_KEY;
         if (!privateKey) {
             throw new Error("Missing PRIVATE_KEY for PolyClient");
@@ -37,6 +37,7 @@ export class PolyClient {
         this.signer = new Wallet(privateKey);
         this.funderAddress = this.signer.address;
         this.clientPromise = null;
+        this.mock = mock;
     }
 
     async getClient() {
@@ -154,6 +155,23 @@ export class PolyClient {
     async getOrderBook(tokenId = this.tokenId) {
         const client = await this.getClient();
         return client.getOrderBook(tokenId);
+    }
+
+    /**
+     * 获取最优买1卖1
+     * @param tokenId
+     * @returns {Promise<(number|number)[]|number>}
+     */
+    async fetchBestPrice(tokenId) {
+        const orderBook = await this.getOrderBook(tokenId);
+        if (!orderBook) {
+            return 0;
+        }
+        const asks = orderBook.asks;
+        let bestAsk = asks.length ? Number(asks[asks.length - 1].price) : 0;
+        let bids = orderBook.bids;
+        let bestBid = bids.length ? Number(bids[bids.length - 1].price) : 0;
+        return [bestBid, bestAsk];
     }
 
     /**
@@ -476,6 +494,9 @@ export class PolyClient {
      * }}
      */
     async placeOrder(price, size, side, tokenId = this.tokenId) {
+        if (this.mock) {
+            return {orderID: "0x8e818dd295884776b0929b768ceaa43104ec2a34866127ca3d765280e3498054"};
+        }
         side = side.toUpperCase();
         const client = await this.getClient();
         const [tickSize, negRisk] = await Promise.all([client.getTickSize(tokenId), client.getNegRisk(tokenId),]);
@@ -649,3 +670,4 @@ export class PolyClient {
 
 export const PolySide = Side;
 export const PolyAssetType = AssetType;
+export const polyClient = new PolyClient();

@@ -2,16 +2,28 @@
   "tasks": [
     {
       "label": "btc-102k-106k-grid",
-      "lowMarketId": "TOKEN_ID_102K_YES",
-      "highMarketId": "TOKEN_ID_106K_NO",
+      "slug": "bitcoin-above-on-november-15",
+      "lowMarketId": "0x455281e17dc8518a833ca518c5a6aaf409712f61682725ad2907fb6d0a68c2f2",
+      "highMarketId": "0xeada99c95a20f881ac86450c587e458f679ff97ea8ac079be95bc54182482bd9",
       "lowMarketSide": 0,
       "tradeUsd": 10,
-      "dryRun": true,
+      "initPosition": [10,10],
+      "status": 0,
       "runtime": {
         "yesUsd": 100,
         "noUsd": 100,
         "lastPrice": null,
-        "fills": {},
+        "fills": {
+          "0.9900": false,
+          "0.9500": false,
+          "0.9300": false,
+          "0.9000": false,
+          "0.8600": false,
+          "0.8100": false,
+          "0.7500": false,
+          "0.6800": false,
+          "0.5500": false
+        },
         "cursor": 0,
         "mock": [
           0.9,
@@ -19,7 +31,8 @@
           0.81,
           0.86,
           0.9
-        ]
+        ],
+        "history": []
       }
     }
   ]

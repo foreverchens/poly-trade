@@ -1,0 +1,26 @@
+{
+  "tasks": [
+    {
+      "label": "btc-102k-106k-grid",
+      "lowMarketId": "TOKEN_ID_102K_YES",
+      "highMarketId": "TOKEN_ID_106K_NO",
+      "lowMarketSide": 0,
+      "tradeUsd": 10,
+      "dryRun": true,
+      "runtime": {
+        "yesUsd": 100,
+        "noUsd": 100,
+        "lastPrice": null,
+        "fills": {},
+        "cursor": 0,
+        "mock": [
+          0.9,
+          0.86,
+          0.81,
+          0.86,
+          0.9
+        ]
+      }
+    }
+  ]
+}

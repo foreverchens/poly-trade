@@ -111,7 +111,7 @@ async function recordEvent(eventType, leg, details = {}) {
 
 async function placeBid(leg) {
     const orderBook = await client.getOrderBook(leg.tokenId).catch((err) => {
-        console.error(`[${leg.label}] 获取订单簿失败`, err);
+        console.error(`[${leg.label}] 获取订单簿失败了`, err);
         return null;
     });
 

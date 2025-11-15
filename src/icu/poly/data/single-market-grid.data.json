@@ -1,0 +1,23 @@
+{
+    "tasks": [
+        {
+            "label": "btc-94k-16-grid",
+            "slug": "bitcoin-above-92k-on-november-19",
+            "tradeUsd": 5,
+            "initPosition": 0,
+            "status": 1,
+            "runtime": {
+                "tokenId": "91003705122117940148371517376678792150941673498602872949776923800967298438733",
+                "buyPrice": "0.690",
+                "sellPrice": "0.800",
+                "position": 0,
+                "openOrders": [
+                    "0x146af7bbd0fcc11c43df3d6a10ead17243adcf19db9be2339f4398616bf590db",
+                    "0x19df9084a0cfbd3e34b604497054b30c5fe8b686cd08cd12a7af495c443c8480"
+                ],
+                "history": []
+            },
+            "remark": "初始化成功"
+        }
+    ]
+}

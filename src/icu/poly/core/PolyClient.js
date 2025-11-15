@@ -3,8 +3,10 @@ import pkg from "@polymarket/clob-client";
 import { PriceHistoryInterval } from "@polymarket/clob-client/dist/types.js";
 import { SignatureType } from "@polymarket/order-utils";
 import { Wallet } from "@ethersproject/wallet";
+import { ethers } from "ethers";
 import axios from "axios";
 import dayjs from 'dayjs';
+import { tr } from "zod/v4/locales";
 
 const { ClobClient, OrderType, Side, AssetType } = pkg;
 
@@ -17,7 +19,14 @@ const DEFAULT_SIGNATURE_TYPE = SignatureType.EOA;
 const DEFAULT_REWARDS_HOST = "https://polymarket.com/api";
 const DEFAULT_DATA_HOST = "https://data-api.polymarket.com";
 const DEFAULT_MARKET_HOST = "https://gamma-api.polymarket.com";
+const DEFAULT_HTTP_TIMEOUT = 30000; // 30 seconds
 const VALID_PRICE_HISTORY_INTERVALS = new Set(Object.values(PriceHistoryInterval));
+const USDC_E_ADDRESS = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"; // Polygon USDC.e
+const DEFAULT_RPC_URL = process.env.RPC_URL || "https://polygon-rpc.com";
+const ERC20_ABI = [
+    "function balanceOf(address owner) view returns (uint256)",
+    "function decimals() view returns (uint8)",
+];
 
 export class PolyClient {
     constructor(mock) {
@@ -55,10 +64,26 @@ export class PolyClient {
     /*================市场API===================*/
 
 
+    /**
+     * 获取事件根据slug、支持重试
+     * @param {} slug 
+     * @returns 
+     */
     async getEventBySlug(slug) {
         const url = `${this.marketHost}/events/slug/${slug}`;
-        const response = await axios.get(url);
-        return response?.data;
+        let resp = null;
+        let cnt = 0;
+        do {
+            try {
+                resp = await axios.get(url, { timeout: DEFAULT_HTTP_TIMEOUT });
+                break;
+            } catch (err) {
+                cnt++;
+                console.error(`[${slug}] HTTP请求失败: ${err.code} ${err.message} ${err.response?.status} ${err.response?.data}`);
+                await sleep(1000);
+            }
+        } while (cnt < 3);
+        return resp?.data;
     }
 
     /**
@@ -153,8 +178,13 @@ export class PolyClient {
      * @returns {Promise<*|OrderBookSummary>}
      */
     async getOrderBook(tokenId = this.tokenId) {
-        const client = await this.getClient();
-        return client.getOrderBook(tokenId);
+        try {
+            const client = await this.getClient();
+            return client.getOrderBook(tokenId);
+        } catch (err) {
+            console.error(`[${tokenId}] 获取订单簿失败: ${err.message}`);
+            return null;
+        }
     }
 
     /**
@@ -254,6 +284,7 @@ export class PolyClient {
                 onlyOpenOrders,
                 onlyPositions,
             },
+            timeout: DEFAULT_HTTP_TIMEOUT,
         });
         let data = response.data;
         data = data.data.filter(ele => {
@@ -334,7 +365,7 @@ export class PolyClient {
             return result;
         }, {});
 
-        const response = await axios.get(url, { params: filteredParams });
+        const response = await axios.get(url, { params: filteredParams, timeout: DEFAULT_HTTP_TIMEOUT });
         let dataArr = response?.data;
         dataArr = dataArr.filter(ele => {
             return (ele.lastTradePrice >= 0.01 && ele.lastTradePrice <= 0.99) && (ele.bestAsk >= 0.01 && ele.bestAsk <= 0.99);
@@ -358,7 +389,13 @@ export class PolyClient {
         const params = new URLSearchParams();
         conditionIds.forEach(id => params.append('condition_ids', id));
         const url = `${this.marketHost}/markets?${params.toString()}`;
-        const response = await axios.get(url, { params: params });
+        const response = await axios.get(url, { params: params, timeout: DEFAULT_HTTP_TIMEOUT });
+        return response?.data;
+    }
+
+    async getMarketBySlug(slug) {
+        const url = `${this.marketHost}/markets/slug/${slug}`;
+        const response = await axios.get(url, { timeout: DEFAULT_HTTP_TIMEOUT });
         return response?.data;
     }
 
@@ -436,7 +473,7 @@ export class PolyClient {
             return result;
         }, {});
 
-        const response = await axios.get(url, { params: filteredParams });
+        const response = await axios.get(url, { params: filteredParams, timeout: DEFAULT_HTTP_TIMEOUT });
         return response?.data;
     }
 
@@ -546,7 +583,7 @@ export class PolyClient {
             sizeThreshold: 1, limit: 100, sortBy: "TOKENS", sortDirection: "DESC", user: address,
         };
 
-        const response = await axios.get(url, { params });
+        const response = await axios.get(url, { params, timeout: DEFAULT_HTTP_TIMEOUT });
         return response?.data;
     }
 
@@ -556,8 +593,8 @@ export class PolyClient {
 
     /**
      * 获取挂单根据订单Id
-     * 如果已成交、返回null、
-     * 否则返回挂单信息、未成交状态LIVE、已取消状态CANCELED、
+     * 如果已成交、状态为MATCHED
+     * 未成交状态LIVE、已取消状态CANCELED、
      *  
      * @param {} orderId 
      * @returns {Promise<import("@polymarket/clob-client").OpenOrder>}
@@ -567,9 +604,8 @@ export class PolyClient {
         // 只会返回一个openOrder 如果挂单被成交、则会返回其他openOrder、需要从成交列表中继续查询我们需要的订单信息
 
         // const rlt = await client.getOrder({ orderId }); 该API有BUG
-        const rlt = await client.listOpenOrders({ id: orderId });
+        const rlt = await this.listOpenOrders({ id: orderId });
         if (rlt.length === 0) {
-            // 已成交、即使取消也能查询到、status = canceled 
             return null;
         }
         return rlt[0];
@@ -690,9 +726,30 @@ export class PolyClient {
         throw new Error("Failed to fetch USDC balance: unexpected response shape");
     }
 
+    /**
+     * 获取 USDC.e 余额（ERC20 代币）
+     * @returns {Promise<string>}
+     */
+    async getUsdcEBalance() {
+        const provider = new ethers.JsonRpcProvider(DEFAULT_RPC_URL, this.chainId);
+        const usdcContract = new ethers.Contract(USDC_E_ADDRESS, ERC20_ABI, provider);
+        const address = this.funderAddress || this.signer.address;
+
+        try {
+            const [balance, decimals] = await Promise.all([
+                usdcContract.balanceOf(address),
+                usdcContract.decimals(),
+            ]);
+
+            // 格式化余额，保留代币的小数位精度
+            const formattedBalance = ethers.formatUnits(balance, decimals);
+            return formattedBalance;
+        } catch (error) {
+            throw new Error(`Failed to fetch USDC.e balance: ${error.message}`);
+        }
+    }
+
 }
-
-
 export const PolySide = Side;
 export const PolyAssetType = AssetType;
 export const polyClient = new PolyClient();

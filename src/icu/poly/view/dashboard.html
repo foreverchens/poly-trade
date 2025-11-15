@@ -34,6 +34,8 @@
         .footer{margin:14px 0 40px;color:var(--muted);font-size:12px}
         .tip{font-size:12px;color:var(--muted)}
         .chip{display:inline-block;border:1px solid var(--line);border-radius:999px;padding:2px 8px;margin-left:6px;font-size:12px;color:var(--muted)}
+        .home-link{display:inline-block;margin-left:12px;padding:6px 14px;background:#2ecc71;color:#0b0f14;border-radius:999px;font-weight:600;text-decoration:none;font-size:13px;cursor:pointer;border:none;}
+        .home-link:hover{opacity:0.9;}
         .loading{opacity:.8}
         .section-head{display:flex;align-items:center;justify-content:space-between;margin:32px 0 8px;gap:12px;flex-wrap:wrap;}
         .section-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
@@ -57,7 +59,7 @@
 </head>
 <body>
 <div class="wrap">
-    <h1 class="title">Polymarket 仓位看板 <span class="chip">最小可用</span></h1>
+    <h1 class="title">Polymarket 仓位看板 <span class="chip">最小可用</span> <a href="/" class="home-link">返回市场</a></h1>
 
     <div class="bar">
         <input id="addr" spellcheck="false" placeholder="输入地址（0x...）"

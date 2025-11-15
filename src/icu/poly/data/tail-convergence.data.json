@@ -1,0 +1,114 @@
+{
+  "config": {
+    "positionSizeUsdc": 10,
+    "triggerPriceGt": 0.9,
+    "triggerPriceLt": 0.99,
+    "takeProfitPrice": 0.998,
+    "maxHoursToEnd": 24,
+    "test": true,
+    "slugList": [
+      "bitcoin-above-on-november-${day}",
+      "bitcoin-price-on-november-${day}",
+      "ethereum-above-on-november-${day}",
+      "ethereum-price-on-november-${day}"
+    ]
+  },
+  "orders": {
+    "bitcoin-above-on-november-15": [
+      {
+        "marketSlug": "bitcoin-above-on-november-15",
+        "side": "YES",
+        "orderId": "105165553321039703998642662980715548079401423982436479056728401620251275461058",
+        "price": 0.82,
+        "size": 10
+      }
+    ],
+    "bitcoin-above-on-november-16": [
+      {
+        "marketSlug": "bitcoin-above-100k-on-november-16",
+        "side": "NO",
+        "orderId": "test-1763224391084",
+        "price": 0.983,
+        "size": 10
+      },
+      {
+        "marketSlug": "bitcoin-above-94k-on-november-16",
+        "side": "YES",
+        "orderId": "0x65b96959bc3c32e211bfed1f5d48ebbacf6deb03891cbaef8dc437046b41dea9",
+        "price": 0.99,
+        "size": 10
+      },
+      {
+        "marketSlug": "bitcoin-above-96k-on-november-16",
+        "side": "NO",
+        "orderId": "0xfacb9514a09d520d25afd8d7ddb8ab6c214e91e630ddfb70c890c4409da662fa",
+        "price": 0.948,
+        "size": 11
+      }
+    ],
+    "bitcoin-above-on-november-17": [
+      {
+        "marketSlug": "bitcoin-above-100k-on-november-17",
+        "side": "NO",
+        "orderId": "test-1763320074862",
+        "price": 0.964,
+        "size": 10
+      },
+      {
+        "marketSlug": "bitcoin-above-98k-on-november-17",
+        "side": "NO",
+        "orderId": "test-1763375546042",
+        "price": 0.96,
+        "size": 10
+      }
+    ],
+    "bitcoin-price-on-november-17": [
+      {
+        "marketSlug": "will-the-price-of-bitcoin-be-between-98000-100000-on-november-17",
+        "side": "NO",
+        "orderId": "test-1763375546860",
+        "price": 0.979,
+        "size": 10
+      }
+    ],
+    "ethereum-above-on-november-17": [
+      {
+        "marketSlug": "ethereum-above-3000-on-november-17",
+        "side": "YES",
+        "orderId": "test-1763375548277",
+        "price": 0.98,
+        "size": 10
+      },
+      {
+        "marketSlug": "ethereum-above-3100-on-november-17",
+        "side": "YES",
+        "orderId": "test-1763375548278",
+        "price": 0.94,
+        "size": 11
+      },
+      {
+        "marketSlug": "ethereum-above-3300-on-november-17",
+        "side": "NO",
+        "orderId": "test-1763375548278",
+        "price": 0.94,
+        "size": 11
+      }
+    ],
+    "ethereum-price-on-november-17": [
+      {
+        "marketSlug": "will-the-price-of-ethereum-be-less-than-3100-on-november-17",
+        "side": "NO",
+        "orderId": "test-1763375549401",
+        "price": 0.946,
+        "size": 11
+      },
+      {
+        "marketSlug": "will-the-price-of-ethereum-be-between-3300-3400-on-november-17",
+        "side": "NO",
+        "orderId": "test-1763375549404",
+        "price": 0.968,
+        "size": 10
+      }
+    ]
+  }
+}

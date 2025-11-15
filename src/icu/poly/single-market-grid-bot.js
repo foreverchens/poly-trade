@@ -2,11 +2,13 @@ import { readFile, writeFile } from "fs/promises";
 import { setTimeout as wait } from "timers/promises";
 import { PolyClient, PolySide } from "./core/PolyClient.js";
 
-const DATA_PATH = new URL("./data/short-strangle-grid.data.json", import.meta.url);
-const GRID = [1, 0.99, 0.95, 0.93, 0.9, 0.86, 0.81, 0.75, 0.68, 0.55, 0];
-const LOOP_MS = 1_000 * 60;
+const DATA_PATH = new URL("./data/single-market-grid.data.json", import.meta.url);
+const GRID = [1, 0.99, 0.97, 0.95, 0.93, 0.9, 0.86, 0.81, 0.75, 0.68, 0.55, 0];
+const LOOP_MS = 1_000 * 10;
+const INIT_ORDER_POLL_MS = 2_000; // 初始订单轮询间隔 2 秒
+const INIT_ORDER_TIMEOUT_MS = 60_000; // 初始订单超时时间 60 秒
 
-const polyClient = new PolyClient(true);
+const polyClient = new PolyClient();
 
 // 读取 tasks 节点，将静态配置与 runtime 状态放在同一 JSON 中
 /**
@@ -34,18 +36,30 @@ async function saveTask(ctx) {
     // 静默保存，不输出日志避免刷屏
 }
 
+/**
+ * 
+ *         {
+            "label": "btc-102k-106k-grid",
+            "slug": "bitcoin-above-on-november-16",
+            "marketId": "0x2f571d82c1c233e073348e4bcf970d6c6cfd5550edf079cd6bf805db1c46ed2f",
+            "tradeUsd": 10,
+            "initPosition": 10,
+            "status": 0
+        }
+ * @param {*} task 
+ * @returns 
+ */
 async function tryStart(task) {
     console.log("[初始化] 开始初始化任务...");
-    const { marketId, tradeUsd, initPosition } = task;
+    const { slug, tradeUsd, initPosition } = task;
 
-    console.log(`[初始化] 正在获取市场信息: ${marketId}`);
-    const markets = await polyClient.getMarketByConditionId(marketId);
-    if (!markets || markets.length === 0) {
-        console.log(`[初始化] 市场不存在: ${marketId}`);
+    console.log(`[初始化] 正在获取市场信息: ${slug}`);
+    const market = await polyClient.getMarketBySlug(slug);
+    if (!market) {
+        console.log(`[初始化] 市场不存在: ${slug}`);
         return false;
     }
 
-    const market = markets[0];
     if (!market.clobTokenIds) {
         console.log(`[初始化] 市场缺少 clobTokenIds`);
         return false;
@@ -65,18 +79,45 @@ async function tryStart(task) {
         return false;
     }
 
-    // 基于 bestAskPrice 进行初始买入
-    const initSize = Math.abs(Math.floor(initPosition * tradeUsd / bestAskPrice));
-    console.log(`[初始化] 初始买入: 价格=${bestAskPrice.toFixed(3)}, 数量=${initSize}, 金额=${initSize * bestAskPrice}U`);
+    // 基于 initPosition 和 bestAskPrice 进行初始买入
+    let initSize = 0;
+    const initOrder = null;
+    if (initPosition > 0) {
+        // 初始仓位倍数大于0、进行初始买入
+        initSize = Math.abs(Math.floor(initPosition * tradeUsd / bestAskPrice));
+        console.log(`[初始化] 初始买入: 价格=${bestAskPrice}, 数量=${initSize}, 金额=${(initSize * bestAskPrice).toFixed(2)}U`);
 
-    const initOrder = await polyClient.placeOrder(bestAskPrice, initSize, PolySide.BUY, tokenId);
-    console.log(`[初始化] 初始买入订单已提交: ${initOrder.orderID}`);
+        initOrder = await polyClient.placeOrder(bestAskPrice, initSize, PolySide.BUY, tokenId);
+        console.log(`[初始化] 初始买入订单已提交: ${initOrder.orderID}`);
+
+        // 轮询等待初始订单成交
+        console.log(`[初始化] 等待初始订单成交...`);
+        const startTime = Date.now();
+        let orderFilled = false;
+        while (Date.now() - startTime < INIT_ORDER_TIMEOUT_MS) {
+            const order = await polyClient.getOrder(initOrder.orderID);
+            if (!order || order.status === "MATCHED") {
+                // 订单已成交（getOrder 返回 null 表示已成交）
+                orderFilled = true;
+                console.log(`[初始化] 初始订单已成交: ${initOrder.orderID}`);
+                break;
+            }
+            console.log(`[初始化] 订单尚未成交，继续等待... (已等待 ${Math.floor((Date.now() - startTime) / 1000)}s)`);
+            await wait(INIT_ORDER_POLL_MS);
+        }
+
+        if (!orderFilled) {
+            console.log(`[初始化] 初始订单超时未成交，无法继续初始化`);
+            return false;
+        }
+    }
+
 
     // 计算网格价格：上挂卖单（更高价格），下挂买单（更低价格）
     const sellPrice = getNextPrice(bestAskPrice, PolySide.SELL);
     const buyPrice = getNextPrice(bestAskPrice, PolySide.BUY);
 
-    if (sellPrice === undefined || buyPrice === undefined) {
+    if (sellPrice <= 0 || buyPrice <= 0) {
         console.log(`[初始化] 无法计算网格价格 (sellPrice: ${sellPrice}, buyPrice: ${buyPrice})`);
         return false;
     }
@@ -84,21 +125,19 @@ async function tryStart(task) {
     // 计算网格订单数量
     const gridBuySize = Math.abs(Math.floor(tradeUsd / buyPrice));
     const gridSellSize = Math.abs(Math.floor(tradeUsd / sellPrice));
-    console.log(`[初始化] 网格买单: 价格=${buyPrice.toFixed(3)}, 数量=${gridBuySize}, 金额=${gridBuySize * buyPrice}U`);
-    console.log(`[初始化] 网格卖单: 价格=${sellPrice.toFixed(3)}, 数量=${gridSellSize}, 金额=${gridSellSize * sellPrice}U`);
+    console.log(`[初始化] 网格买单: 价格=${buyPrice}, 数量=${gridBuySize}, 金额=${(gridBuySize * buyPrice).toFixed(2)}U`);
+    console.log(`[初始化] 网格卖单: 价格=${sellPrice}, 数量=${gridSellSize}, 金额=${(gridSellSize * sellPrice).toFixed(2)}U`);
 
     // 提交网格挂单
     const buyOrder = await polyClient.placeOrder(buyPrice, gridBuySize, PolySide.BUY, tokenId);
     const sellOrder = await polyClient.placeOrder(sellPrice, gridSellSize, PolySide.SELL, tokenId);
-    console.log(`[初始化] 网格买入挂单已提交: ${buyOrder.orderID}`);
-    console.log(`[初始化] 网格卖出挂单已提交: ${sellOrder.orderID}`);
 
     task.runtime = {
         tokenId: tokenId,
         buyPrice: buyPrice,
         sellPrice: sellPrice,
-        position: Number(initSize).toFixed(2),
-        initOrder: initOrder.orderID,
+        position: initSize,
+        initOrder: initOrder?.orderID,
         openOrders: [buyOrder.orderID, sellOrder.orderID],
         history: []
     };
@@ -114,17 +153,18 @@ async function tryStart(task) {
  * @returns {number|undefined} 下一交易价格
  */
 function getNextPrice(curPrice, side) {
-    for (let i = 1; i < GRID.length; i++) {
-        if (curPrice <= GRID[i - 1] && curPrice >= GRID[i]) {
+    curPrice = Number(curPrice);
+    for (let i = 1; i < GRID.length - 1; i++) {
+        if (curPrice <= GRID[i] && curPrice >= GRID[i + 1]) {
             if (side === PolySide.BUY) {
-                return GRID[i];
+                return (curPrice - (GRID[i] - GRID[i + 1])).toFixed(3);
             } else {
-                return GRID[i - 1];
+                return (curPrice + (GRID[i - 1] - GRID[i])).toFixed(3);
             }
         }
     }
     // 价格超出网格范围
-    return undefined;
+    return 0;
 }
 
 // 监听网格订单成交，完成低买高卖套利
@@ -146,8 +186,12 @@ async function runGrid(task) {
     const buyOrder = await polyClient.getOrder(buyOrderId);
     const sellOrder = await polyClient.getOrder(sellOrderId);
 
+    if (buyOrder.status === "CANCELED") {
+        console.log(`[网格] 买单已取消: ${buyOrderId}`);
+        return false;
+    }
     // 检查买单是否成交
-    if (!buyOrder) {
+    if (buyOrder.status === "MATCHED") {
         // 买单已成交，说明价格下跌，在更低价格重新挂买单
         console.log(`[网格] 买单已成交: ${buyOrderId}`);
 
@@ -156,9 +200,9 @@ async function runGrid(task) {
 
         // 计算下一个网格价格
         const nextBuyPrice = getNextPrice(buyPrice, PolySide.BUY);
-        const nextSellPrice = getNextPrice(sellPrice, PolySide.SELL);
+        const nextSellPrice = getNextPrice(buyPrice, PolySide.SELL);
 
-        if (nextBuyPrice === undefined || nextSellPrice === undefined) {
+        if (nextBuyPrice <= 0 || nextSellPrice <= 0) {
             console.log(`[网格] 价格超出网格范围，无法继续交易`);
             return false;
         }
@@ -166,13 +210,13 @@ async function runGrid(task) {
         // 重新挂单
         const gridBuySize = Math.abs(Math.floor(task.tradeUsd / nextBuyPrice));
         const gridSellSize = Math.abs(Math.floor(task.tradeUsd / nextSellPrice));
-        console.log(`[网格] 重新挂单: 买入价格=${nextBuyPrice.toFixed(3)}, 数量=${gridBuySize}, 金额=${gridBuySize * nextBuyPrice}U`);
-        console.log(`[网格] 重新挂单: 卖出价格=${nextSellPrice.toFixed(3)}, 数量=${gridSellSize}, 金额=${gridSellSize * nextSellPrice}U`);
+        console.log(`[网格] 重新挂单: 买入价格=${nextBuyPrice.toFixed(3)}, 数量=${gridBuySize}, 金额=${(gridBuySize * nextBuyPrice).toFixed(2)}U`);
+        console.log(`[网格] 重新挂单: 卖出价格=${nextSellPrice.toFixed(3)}, 数量=${gridSellSize}, 金额=${(gridSellSize * nextSellPrice).toFixed(2)}U`);
+
+        console.log(`[网格] 价格动态: [${nextBuyPrice.toFixed(3)} <- ${buyPrice.toFixed(3)} -> ${nextSellPrice.toFixed(3)}]`);
 
         const newBuyOrder = await polyClient.placeOrder(nextBuyPrice, gridBuySize, PolySide.BUY, tokenId);
         const newSellOrder = await polyClient.placeOrder(nextSellPrice, gridSellSize, PolySide.SELL, tokenId);
-        console.log(`[网格] 重新挂单: 买入订单已提交: ${newBuyOrder.orderID}`);
-        console.log(`[网格] 重新挂单: 卖出订单已提交: ${newSellOrder.orderID}`);
 
         // 更新状态
         state.openOrders = [newBuyOrder.orderID, newSellOrder.orderID];
@@ -184,8 +228,12 @@ async function runGrid(task) {
         return true;
     }
 
+    if (sellOrder.status === "CANCELED") {
+        console.log(`[网格] 卖单已取消: ${sellOrderId}`);
+        return false;
+    }
     // 检查卖单是否成交
-    if (!sellOrder) {
+    if (sellOrder.status === "MATCHED") {
         // 卖单已成交，说明价格上涨，在更高价格重新挂卖单
         console.log(`[网格] 卖单已成交: ${sellOrderId}`);
 
@@ -193,10 +241,10 @@ async function runGrid(task) {
         await polyClient.cancelOrder(buyOrderId);
 
         // 计算下一个网格价格
-        const nextBuyPrice = getNextPrice(buyPrice, PolySide.BUY);
+        const nextBuyPrice = getNextPrice(sellPrice, PolySide.BUY);
         const nextSellPrice = getNextPrice(sellPrice, PolySide.SELL);
 
-        if (nextBuyPrice === undefined || nextSellPrice === undefined) {
+        if (nextBuyPrice <= 0 || nextSellPrice <= 0) {
             console.log(`[网格] 价格超出网格范围，无法继续交易`);
             return false;
         }
@@ -207,10 +255,10 @@ async function runGrid(task) {
         console.log(`[网格] 重新挂单: 买入价格=${nextBuyPrice.toFixed(3)}, 数量=${gridBuySize}, 金额=${gridBuySize * nextBuyPrice}U`);
         console.log(`[网格] 重新挂单: 卖出价格=${nextSellPrice.toFixed(3)}, 数量=${gridSellSize}, 金额=${gridSellSize * nextSellPrice}U`);
 
+        console.log(`[网格] 价格动态: [${nextBuyPrice.toFixed(3)} <- ${sellPrice.toFixed(3)} -> ${nextSellPrice.toFixed(3)}]`);
+
         const newBuyOrder = await polyClient.placeOrder(nextBuyPrice, gridBuySize, PolySide.BUY, tokenId);
         const newSellOrder = await polyClient.placeOrder(nextSellPrice, gridSellSize, PolySide.SELL, tokenId);
-        console.log(`[网格] 重新挂单: 买入订单已提交: ${newBuyOrder.orderID}`);
-        console.log(`[网格] 重新挂单: 卖出订单已提交: ${newSellOrder.orderID}`);
 
         // 更新状态
         state.openOrders = [newBuyOrder.orderID, newSellOrder.orderID];
@@ -221,7 +269,7 @@ async function runGrid(task) {
         logTrade(task, PolySide.SELL, sellPrice, nextSellPrice, gridSellSize, sellOrderId, newSellOrder.orderID);
         return true;
     }
-
+    console.log(`[网格] running...@ ${new Date().toISOString()}`);
     return true;
 }
 
@@ -236,7 +284,6 @@ function logTrade(task, side, tradePrice, nextPrice, orderSize, filledOrderID, n
         orderSize,
         filledOrderID,
         newOrderID,
-        position: state.position,
     };
     state.history.push(entry);
     if (state.history.length > 100) {
@@ -270,7 +317,7 @@ async function main() {
                     await runGrid(task);
                     break;
                 default:
-                    console.warn(`[主循环] 未知状态: ${task.status}`);
+                    console.warn(`[主循环] 状态异常: ${task.remark}`);
                     break;
             }
         } catch (error) {

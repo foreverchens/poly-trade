@@ -25,41 +25,44 @@
  *     ]
  * }
  */
-import 'dotenv/config';
-import { readFile, writeFile } from 'fs/promises';
-import { readFileSync } from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
-import dayjs from 'dayjs';
-import cron from 'node-cron';
-import { polyClient, PolyClient, PolySide } from './core/PolyClient.js';
+import "dotenv/config";
+import { readFile, writeFile } from "fs/promises";
+import { readFileSync } from "fs";
+import path from "path";
+import axios from "axios";
+import { fileURLToPath } from "url";
+import dayjs from "dayjs";
+import cron from "node-cron";
+import { polyClient, PolyClient, PolySide } from "./core/PolyClient.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const STATE_FILE = path.resolve(__dirname, './data/tail-convergence.data.json');
+const DEFAULT_STATE_FILE = path.resolve(__dirname, "./data/tail-convergence-yes.data.json");
 
 class TailConvergenceStrategy {
-    constructor() {
+    constructor(stateFilePath = DEFAULT_STATE_FILE) {
         this.client = new PolyClient();
         this.marketHost = this.client.marketHost;
+        this.stateFilePath = stateFilePath;
 
         // 从状态文件读取配置
         try {
-            const data = JSON.parse(readFileSync(STATE_FILE, 'utf8'));
+            const data = JSON.parse(readFileSync(this.stateFilePath, "utf8"));
             const config = data.config || {};
 
             // 读取配置
-            this.positionSizeUsdc = config.positionSizeUsdc ?? 10;
-            this.triggerPriceGt = config.triggerPriceGt ?? 0.9;
-            this.triggerPriceLt = config.triggerPriceLt ?? 0.99;
-            this.takeProfitPrice = config.takeProfitPrice ?? 0.998;
-            this.maxHoursToEnd = config.maxHoursToEnd ?? 2;
+            this.positionSizeUsdc = config.positionSizeUsdc;
+            this.triggerPriceGt = config.triggerPriceGt;
+            this.triggerPriceLt = config.triggerPriceLt;
+            this.takeProfitPrice = config.takeProfitPrice;
+            this.maxMinutesToEnd = config.maxMinutesToEnd;
             this.test = config.test ?? true;
             this.httpTimeout = 10000;
+            this.ampMin = config.ampMin ?? 0;
             // cron 表达式，默认：美国东部时间 10:00-11:59，每5分钟执行一次
             // 格式：分钟 小时 日 月 星期
-            this.cronExpression = config.cronExpression ?? '*/5 10-11 * * *';
-            this.cronTimeZone = config.cronTimeZone ?? 'America/New_York';
+            this.cronExpression = config.cronExpression;
+            this.cronTimeZone = config.cronTimeZone;
 
             // 保存原始slugList模板（包含${day}占位符）
             this.rawSlugList = config.slugList || [];
@@ -71,39 +74,54 @@ class TailConvergenceStrategy {
             // 读取订单数据
             this.orders = data.orders || {};
         } catch (err) {
-            throw err;
+            throw new Error(`Failed to load state file ${this.stateFilePath}: ${err.message}`);
         }
 
         console.log(
-            `[扫尾盘策略] 配置：建仓金额=${this.positionSizeUsdc}USDC，触发价格范围=[${this.triggerPriceGt}, ${this.triggerPriceLt}]，止盈价格=${this.takeProfitPrice}，最大剩余时间=${this.maxHoursToEnd}小时，是否测试模式=${this.test}`
+            `\n[扫尾盘策略] \n建仓金额=${this.positionSizeUsdc}USDC\n触发价格范围=[${this.triggerPriceGt}, ${this.triggerPriceLt}]\n止盈价格=${this.takeProfitPrice}\n最大剩余时间=${this.maxMinutesToEnd}分钟，最小振幅=${this.ampMin}，是否测试模式=${this.test}`
         );
         console.log(`[扫尾盘策略] Cron表达式=${this.cronExpression}，时区=${this.cronTimeZone}`);
     }
 
     /**
-     * 解析slug列表，将${day}占位符替换为美国东部时间的当天日期
+     * 解析slug列表，将${day}、${hour}、${am_pm}占位符替换为美国东部时间的对应值
      * @param {string[]} slugList 原始slug列表
      * @returns {string[]} 解析后的slug列表
      */
     resolveSlugList(slugList) {
-        // 获取美国东部时间的日期
+        // 获取美国东部时间的日期、12小时制小时数和AM/PM
         const now = new Date();
-        const formatter = new Intl.DateTimeFormat('en-US', {
-            timeZone: 'America/New_York',
-            day: 'numeric',
+        const dayFormatter = new Intl.DateTimeFormat("en-US", {
+            timeZone: "America/New_York",
+            day: "numeric",
         });
-        const day = parseInt(formatter.format(now), 10);
+        const day = parseInt(dayFormatter.format(now), 10);
+
+        const hourFormatter = new Intl.DateTimeFormat("en-US", {
+            timeZone: "America/New_York",
+            hour: "numeric",
+            hour12: true,
+        });
+        const hourParts = hourFormatter.formatToParts(now);
+        const hour = parseInt(hourParts.find((part) => part.type === "hour")?.value || "0", 10);
+        const amPm = hourParts.find((part) => part.type === "dayPeriod")?.value || "AM";
 
         return slugList.map((slug) => {
-            if (slug.includes('${day}')) {
-                return slug.replace(/\$\{day\}/g, day.toString());
+            if (slug.includes("${day}")) {
+                slug = slug.replace(/\$\{day\}/g, day.toString());
+            }
+            if (slug.includes("${hour}")) {
+                slug = slug.replace(/\$\{hour\}/g, hour.toString());
+            }
+            if (slug.includes("${am_pm}")) {
+                slug = slug.replace(/\$\{am_pm\}/g, amPm.toLowerCase());
             }
             return slug;
         });
     }
 
     async start() {
-        console.log(`[扫尾盘策略] 启动，白名单=${this.whitelist.join(',')}`);
+        console.log(`[扫尾盘策略] 启动，白名单=${this.whitelist.join(",")}`);
         console.log(
             `[扫尾盘策略] 使用Cron表达式调度：${this.cronExpression} (时区: ${this.cronTimeZone})`
         );
@@ -120,7 +138,7 @@ class TailConvergenceStrategy {
                 try {
                     await this.tick();
                 } catch (err) {
-                    console.error('[扫尾盘策略] 执行周期失败', err);
+                    console.error("[扫尾盘策略] 执行周期失败", err);
                 }
             },
             {
@@ -139,46 +157,48 @@ class TailConvergenceStrategy {
     }
 
     async tick() {
+        console.log(`[@${dayjs().format("YYYY-MM-DD HH:mm:ss")}] 开始执行tick`);
         // 每次tick时重新解析slugList，确保使用当天的日期
         this.whitelist = this.resolveSlugList(this.rawSlugList);
-        let signals = [];
-        // 获取信号 若信号已存在则跳过
-        for (const slug of this.whitelist) {
-            console.log(`\n[${slug} @${dayjs().format('YYYY-MM-DD HH:mm:ss')}] 开始处理`);
-            const curSignals = await this.processSlug(slug);
-            if (!curSignals.length) {
-                console.log(`[${slug} @${dayjs().format('YYYY-MM-DD HH:mm:ss')}] 无信号`);
-                continue;
-            }
-            signals.push(...curSignals);
-        }
-        signals = signals.sort((a, b) => a.chosen.price - b.chosen.price).slice(0, 3);
-        console.table(signals);
-        // 处理信号 若订单已存在则跳过
-        for (const signal of signals) {
-            console.log(
-                `\n[${signal.eventSlug}-${
-                    signal.marketSlug
-                }-${signal.chosen.outcome.toUpperCase()}@${signal.chosen.price.toFixed(
-                    3
-                )} @${dayjs().format('YYYY-MM-DD HH:mm:ss')}] 开始处理信号`
-            );
-            await this.handleSignal(signal);
-        }
         // 提交止盈订单 若订单已存在则跳过
         for (const takeProfitOrder of this.takeProfitOrders) {
             if (takeProfitOrder.orderId) {
                 continue;
             }
             console.log(
-                `\n[${takeProfitOrder.signal.eventSlug}-${
+                `\n[@${dayjs().format("YYYY-MM-DD HH:mm:ss")} ${takeProfitOrder.signal.eventSlug}-${
                     takeProfitOrder.signal.marketSlug
                 }-${takeProfitOrder.signal.chosen.outcome.toUpperCase()}@${takeProfitOrder.signal.chosen.price.toFixed(
                     3
-                )} @${dayjs().format('YYYY-MM-DD HH:mm:ss')}] 开始处理止盈订单`
+                )} ] 开始处理止盈订单`
             );
             const orderId = await this.placeTakeProfitOrder(takeProfitOrder);
             takeProfitOrder.orderId = orderId;
+        }
+
+        let signals = [];
+        // 获取信号 若信号已存在则跳过
+        for (const slug of this.whitelist) {
+            const curSignals = await this.processSlug(slug);
+            if (!curSignals.length) {
+                console.log(`[@${dayjs().format("YYYY-MM-DD HH:mm:ss")} ${slug}] 无信号`);
+                continue;
+            }
+            signals.push(...curSignals);
+        }
+
+        signals = signals.sort((a, b) => a.chosen.price - b.chosen.price).slice(0, 4);
+        console.table(signals);
+        // 处理信号 若订单已存在则跳过
+        for (const signal of signals) {
+            console.log(
+                `\n[@${dayjs().format("YYYY-MM-DD HH:mm:ss")} ${signal.eventSlug}-${
+                    signal.marketSlug
+                }-${signal.chosen.outcome.toUpperCase()}@${signal.chosen.price.toFixed(
+                    3
+                )} ] 开始处理信号`
+            );
+            await this.handleSignal(signal);
         }
     }
 
@@ -186,11 +206,11 @@ class TailConvergenceStrategy {
         const { tokenId, price, size, signal } = takeProfitOrder;
         const { orderID } = await this.client.placeOrder(price, size, PolySide.SELL, tokenId);
         console.log(
-            `[${signal.eventSlug}-${
+            `[@${dayjs().format("YYYY-MM-DD HH:mm:ss")} ${signal.eventSlug}-${
                 signal.marketSlug
             }-${signal.chosen.outcome.toUpperCase()}@${signal.chosen.price.toFixed(
                 3
-            )} @${dayjs().format('YYYY-MM-DD HH:mm:ss')}] 止盈订单已排队 @${price}`
+            )} ] 止盈订单已提交 @${price} orderId=${orderID}`
         );
         return orderID;
     }
@@ -199,25 +219,23 @@ class TailConvergenceStrategy {
     async processSlug(slug) {
         const markets = await this.listMarkets(slug);
         if (!markets.length) {
-            console.log(`[${slug} @${dayjs().format('YYYY-MM-DD HH:mm:ss')}] 事件尚早或无合适市场`);
-            return;
+            // console.log(`[${slug} @${dayjs().format('YYYY-MM-DD HH:mm:ss')}] 事件尚早或无合适市场`);
+            return [];
         }
-        console.log(
-            `[${slug} @${dayjs().format('YYYY-MM-DD HH:mm:ss')}] 市场数量=${markets.length}`
-        );
+        // console.log(
+        //     `[@${dayjs().format("YYYY-MM-DD HH:mm:ss")} ${slug}] 市场数量=${markets.length}`
+        // );
+
         const signals = [];
         for (const market of markets) {
             try {
-                console.log(
-                    `[${slug}-${market.slug} @${dayjs().format('YYYY-MM-DD HH:mm:ss')}] 开始处理`
-                );
                 const signal = await this.buildSignal(slug, market);
                 if (signal) {
                     signals.push(signal);
                 }
             } catch (err) {
                 console.error(
-                    `[${slug} @${dayjs().format('YYYY-MM-DD HH:mm:ss')}] 获取失败`,
+                    `[@${dayjs().format("YYYY-MM-DD HH:mm:ss")} ${slug}] 获取失败`,
                     err?.message ?? err
                 );
             }
@@ -233,23 +251,27 @@ class TailConvergenceStrategy {
     async listMarkets(slug) {
         const event = await polyClient.getEventBySlug(slug);
         if (!event) {
-            console.log(`[${slug} @${dayjs().format('YYYY-MM-DD HH:mm:ss')}] 事件获取失败`);
+            console.log(`[@${dayjs().format("YYYY-MM-DD HH:mm:ss")} ${slug}] 事件获取失败`);
             return [];
         }
         const markets = event?.markets || [];
         if (!markets.length) {
-            console.log(`[${slug} @${dayjs().format('YYYY-MM-DD HH:mm:ss')}] 未找到开放市场`);
+            console.log(`[@${dayjs().format("YYYY-MM-DD HH:mm:ss")} ${slug}] 未找到开放市场`);
             return [];
         }
         const timeMs = Date.parse(event.endDate) - Date.now();
-        const hoursToEnd = timeMs / 3_600_000;
-        if (hoursToEnd > this.maxHoursToEnd) {
+        const minutesToEnd = timeMs / 60_000;
+        if (minutesToEnd > this.maxMinutesToEnd) {
             console.log(
-                `[${slug} @${dayjs().format('YYYY-MM-DD HH:mm:ss')}] 事件剩余时间=${Math.round(
-                    hoursToEnd
-                )}小时 超过最大时间=${this.maxHoursToEnd}小时，不处理`
+                `[@${dayjs().format("YYYY-MM-DD HH:mm:ss")} ${slug}] 事件剩余时间=${Math.round(
+                    minutesToEnd
+                )}分钟 超过最大时间=${this.maxMinutesToEnd}分钟，不处理`
             );
             return [];
+        }
+        if(this.ampMin > 0) {
+            // 涨跌事件 不进行价格预检查
+            return markets;
         }
         return markets.filter((market) => {
             const lastTradePrice = market.lastTradePrice ?? 0.5;
@@ -274,31 +296,48 @@ class TailConvergenceStrategy {
         const topPrice = Math.max(yesPrice, noPrice);
 
         if (topPrice < this.triggerPriceGt || topPrice > this.triggerPriceLt) {
-            console.log(
-                `[${eventSlug}-${market.slug} @${dayjs().format(
-                    'YYYY-MM-DD HH:mm:ss'
-                )}] 顶部价格=${topPrice.toFixed(3)} 触发价格范围=[${this.triggerPriceGt}, ${
-                    this.triggerPriceLt
-                }],不处理`
-            );
+            // console.log(
+            //     `[@${dayjs().format("YYYY-MM-DD HH:mm:ss")} ${eventSlug}-${market.slug}] 顶部价格=${topPrice.toFixed(3)} 触发价格范围=[${this.triggerPriceGt}, ${
+            //         this.triggerPriceLt
+            //     }],不处理`
+            // );
             return null;
         }
+        if (this.ampMin > 0) {
+            // 波动率检查
+            // 查询该币对、最近一根小时级别k线、检查波动率是否大于${this.ampMin}
+            const kline = await this.fetchHourKline(market.slug);
+            if(!kline) {
+                return null;
+            }
+            const amp = Math.abs(kline[1] - kline[4]) / kline[1];
+            if(amp < this.ampMin) {
+                console.log(
+                    `[@${dayjs().format("YYYY-MM-DD HH:mm:ss")} ${eventSlug}-${market.slug}] 波动率=${amp.toFixed(3)} 小于最小波动率=${this.ampMin}，不处理`
+                );
+                return null;
+            }
+            console.log(
+                `[@${dayjs().format("YYYY-MM-DD HH:mm:ss")} ${eventSlug}-${market.slug}] 波动率=${amp.toFixed(3)} 大于最小波动率=${this.ampMin}，处理`
+            );
+        }
+
         const candidate =
             yesPrice >= noPrice
                 ? {
                       tokenId: yesTokenId,
                       price: yesPrice,
-                      outcome: 'yes',
+                      outcome: "yes",
                   }
                 : {
                       tokenId: noTokenId,
                       price: noPrice,
-                      outcome: 'no',
+                      outcome: "no",
                   };
         console.log(
-            `[${eventSlug}-${market.slug} @${dayjs().format(
-                'YYYY-MM-DD HH:mm:ss'
-            )}] 选择=${candidate.outcome.toUpperCase()}@${candidate.price.toFixed(3)}`
+            `[@${dayjs().format("YYYY-MM-DD HH:mm:ss")} ${eventSlug}-${
+                market.slug
+            }] 选择=${candidate.outcome.toUpperCase()}@${candidate.price.toFixed(3)}`
         );
         return {
             eventSlug: eventSlug,
@@ -307,6 +346,14 @@ class TailConvergenceStrategy {
             yesPrice,
             noPrice,
         };
+    }
+    async fetchHourKline(slug) {
+        // 调用binance 现货api获取ETH最近一根小时级别k线、
+        const kline = await axios.get(`https://api.binance.com/api/v3/klines?symbol=ETHUSDT&interval=1h&limit=1`);
+        if(!kline) {
+            return null;
+        }
+        return kline.data[0];
     }
 
     async fetchBestAsk(tokenId) {
@@ -329,17 +376,21 @@ class TailConvergenceStrategy {
 
         if (existingOrder) {
             console.log(
-                `[${eventSlug}-${marketSlug}-${signal.chosen.outcome.toUpperCase()}@${signal.chosen.price.toFixed(
+                `[@${dayjs().format(
+                    "YYYY-MM-DD HH:mm:ss"
+                )} ${eventSlug}-${marketSlug}-${signal.chosen.outcome.toUpperCase()}@${signal.chosen.price.toFixed(
                     3
-                )} @${dayjs().format('YYYY-MM-DD HH:mm:ss')}] 已建仓，跳过`
+                )} ] 已建仓，跳过`
             );
             return;
         }
 
         console.log(
-            `[${eventSlug}-${marketSlug}-${signal.chosen.outcome.toUpperCase()}@${signal.chosen.price.toFixed(
+            `[@${dayjs().format(
+                "YYYY-MM-DD HH:mm:ss"
+            )} ${eventSlug}-${marketSlug}-${signal.chosen.outcome.toUpperCase()}@${signal.chosen.price.toFixed(
                 3
-            )} @${dayjs().format('YYYY-MM-DD HH:mm:ss')}] 执行建仓`
+            )} ] 执行建仓`
         );
         await this.openPosition({
             tokenId: signal.chosen.tokenId,
@@ -354,9 +405,9 @@ class TailConvergenceStrategy {
         const sizeShares = Math.abs(Math.round(sizeUsd / price));
         if (sizeShares <= 0) {
             console.error(
-                `[${signal.eventSlug}-${signal.marketSlug} @${dayjs().format(
-                    'YYYY-MM-DD HH:mm:ss'
-                )}] 无效的份额数量=${sizeShares} 金额=${sizeUsd} 价格=${price}`
+                `[@${dayjs().format("YYYY-MM-DD HH:mm:ss")} ${signal.eventSlug}-${
+                    signal.marketSlug
+                }] 无效的份额数量=${sizeShares} 金额=${sizeUsd} 价格=${price}`
             );
             return;
         }
@@ -364,26 +415,22 @@ class TailConvergenceStrategy {
         let orderId;
         if (this.test) {
             console.log(
-                `[测试] ${signal.eventSlug}-${
+                `[@${dayjs().format("YYYY-MM-DD HH:mm:ss")} 测试] ${signal.eventSlug}-${
                     signal.marketSlug
                 }-${signal.chosen.outcome.toUpperCase()}@${signal.chosen.price.toFixed(
                     3
-                )} @${dayjs().format(
-                    'YYYY-MM-DD HH:mm:ss'
-                )}] 建仓 -> ${signal.chosen.outcome.toUpperCase()} @ ${price.toFixed(
+                )} ] 建仓 -> ${signal.chosen.outcome.toUpperCase()} @ ${price.toFixed(
                     3
                 )} 数量=${sizeShares}`
             );
             orderId = `test-${Date.now()}`;
         } else {
             console.log(
-                `[${signal.eventSlug}-${
+                `[@${dayjs().format("YYYY-MM-DD HH:mm:ss")} ${signal.eventSlug}-${
                     signal.marketSlug
                 }-${signal.chosen.outcome.toUpperCase()}@${signal.chosen.price.toFixed(
                     3
-                )} @${dayjs().format(
-                    'YYYY-MM-DD HH:mm:ss'
-                )}] 建仓 -> ${signal.chosen.outcome.toUpperCase()} @ ${price.toFixed(
+                )} ] 建仓 -> ${signal.chosen.outcome.toUpperCase()} @ ${price.toFixed(
                     3
                 )} 数量=${sizeShares}`
             );
@@ -391,11 +438,11 @@ class TailConvergenceStrategy {
                 .placeOrder(price, sizeShares, PolySide.BUY, tokenId)
                 .catch((err) => {
                     console.error(
-                        `[${signal.eventSlug}-${
+                        `[@${dayjs().format("YYYY-MM-DD HH:mm:ss")} ${signal.eventSlug}-${
                             signal.marketSlug
                         }-${signal.chosen.outcome.toUpperCase()}@${signal.chosen.price.toFixed(
                             3
-                        )} @${dayjs().format('YYYY-MM-DD HH:mm:ss')}] 建仓订单失败`,
+                        )} ] 建仓订单失败`,
                         err?.message ?? err
                     );
                     return null;
@@ -403,22 +450,23 @@ class TailConvergenceStrategy {
 
             if (!entryOrder?.success) {
                 console.log(
-                    `[${signal.eventSlug}-${
+                    `[@${dayjs().format("YYYY-MM-DD HH:mm:ss")} ${signal.eventSlug}-${
                         signal.marketSlug
                     }-${signal.chosen.outcome.toUpperCase()}@${signal.chosen.price.toFixed(
                         3
-                    )} @${dayjs().format('YYYY-MM-DD HH:mm:ss')}] 建仓被拒绝:`,
+                    )} ] 建仓被拒绝:`,
                     entryOrder
                 );
+
                 return;
             }
             orderId = entryOrder.orderID || entryOrder.id;
             console.log(
-                `[${signal.eventSlug}-${
+                `[@${dayjs().format("YYYY-MM-DD HH:mm:ss")} ${signal.eventSlug}-${
                     signal.marketSlug
                 }-${signal.chosen.outcome.toUpperCase()}@${signal.chosen.price.toFixed(
                     3
-                )} @${dayjs().format('YYYY-MM-DD HH:mm:ss')}] 建仓成交，订单号=${orderId}`
+                )} ] 建仓成交，订单号=${orderId}`
             );
 
             // 待止盈订单入队列
@@ -450,7 +498,7 @@ class TailConvergenceStrategy {
         // 读取当前配置，确保保存时保留配置
         let currentConfig = {};
         try {
-            const data = JSON.parse(readFileSync(STATE_FILE, 'utf8'));
+            const data = JSON.parse(readFileSync(this.stateFilePath, "utf8"));
             currentConfig = data.config || {};
         } catch (err) {
             // 如果读取失败，使用当前实例的配置值
@@ -459,7 +507,8 @@ class TailConvergenceStrategy {
                 triggerPriceGt: this.triggerPriceGt,
                 triggerPriceLt: this.triggerPriceLt,
                 takeProfitPrice: this.takeProfitPrice,
-                maxHoursToEnd: this.maxHoursToEnd,
+                maxMinutesToEnd: this.maxMinutesToEnd,
+                ampMin: this.ampMin,
                 test: this.test,
                 slugList: this.rawSlugList,
                 cronExpression: this.cronExpression,
@@ -471,11 +520,8 @@ class TailConvergenceStrategy {
             config: currentConfig,
             orders: this.orders,
         };
-        await writeFile(STATE_FILE, `${JSON.stringify(payload, null, 2)}\n`);
+        await writeFile(this.stateFilePath, `${JSON.stringify(payload, null, 4)}\n`);
     }
 }
 
-const bot = new TailConvergenceStrategy();
-bot.start().catch((err) => {
-    console.error('[扫尾盘策略] 致命错误', err);
-});
+export { TailConvergenceStrategy };

@@ -1,0 +1,17 @@
+{
+    "config": {
+        "positionSizeUsdc": 5,
+        "triggerPriceGt": 0.95,
+        "triggerPriceLt": 0.99,
+        "takeProfitPrice": 0.998,
+        "maxMinutesToEnd": 5,
+        "cronExpression": "55/1 * * * *",
+        "cronTimeZone": "America/New_York",
+        "ampMin": 0.001,
+        "test": false,
+        "slugList": [
+            "ethereum-up-or-down-november-${day}-${hour}${am_pm}-et"
+        ]
+    },
+    "orders": []
+}

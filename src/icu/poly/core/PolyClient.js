@@ -66,8 +66,8 @@ export class PolyClient {
 
     /**
      * 获取事件根据slug、支持重试
-     * @param {} slug 
-     * @returns 
+     * @param {} slug
+     * @returns
      */
     async getEventBySlug(slug) {
         const url = `${this.marketHost}/events/slug/${slug}`;
@@ -355,7 +355,7 @@ export class PolyClient {
             end_date_min: endDateMin,
             end_date_max: endDateMax,
             start_date_max: startDateMax,
-            limit: 100,
+            limit: 200,
         };
         // 仅发送有值的查询参数，避免污染默认查询
         const filteredParams = Object.entries(params).reduce((result, [key, value]) => {
@@ -540,6 +540,14 @@ export class PolyClient {
         const client = await this.getClient();
         const [tickSize, negRisk] = await Promise.all([client.getTickSize(tokenId), client.getNegRisk(tokenId),]);
 
+        // Validate price range based on tickSize: min = tickSize, max = 1 - tickSize
+        const tickSizeNum = parseFloat(tickSize);
+        const minPrice = tickSizeNum;
+        const maxPrice = 1 - tickSizeNum;
+        if (price < minPrice || price > maxPrice) {
+            throw new Error(`invalid price (${price}), min: ${minPrice} - max: ${maxPrice}`);
+        }
+
         const orderRequest = {
             tokenID: tokenId, price, side, size, feeRateBps: 0,
         };
@@ -595,8 +603,8 @@ export class PolyClient {
      * 获取挂单根据订单Id
      * 如果已成交、状态为MATCHED
      * 未成交状态LIVE、已取消状态CANCELED、
-     *  
-     * @param {} orderId 
+     *
+     * @param {} orderId
      * @returns {Promise<import("@polymarket/clob-client").OpenOrder>}
      */
     async getOrder(orderId) {
@@ -635,20 +643,21 @@ export class PolyClient {
         if (!Array.isArray(trades)) {
             throw new Error("Failed to fetch personal trade history");
         }
-        const cache = new Map();
         const conditionIds = new Set();
         const rlt = new Map();
+        const maxSize = 50;
         for (let trade of trades) {
             let conditionId = trade.market;
             conditionIds.add(conditionId);
+            if (conditionIds.size >= 20) {
+                // api限制 最多返回20个条件id
+                break;
+            }
             if (trade.maker_address === makerAddress) {
                 let order = rlt.get(trade.taker_order_id);
                 if (order) {
                     order.matched_amount += Number(trade.size);
                 } else {
-                    if (rlt.size === 10) {
-                        break;
-                    }
                     rlt.set(trade.taker_order_id, {
                         "conditionId": conditionId,
                         "question": 'market.question',
@@ -686,6 +695,10 @@ export class PolyClient {
                         rlt.set(makerOrder.order_id, makerOrder);
                     }
                 }
+            }
+            if(rlt.size >= maxSize) {
+                // 最多返回50个订单
+                break;
             }
         }
         let markets = await this.getMarketByConditionId([...conditionIds]);

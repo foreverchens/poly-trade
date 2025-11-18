@@ -408,7 +408,13 @@
 
         <div class="section-head">
             <h2 class="subtitle">持仓</h2>
-            <button id="positionRefresh">刷新持仓</button>
+            <div class="section-actions">
+                <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
+                    <input type="checkbox" id="hideSmallPositions" style="cursor: pointer;" />
+                    <span>隐藏小额仓位</span>
+                </label>
+                <button id="positionRefresh">刷新持仓</button>
+            </div>
         </div>
 
         <table id="tbl">
@@ -469,7 +475,8 @@
                 <tr>
                     <th>市场</th>
                     <th>订单ID</th>
-                    <th>方向</th>
+                    <th>市场方向</th>
+                    <th>订单方向</th>
                     <th>价格</th>
                     <th>数量</th>
                     <th>成交额</th>
@@ -479,7 +486,7 @@
             </thead>
             <tbody id="tradeBody">
                 <tr>
-                    <td colspan="8" class="muted" data-th="提示">等待加载…</td>
+                    <td colspan="9" class="muted" data-th="提示">等待加载…</td>
                 </tr>
             </tbody>
         </table>
@@ -498,8 +505,9 @@
         const fmtMoney = (n) => Number.isFinite(Number(n)) ? '$' + f2(n) : '—';
         const PRICE_DISPLAY_MULTIPLIER = 100;
         const PRICE_DISPLAY_DECIMALS = 1;
-        const MIN_ORDER_PRICE = 0.01;
-        const MAX_ORDER_PRICE = 0.999;
+        // 价格范围：双开区间 (0, 1)，不包含0和1
+        const MIN_ORDER_PRICE = 0.0001; // 用于HTML input的min属性（接近0但不等于0）
+        const MAX_ORDER_PRICE = 0.9999; // 用于HTML input的max属性（接近1但不等于1）
         const formatPrice = (value, { fallback = '—', withUnit = true } = {}) => {
             const num = Number(value);
             if (!Number.isFinite(num)) return fallback;
@@ -542,11 +550,7 @@
                     if (!Number.isFinite(currentValue) || currentValue <= MIN_CURRENT_VALUE) {
                         return false;
                     }
-                    const price = Number(item?.curPrice);
-                    if (!Number.isFinite(price)) {
-                        return true;
-                    }
-                    return price !== 0 && price !== 1;
+                    return true;
                 });
             }
             return data;
@@ -616,9 +620,20 @@
                 return { ...r, bestBid, bestAsk, tokenId };
             }));
 
+            // 根据单选框状态过滤小额仓位
+            const hideSmall = $('hideSmallPositions')?.checked || false;
+            const filteredRows = hideSmall
+                ? enrichedRows.filter(r => {
+                    const size = Number(r.size ?? 0);
+                    const cur = r.bestAsk !== null ? r.bestAsk : Number(r.curPrice ?? 0);
+                    const currentValue = size * cur;
+                    return currentValue > MIN_CURRENT_VALUE;
+                })
+                : enrichedRows;
+
             let totalValue = 0, totalPnl = 0, totalCost = 0;
 
-            enrichedRows.forEach(r => {
+            filteredRows.forEach(r => {
                 const title = r.title || r.slug || r.asset || '—';
                 const outcome = r.outcome ? `（${r.outcome}）` : '';
                 const icon = r.icon || '';
@@ -790,7 +805,7 @@
                 if (tradeHint) tradeHint.textContent = '成交刷新失败';
                 const tbody = $('tradeBody');
                 if (tbody) {
-                    tbody.innerHTML = `<tr><td colspan="8" class="muted" data-th="提示">成交刷新失败</td></tr>`;
+                    tbody.innerHTML = `<tr><td colspan="9" class="muted" data-th="提示">成交刷新失败</td></tr>`;
                 }
             } finally {
                 if (tradeHint) tradeHint.classList.remove('loading');
@@ -871,7 +886,7 @@
             if (!flatTrades.length) {
                 status.textContent = '最近3天暂无成交';
                 const tr = document.createElement('tr');
-                tr.innerHTML = `<td colspan="8" class="muted" data-th="提示">最近3天暂无成交</td>`;
+                tr.innerHTML = `<td colspan="9" class="muted" data-th="提示">最近3天暂无成交</td>`;
                 tbody.appendChild(tr);
                 return;
             }
@@ -887,11 +902,13 @@
                     : undefined;
                 const marketLabel = trade.question || '—';
                 const orderIdLabel = shorten(trade.order_id || trade.orderId || '');
+                const outcome = trade.outcome || '—';
                 const trEl = document.createElement('tr');
                 trEl.innerHTML = `
         <td data-th="市场">${marketLabel}</td>
         <td data-th="订单ID">${orderIdLabel}</td>
-        <td data-th="方向"><span class="${trade.side === 'BUY' ? 'green' : 'red'}">${trade.side || '—'}</span></td>
+        <td data-th="市场方向">${outcome}</td>
+        <td data-th="订单方向"><span class="${trade.side === 'BUY' ? 'green' : 'red'}">${trade.side || '—'}</span></td>
         <td data-th="价格" class="right">${formatPrice(price)}</td>
         <td data-th="数量" class="right">${f2(size)}</td>
         <td data-th="成交额" class="right">${fmtMoney(notional)}</td>
@@ -1050,8 +1067,9 @@
             const price = parsePriceInput(priceInput.value);
             const size = Number(sizeInput.value);
 
-            if (!Number.isFinite(price) || price < MIN_ORDER_PRICE || price > MAX_ORDER_PRICE) {
-                alert(`请输入有效的价格（${formatPrice(MIN_ORDER_PRICE)} - ${formatPrice(MAX_ORDER_PRICE)}）`);
+            // 价格校验：双开区间 (0, 1)，不包含0和1
+            if (!Number.isFinite(price) || price <= 0 || price >= 1) {
+                alert(`请输入有效的价格（大于 0% 且小于 100%）`);
                 return;
             }
 
@@ -1126,7 +1144,7 @@
                     console.error(tradeResult.reason);
                     tradeHint.textContent = '成交加载失败';
                     const tbody = $('tradeBody');
-                    tbody.innerHTML = `<tr><td colspan="8" class="muted" data-th="提示">成交列表加载失败</td></tr>`;
+                    tbody.innerHTML = `<tr><td colspan="9" class="muted" data-th="提示">成交列表加载失败</td></tr>`;
                 }
 
                 if (openOrderResult.status === 'fulfilled') {
@@ -1185,6 +1203,15 @@
         const positionRefreshBtn = $('positionRefresh');
         if (positionRefreshBtn) {
             positionRefreshBtn.addEventListener('click', () => refreshPositionsSection($('addr').value.trim()));
+        }
+        const hideSmallPositionsCheckbox = $('hideSmallPositions');
+        if (hideSmallPositionsCheckbox) {
+            hideSmallPositionsCheckbox.addEventListener('change', () => {
+                const addr = $('addr').value.trim();
+                if (addr && addr.startsWith('0x') && addr.length >= 10) {
+                    refreshPositionsSection(addr);
+                }
+            });
         }
         const openOrderRefreshBtn = $('openOrderRefresh');
         if (openOrderRefreshBtn) {

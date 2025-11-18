@@ -34,6 +34,7 @@ import { fileURLToPath } from "url";
 import dayjs from "dayjs";
 import cron from "node-cron";
 import { polyClient, PolyClient, PolySide } from "./core/PolyClient.js";
+import { th } from "zod/v4/locales";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -161,20 +162,21 @@ class TailConvergenceStrategy {
         // 每次tick时重新解析slugList，确保使用当天的日期
         this.whitelist = this.resolveSlugList(this.rawSlugList);
         // 提交止盈订单 若订单已存在则跳过
-        for (const takeProfitOrder of this.takeProfitOrders) {
-            if (takeProfitOrder.orderId) {
-                continue;
-            }
-            console.log(
-                `\n[@${dayjs().format("YYYY-MM-DD HH:mm:ss")} ${takeProfitOrder.signal.eventSlug}-${
-                    takeProfitOrder.signal.marketSlug
-                }-${takeProfitOrder.signal.chosen.outcome.toUpperCase()}@${takeProfitOrder.signal.chosen.price.toFixed(
-                    3
-                )} ] 开始处理止盈订单`
-            );
-            const orderId = await this.placeTakeProfitOrder(takeProfitOrder);
-            takeProfitOrder.orderId = orderId;
-        }
+        // 统一在结算10分钟之后再提交止盈订单
+        // for (const takeProfitOrder of this.takeProfitOrders) {
+        //     if (takeProfitOrder.orderId) {
+        //         continue;
+        //     }
+        //     console.log(
+        //         `\n[@${dayjs().format("YYYY-MM-DD HH:mm:ss")} ${takeProfitOrder.signal.eventSlug}-${
+        //             takeProfitOrder.signal.marketSlug
+        //         }-${takeProfitOrder.signal.chosen.outcome.toUpperCase()}@${takeProfitOrder.signal.chosen.price.toFixed(
+        //             3
+        //         )} ] 开始处理止盈订单`
+        //     );
+        //     const orderId = await this.placeTakeProfitOrder(takeProfitOrder);
+        //     takeProfitOrder.orderId = orderId;
+        // }
 
         let signals = [];
         // 获取信号 若信号已存在则跳过
@@ -269,7 +271,7 @@ class TailConvergenceStrategy {
             );
             return [];
         }
-        if(this.ampMin > 0) {
+        if (this.ampMin > 0) {
             // 涨跌事件 不进行价格预检查
             return markets;
         }
@@ -296,29 +298,35 @@ class TailConvergenceStrategy {
         const topPrice = Math.max(yesPrice, noPrice);
 
         if (topPrice < this.triggerPriceGt || topPrice > this.triggerPriceLt) {
-            // console.log(
-            //     `[@${dayjs().format("YYYY-MM-DD HH:mm:ss")} ${eventSlug}-${market.slug}] 顶部价格=${topPrice.toFixed(3)} 触发价格范围=[${this.triggerPriceGt}, ${
-            //         this.triggerPriceLt
-            //     }],不处理`
-            // );
+            console.log(
+                `[@${dayjs().format("YYYY-MM-DD HH:mm:ss")} ${eventSlug}-${
+                    market.slug
+                }] 顶部价格=${topPrice.toFixed(3)} 触发价格范围=[${this.triggerPriceGt}, ${
+                    this.triggerPriceLt
+                }],不处理`
+            );
             return null;
         }
         if (this.ampMin > 0) {
-            // 波动率检查
+            // 波动率检查、仅涨跌事件
             // 查询该币对、最近一根小时级别k线、检查波动率是否大于${this.ampMin}
             const kline = await this.fetchHourKline(market.slug);
-            if(!kline) {
+            if (!kline) {
                 return null;
             }
             const amp = Math.abs(kline[1] - kline[4]) / kline[1];
-            if(amp < this.ampMin) {
+            if (amp < this.ampMin) {
                 console.log(
-                    `[@${dayjs().format("YYYY-MM-DD HH:mm:ss")} ${eventSlug}-${market.slug}] 波动率=${amp.toFixed(3)} 小于最小波动率=${this.ampMin}，不处理`
+                    `[@${dayjs().format("YYYY-MM-DD HH:mm:ss")} ${eventSlug}-${
+                        market.slug
+                    }] 波动率=${amp.toFixed(3)} 小于最小波动率=${this.ampMin}，不处理`
                 );
                 return null;
             }
             console.log(
-                `[@${dayjs().format("YYYY-MM-DD HH:mm:ss")} ${eventSlug}-${market.slug}] 波动率=${amp.toFixed(3)} 大于最小波动率=${this.ampMin}，处理`
+                `[@${dayjs().format("YYYY-MM-DD HH:mm:ss")} ${eventSlug}-${
+                    market.slug
+                }] 波动率=${amp.toFixed(3)} 大于最小波动率=${this.ampMin}，处理`
             );
         }
 
@@ -349,8 +357,10 @@ class TailConvergenceStrategy {
     }
     async fetchHourKline(slug) {
         // 调用binance 现货api获取ETH最近一根小时级别k线、
-        const kline = await axios.get(`https://api.binance.com/api/v3/klines?symbol=ETHUSDT&interval=1h&limit=1`);
-        if(!kline) {
+        const kline = await axios.get(
+            `https://api.binance.com/api/v3/klines?symbol=ETHUSDT&interval=1h&limit=1`
+        );
+        if (!kline) {
             return null;
         }
         return kline.data[0];
@@ -469,7 +479,11 @@ class TailConvergenceStrategy {
                 )} ] 建仓成交，订单号=${orderId}`
             );
 
-            // 待止盈订单入队列
+            if (this.ampMin > 0) {
+                // 涨跌事件 就此结束、暂不进行止盈、下单精度异义
+                 return;
+            }
+            // 待止盈订单入队列 涨跌事件的
             this.takeProfitOrders.push({
                 tokenId: tokenId,
                 price: this.takeProfitPrice,

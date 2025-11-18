@@ -6,7 +6,7 @@ import { TailConvergenceStrategy } from "./convergence-bot.js";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const configFiles = [
-    // "./data/convergence-yes.data.json",
+    "./data/convergence-yes.data.json",
     "./data/convergence-up.data.json",
 ];
 

@@ -1,11 +1,11 @@
 {
     "config": {
-        "positionSizeUsdc": 5,
+        "positionSizeUsdc": 10,
         "triggerPriceGt": 0.95,
         "triggerPriceLt": 0.99,
-        "takeProfitPrice": 0.998,
+        "takeProfitPrice": 0.99,
         "maxMinutesToEnd": 5,
-        "cronExpression": "55/1 * * * *",
+        "cronExpression": "* * * * *",
         "cronTimeZone": "America/New_York",
         "ampMin": 0.001,
         "test": false,

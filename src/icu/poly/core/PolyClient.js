@@ -2,17 +2,18 @@ import "dotenv/config";
 import pkg from "@polymarket/clob-client";
 import { PriceHistoryInterval } from "@polymarket/clob-client/dist/types.js";
 import { SignatureType } from "@polymarket/order-utils";
-import { Wallet } from "@ethersproject/wallet";
 import { ethers } from "ethers";
+import { Wallet as EthersV5Wallet } from "@ethersproject/wallet";
+import { JsonRpcProvider } from "@ethersproject/providers";
 import axios from "axios";
-import dayjs from 'dayjs';
-import { tr } from "zod/v4/locales";
+import dayjs from "dayjs";
 
 const { ClobClient, OrderType, Side, AssetType } = pkg;
 
 const DEFAULT_HOST = "https://clob.polymarket.com";
 const DEFAULT_CHAIN_ID = 137;
-const DEFAULT_TOKEN_ID = "87769991026114894163580777793845523168226980076553814689875238288185044414090";
+const DEFAULT_TOKEN_ID =
+    "87769991026114894163580777793845523168226980076553814689875238288185044414090";
 
 const DEFAULT_ORDER_TYPE = OrderType.GTC;
 const DEFAULT_SIGNATURE_TYPE = SignatureType.EOA;
@@ -23,9 +24,20 @@ const DEFAULT_HTTP_TIMEOUT = 30000; // 30 seconds
 const VALID_PRICE_HISTORY_INTERVALS = new Set(Object.values(PriceHistoryInterval));
 const USDC_E_ADDRESS = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"; // Polygon USDC.e
 const DEFAULT_RPC_URL = process.env.RPC_URL || "https://polygon-rpc.com";
+const CTF_ADDRESS = "0x4D97DCd97eC945f40cF65F87097ACe5EA0476045"; // CTF(ERC1155)
+const CTF_EXCHANGE_ADDRESS = "0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E"; // CTF Exchange
 const ERC20_ABI = [
     "function balanceOf(address owner) view returns (uint256)",
     "function decimals() view returns (uint8)",
+];
+const ERC1155_ABI = [
+    "function balanceOf(address account, uint256 id) view returns (uint256)",
+    "function setApprovalForAll(address operator, bool approved) external",
+    "function isApprovedForAll(address account, address operator) view returns (bool)",
+];
+const CTF_ABI = [
+    "function redeemPositions(address collateralToken, bytes32 conditionId, uint256[] calldata indexSets) external",
+    "function getCollectionId(bytes32 parentCollectionId, uint256 conditionId, uint256 indexSet) pure returns (bytes32)",
 ];
 
 export class PolyClient {
@@ -43,8 +55,11 @@ export class PolyClient {
         this.rewardsHost = DEFAULT_REWARDS_HOST;
         this.dataHost = DEFAULT_DATA_HOST;
         this.marketHost = DEFAULT_MARKET_HOST;
-        this.signer = new Wallet(privateKey);
+        // 使用 ethers v5 的 Wallet 给 ClobClient（@polymarket/clob-client 需要 v5 API）
+        this.signer = new EthersV5Wallet(privateKey);
         this.funderAddress = this.signer.address;
+        // 保存私钥供 redeemToken 等新功能使用（需要 ethers v6）
+        this.privateKey = privateKey;
         this.clientPromise = null;
         this.mock = mock;
     }
@@ -54,15 +69,20 @@ export class PolyClient {
             this.clientPromise = (async () => {
                 const baseClient = new ClobClient(this.host, this.chainId, this.signer);
                 const creds = await baseClient.deriveApiKey();
-                return new ClobClient(this.host, this.chainId, this.signer, creds, this.signatureType, this.funderAddress,);
+                return new ClobClient(
+                    this.host,
+                    this.chainId,
+                    this.signer,
+                    creds,
+                    this.signatureType,
+                    this.funderAddress
+                );
             })();
         }
         return this.clientPromise;
     }
 
-
     /*================市场API===================*/
-
 
     /**
      * 获取事件根据slug、支持重试
@@ -79,7 +99,9 @@ export class PolyClient {
                 break;
             } catch (err) {
                 cnt++;
-                console.error(`[${slug}] HTTP请求失败: ${err.code} ${err.message} ${err.response?.status} ${err.response?.data}`);
+                console.error(
+                    `[${slug}] HTTP请求失败: ${err.code} ${err.message} ${err.response?.status} ${err.response?.data}`
+                );
                 await sleep(1000);
             }
         } while (cnt < 3);
@@ -123,13 +145,17 @@ export class PolyClient {
         }
 
         const resolvedInterval = interval ?? PriceHistoryInterval.ONE_HOUR;
-        const intervalToUse = typeof resolvedInterval === "string" ? resolvedInterval.trim() : resolvedInterval;
+        const intervalToUse =
+            typeof resolvedInterval === "string" ? resolvedInterval.trim() : resolvedInterval;
         if (!VALID_PRICE_HISTORY_INTERVALS.has(intervalToUse)) {
             throw new Error(`Invalid interval "${interval}" supplied to getPricesHistory`);
         }
 
         const client = await this.getClient();
-        const response = await client.getPricesHistory({ market: resolvedMarket, interval: intervalToUse });
+        const response = await client.getPricesHistory({
+            market: resolvedMarket,
+            interval: intervalToUse,
+        });
         const history = Array.isArray(response) ? response : response?.history;
 
         if (!Array.isArray(history)) {
@@ -287,18 +313,20 @@ export class PolyClient {
             timeout: DEFAULT_HTTP_TIMEOUT,
         });
         let data = response.data;
-        data = data.data.filter(ele => {
-            return ele.market_competitiveness > 0;
-        }).slice(0, limit).sort((e1, e2) => {
-            // 奖励降序
-            const s1 = e2.rewards_config[0].rate_per_day - e1.rewards_config[0].rate_per_day;
-            // 奖励相等、竞争程度生序
-            const s2 = e1['market_competitiveness'] - e2['market_competitiveness'];
-            return s1 === 0 ? s2 : s1;
-        });
+        data = data.data
+            .filter((ele) => {
+                return ele.market_competitiveness > 0;
+            })
+            .slice(0, limit)
+            .sort((e1, e2) => {
+                // 奖励降序
+                const s1 = e2.rewards_config[0].rate_per_day - e1.rewards_config[0].rate_per_day;
+                // 奖励相等、竞争程度生序
+                const s2 = e1["market_competitiveness"] - e2["market_competitiveness"];
+                return s1 === 0 ? s2 : s1;
+            });
         return data;
     }
-
 
     /**
      * tags:
@@ -350,7 +378,7 @@ export class PolyClient {
             active: true,
             enableOrderBook: true,
             volume_num_min: 0,
-            order: 'endDate',
+            order: "endDate",
             ascending: true,
             end_date_min: endDateMin,
             end_date_max: endDateMax,
@@ -365,10 +393,18 @@ export class PolyClient {
             return result;
         }, {});
 
-        const response = await axios.get(url, { params: filteredParams, timeout: DEFAULT_HTTP_TIMEOUT });
+        const response = await axios.get(url, {
+            params: filteredParams,
+            timeout: DEFAULT_HTTP_TIMEOUT,
+        });
         let dataArr = response?.data;
-        dataArr = dataArr.filter(ele => {
-            return (ele.lastTradePrice >= 0.01 && ele.lastTradePrice <= 0.99) && (ele.bestAsk >= 0.01 && ele.bestAsk <= 0.99);
+        dataArr = dataArr.filter((ele) => {
+            return (
+                ele.lastTradePrice >= 0.01 &&
+                ele.lastTradePrice <= 0.99 &&
+                ele.bestAsk >= 0.01 &&
+                ele.bestAsk <= 0.99
+            );
         });
         // for (let market of dataArr) {
         //     const [yesId, noId] = JSON.parse(market.clobTokenIds);
@@ -381,13 +417,12 @@ export class PolyClient {
         return dataArr;
     }
 
-
     async getMarketByConditionId(conditionIds) {
         if (!Array.isArray(conditionIds)) {
             conditionIds = [conditionIds];
         }
         const params = new URLSearchParams();
-        conditionIds.forEach(id => params.append('condition_ids', id));
+        conditionIds.forEach((id) => params.append("condition_ids", id));
         const url = `${this.marketHost}/markets?${params.toString()}`;
         const response = await axios.get(url, { params: params, timeout: DEFAULT_HTTP_TIMEOUT });
         return response?.data;
@@ -458,7 +493,7 @@ export class PolyClient {
             active: true,
             enableOrderBook: true,
             volume_num_min: 0,
-            order: 'endDate',
+            order: "endDate",
             ascending: true,
             end_date_min: endDateMin,
             end_date_max: endDateMax,
@@ -473,10 +508,12 @@ export class PolyClient {
             return result;
         }, {});
 
-        const response = await axios.get(url, { params: filteredParams, timeout: DEFAULT_HTTP_TIMEOUT });
+        const response = await axios.get(url, {
+            params: filteredParams,
+            timeout: DEFAULT_HTTP_TIMEOUT,
+        });
         return response?.data;
     }
-
 
     /*================交易API===================*/
 
@@ -504,7 +541,6 @@ export class PolyClient {
         }
         return orders;
     }
-
 
     /**
      * curl --request GET \ --url 'https://data-api.polymarket.com/positions?sizeThreshold=1&limit=100&sortBy=TOKENS&sortDirection=DESC&user=0x'
@@ -534,26 +570,37 @@ export class PolyClient {
      */
     async placeOrder(price, size, side, tokenId = this.tokenId) {
         if (this.mock) {
-            return { orderID: "0x8e818dd295884776b0929b768ceaa43104ec2a34866127ca3d765280e3498054" };
+            return {
+                orderID: "0x8e818dd295884776b0929b768ceaa43104ec2a34866127ca3d765280e3498054",
+            };
         }
         side = side.toUpperCase();
         const client = await this.getClient();
-        const [tickSize, negRisk] = await Promise.all([client.getTickSize(tokenId), client.getNegRisk(tokenId),]);
+        const [tickSize, negRisk] = await Promise.all([
+            client.getTickSize(tokenId),
+            client.getNegRisk(tokenId),
+        ]);
 
         // Validate price range based on tickSize: min = tickSize, max = 1 - tickSize
         const tickSizeNum = parseFloat(tickSize);
         const minPrice = tickSizeNum;
         const maxPrice = 1 - tickSizeNum;
-        if (price < minPrice || price > maxPrice) {
+        if (price < 0 || price > 1) {
+            // 有些事件明明最小tickSize是0.01，但是价格却可以到0.001，这里需要进行处理
             throw new Error(`invalid price (${price}), min: ${minPrice} - max: ${maxPrice}`);
         }
 
         const orderRequest = {
-            tokenID: tokenId, price, side, size, feeRateBps: 0,
+            tokenID: tokenId,
+            price,
+            side,
+            size,
+            feeRateBps: 0,
         };
 
         const orderOptions = {
-            tickSize, negRisk,
+            tickSize,
+            negRisk,
         };
 
         return client.createAndPostOrder(orderRequest, orderOptions, this.orderType);
@@ -578,7 +625,6 @@ export class PolyClient {
         return client.cancelOrder({ orderID });
     }
 
-
     /*================持仓API===================*/
     /**
      * 获取当前地址的公开持仓（不需要签名）
@@ -588,16 +634,18 @@ export class PolyClient {
         const address = this.funderAddress || this.signer.address;
         const url = `${this.dataHost}/positions`;
         const params = {
-            sizeThreshold: 1, limit: 100, sortBy: "TOKENS", sortDirection: "DESC", user: address,
+            sizeThreshold: 1,
+            limit: 100,
+            sortBy: "TOKENS",
+            sortDirection: "DESC",
+            user: address,
         };
 
         const response = await axios.get(url, { params, timeout: DEFAULT_HTTP_TIMEOUT });
         return response?.data;
     }
 
-
     /*================订单API===================*/
-
 
     /**
      * 获取挂单根据订单Id
@@ -636,9 +684,14 @@ export class PolyClient {
      */
     async listMyTrades({ makerAddress } = {}) {
         const client = await this.getClient();
-        const resolvedAddress = (makerAddress || this.funderAddress || await client.signer.getAddress()).toLowerCase();
+        const resolvedAddress = (
+            makerAddress ||
+            this.funderAddress ||
+            (await client.signer.getAddress())
+        ).toLowerCase();
         const trades = await client.getTrades({
-            maker_address: resolvedAddress, after: '' + dayjs().subtract(3, 'day').unix()
+            maker_address: resolvedAddress,
+            after: "" + dayjs().subtract(3, "day").unix(),
         });
         if (!Array.isArray(trades)) {
             throw new Error("Failed to fetch personal trade history");
@@ -659,26 +712,26 @@ export class PolyClient {
                     order.matched_amount += Number(trade.size);
                 } else {
                     rlt.set(trade.taker_order_id, {
-                        "conditionId": conditionId,
-                        "question": 'market.question',
-                        "order_id": trade.taker_order_id,
-                        "owner": trade.owner,
-                        "maker_address": makerAddress,
-                        "matched_amount": Number(trade.size),
-                        "price": trade.price,
-                        "asset_id": trade.asset_id,
-                        "outcome": trade.outcome,
-                        "side": trade.side,
-                        "transaction_hash": trade.transaction_hash,
-                        "match_time": Number(trade.match_time)
-                    })
+                        conditionId: conditionId,
+                        question: "market.question",
+                        order_id: trade.taker_order_id,
+                        owner: trade.owner,
+                        maker_address: makerAddress,
+                        matched_amount: Number(trade.size),
+                        price: trade.price,
+                        asset_id: trade.asset_id,
+                        outcome: trade.outcome,
+                        side: trade.side,
+                        transaction_hash: trade.transaction_hash,
+                        match_time: Number(trade.match_time),
+                    });
                 }
             } else {
                 for (let makerOrder of trade.maker_orders) {
                     if (makerOrder.maker_address !== makerAddress) {
                         continue;
                     }
-                    makerOrder.question = '';
+                    makerOrder.question = "";
                     makerOrder.transaction_hash = trade.transaction_hash;
                     makerOrder.match_time = Number(trade.match_time);
                     makerOrder.matched_amount = Number(makerOrder.matched_amount);
@@ -696,7 +749,7 @@ export class PolyClient {
                     }
                 }
             }
-            if(rlt.size >= maxSize) {
+            if (rlt.size >= maxSize) {
                 // 最多返回50个订单
                 break;
             }
@@ -708,9 +761,9 @@ export class PolyClient {
         }, {});
 
         let rltArr = [...rlt.values()];
-        rltArr.forEach(ele => {
+        rltArr.forEach((ele) => {
             ele.question = conditionIdMap[ele.conditionId];
-        })
+        });
         return rltArr;
     }
 
@@ -744,7 +797,7 @@ export class PolyClient {
      * @returns {Promise<string>}
      */
     async getUsdcEBalance() {
-        const provider = new ethers.JsonRpcProvider(DEFAULT_RPC_URL, this.chainId);
+        const provider = new JsonRpcProvider(DEFAULT_RPC_URL, this.chainId);
         const usdcContract = new ethers.Contract(USDC_E_ADDRESS, ERC20_ABI, provider);
         const address = this.funderAddress || this.signer.address;
 
@@ -754,14 +807,37 @@ export class PolyClient {
                 usdcContract.decimals(),
             ]);
 
-            // 格式化余额，保留代币的小数位精度
-            const formattedBalance = ethers.formatUnits(balance, decimals);
+            // 格式化余额，保留代币的小数位精度 (ethers v5)
+            const formattedBalance = ethers.utils.formatUnits(balance, decimals);
             return formattedBalance;
         } catch (error) {
             throw new Error(`Failed to fetch USDC.e balance: ${error.message}`);
         }
     }
 
+    /**
+     * 获取指定 token 的余额（ERC1155）
+     * @param {string} tokenId - Token ID
+     * @returns {Promise<string>}
+     */
+    async getTokenBalance(tokenId) {
+        if (!tokenId) {
+            throw new Error("tokenId is required to fetch token balance");
+        }
+
+        const provider = new JsonRpcProvider(DEFAULT_RPC_URL, this.chainId);
+        const ctfContract = new ethers.Contract(CTF_ADDRESS, ERC1155_ABI, provider);
+        const address = this.funderAddress || this.signer.address;
+
+        try {
+            const balance = await ctfContract.balanceOf(address, tokenId);
+            // ERC1155 通常使用 18 位小数 (ethers v5)
+            const formattedBalance = ethers.utils.formatUnits(balance, 18);
+            return formattedBalance * 1000000;
+        } catch (error) {
+            throw new Error(`Failed to fetch token balance: ${error.message}`);
+        }
+    }
 }
 export const PolySide = Side;
 export const PolyAssetType = AssetType;

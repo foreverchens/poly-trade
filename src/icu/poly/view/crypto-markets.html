@@ -497,13 +497,20 @@
         list.forEach(item => {
             const ticker = extractEventTicker(item);
             if (!ticker || map.has(ticker)) return;
+            if (ticker.includes("15m") || ticker.includes("4h")) return;
             const event = Array.isArray(item.events) ? item.events[0] : null;
             map.set(ticker, {
                 ticker,
                 label: event?.title || event?.slug || ticker,
+                endDate: event?.endDate || null,
             });
         });
-        return [...map.values()].sort((a, b) => a.ticker.localeCompare(b.ticker));
+        return [...map.values()].sort((a, b) => {
+            const endA = normalizeSortDate(a.endDate);
+            const endB = normalizeSortDate(b.endDate);
+            if (endA !== endB) return endA - endB;
+            return a.ticker.localeCompare(b.ticker);
+        });
     }
 
     function updateEventFilterOptions(list) {

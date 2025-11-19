@@ -1,4 +1,6 @@
 /**
+ * Example state payload (truncated) for quick reference:
+ *
  * {
  *     "id": "72027",
  *     "ticker": "bitcoin-above-on-november-10",
@@ -26,101 +28,76 @@
  * }
  */
 import "dotenv/config";
-import { readFile, writeFile } from "fs/promises";
+import { writeFile } from "fs/promises";
 import { readFileSync } from "fs";
 import path from "path";
-import axios from "axios";
 import { fileURLToPath } from "url";
 import dayjs from "dayjs";
 import cron from "node-cron";
-import { polyClient, PolyClient, PolySide } from "./core/PolyClient.js";
-import { th } from "zod/v4/locales";
+import { PolyClient, PolySide } from "../../core/PolyClient.js";
+import {
+    loadStateFile,
+    resolveSlugList,
+    fetchMarketsWithinTime,
+    fetchBestAsk,
+} from "./common.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const DEFAULT_STATE_FILE = path.resolve(__dirname, "./data/tail-convergence-yes.data.json");
+const DEFAULT_STATE_FILE = path.resolve(__dirname, "./data/convergence-yes.data.json");
 
+/**
+ * Yes/No tail convergence strategy.
+ * Mirrors the up-bot structure but specializes in YES/NO markets that hug 0 or 1.
+ */
 class TailConvergenceStrategy {
+    /**
+     * @param {string} stateFilePath - Persisted state/config file.
+     */
     constructor(stateFilePath = DEFAULT_STATE_FILE) {
         this.client = new PolyClient();
-        this.marketHost = this.client.marketHost;
         this.stateFilePath = stateFilePath;
 
-        // 从状态文件读取配置
-        try {
-            const data = JSON.parse(readFileSync(this.stateFilePath, "utf8"));
-            const config = data.config || {};
+        const { config, orders } = loadStateFile(this.stateFilePath);
 
-            // 读取配置
-            this.positionSizeUsdc = config.positionSizeUsdc;
-            this.triggerPriceGt = config.triggerPriceGt;
-            this.triggerPriceLt = config.triggerPriceLt;
-            this.takeProfitPrice = config.takeProfitPrice;
-            this.maxMinutesToEnd = config.maxMinutesToEnd;
-            this.test = config.test ?? true;
-            this.httpTimeout = 10000;
-            this.ampMin = config.ampMin ?? 0;
-            // cron 表达式，默认：美国东部时间 10:00-11:59，每5分钟执行一次
-            // 格式：分钟 小时 日 月 星期
-            this.cronExpression = config.cronExpression;
-            this.cronTimeZone = config.cronTimeZone;
+        /**
+         * --- Config bootstrap ------------------------------------------------
+         * 1. Position sizing：positionSizeUsdc。
+         * 2. 触发区间/波动要求：triggerPriceGt/Lt、maxMinutesToEnd。
+         * 3. 调度节奏：cronExpression/cronTimeZone + slugList。
+         * 4. 实验控制：test、takeProfitPrice、httpTimeout。
+         */
+        this.positionSizeUsdc = config.positionSizeUsdc;
+        this.triggerPriceGt = config.triggerPriceGt;
+        this.triggerPriceLt = config.triggerPriceLt;
+        this.takeProfitPrice = config.takeProfitPrice;
+        this.maxMinutesToEnd = config.maxMinutesToEnd;
+        this.test = config.test ?? true;
+        this.httpTimeout = 10000;
+        // cron 表达式，默认：美国东部时间 10:00-11:59，每5分钟执行一次
+        // 格式：分钟 小时 日 月 星期
+        this.cronExpression = config.cronExpression;
+        this.cronTimeZone = config.cronTimeZone;
 
-            // 保存原始slugList模板（包含${day}占位符）
-            this.rawSlugList = config.slugList || [];
-            // 初始化时解析一次
-            this.whitelist = this.resolveSlugList(this.rawSlugList);
-            // 止盈订单队列
-            this.takeProfitOrders = [];
+        // 保存原始 slugList 模板（包含 ${day} 占位符）
+        this.rawSlugList = config.slugList || [];
+        // 初始化时解析一次，后续在 tick 内按需替换
+        this.whitelist = resolveSlugList(this.rawSlugList);
+        // 待提交的止盈订单
+        this.takeProfitOrders = [];
 
-            // 读取订单数据
-            this.orders = data.orders || {};
-        } catch (err) {
-            throw new Error(`Failed to load state file ${this.stateFilePath}: ${err.message}`);
-        }
+        // 读取订单数据
+        this.orders = orders;
 
         console.log(
-            `\n[扫尾盘策略] \n建仓金额=${this.positionSizeUsdc}USDC\n触发价格范围=[${this.triggerPriceGt}, ${this.triggerPriceLt}]\n止盈价格=${this.takeProfitPrice}\n最大剩余时间=${this.maxMinutesToEnd}分钟，最小振幅=${this.ampMin}，是否测试模式=${this.test}`
+            `\n[扫尾盘策略-YesNo] \n建仓金额=${this.positionSizeUsdc}USDC\n触发价格范围=[${this.triggerPriceGt}, ${this.triggerPriceLt}]\n止盈价格=${this.takeProfitPrice}\n最大剩余时间=${this.maxMinutesToEnd}分钟，是否测试模式=${this.test}`
         );
         console.log(`[扫尾盘策略] Cron表达式=${this.cronExpression}，时区=${this.cronTimeZone}`);
     }
 
     /**
-     * 解析slug列表，将${day}、${hour}、${am_pm}占位符替换为美国东部时间的对应值
-     * @param {string[]} slugList 原始slug列表
-     * @returns {string[]} 解析后的slug列表
+     * Register cron scheduler and optionally kick off an immediate test loop.
      */
-    resolveSlugList(slugList) {
-        // 获取美国东部时间的日期、12小时制小时数和AM/PM
-        const now = new Date();
-        const dayFormatter = new Intl.DateTimeFormat("en-US", {
-            timeZone: "America/New_York",
-            day: "numeric",
-        });
-        const day = parseInt(dayFormatter.format(now), 10);
-
-        const hourFormatter = new Intl.DateTimeFormat("en-US", {
-            timeZone: "America/New_York",
-            hour: "numeric",
-            hour12: true,
-        });
-        const hourParts = hourFormatter.formatToParts(now);
-        const hour = parseInt(hourParts.find((part) => part.type === "hour")?.value || "0", 10);
-        const amPm = hourParts.find((part) => part.type === "dayPeriod")?.value || "AM";
-
-        return slugList.map((slug) => {
-            if (slug.includes("${day}")) {
-                slug = slug.replace(/\$\{day\}/g, day.toString());
-            }
-            if (slug.includes("${hour}")) {
-                slug = slug.replace(/\$\{hour\}/g, hour.toString());
-            }
-            if (slug.includes("${am_pm}")) {
-                slug = slug.replace(/\$\{am_pm\}/g, amPm.toLowerCase());
-            }
-            return slug;
-        });
-    }
-
     async start() {
         console.log(`[扫尾盘策略] 启动，白名单=${this.whitelist.join(",")}`);
         console.log(
@@ -157,26 +134,29 @@ class TailConvergenceStrategy {
         }
     }
 
+    /**
+     * 单次 tick：刷新白名单、提交止盈、收集信号并尝试建仓。
+     */
     async tick() {
         console.log(`[@${dayjs().format("YYYY-MM-DD HH:mm:ss")}] 开始执行tick`);
         // 每次tick时重新解析slugList，确保使用当天的日期
-        this.whitelist = this.resolveSlugList(this.rawSlugList);
+        this.whitelist = resolveSlugList(this.rawSlugList);
         // 提交止盈订单 若订单已存在则跳过
         // 统一在结算10分钟之后再提交止盈订单
-        // for (const takeProfitOrder of this.takeProfitOrders) {
-        //     if (takeProfitOrder.orderId) {
-        //         continue;
-        //     }
-        //     console.log(
-        //         `\n[@${dayjs().format("YYYY-MM-DD HH:mm:ss")} ${takeProfitOrder.signal.eventSlug}-${
-        //             takeProfitOrder.signal.marketSlug
-        //         }-${takeProfitOrder.signal.chosen.outcome.toUpperCase()}@${takeProfitOrder.signal.chosen.price.toFixed(
-        //             3
-        //         )} ] 开始处理止盈订单`
-        //     );
-        //     const orderId = await this.placeTakeProfitOrder(takeProfitOrder);
-        //     takeProfitOrder.orderId = orderId;
-        // }
+        for (const takeProfitOrder of this.takeProfitOrders) {
+            if (takeProfitOrder.orderId) {
+                continue;
+            }
+            console.log(
+                `\n[@${dayjs().format("YYYY-MM-DD HH:mm:ss")} ${takeProfitOrder.signal.eventSlug}-${
+                    takeProfitOrder.signal.marketSlug
+                }-${takeProfitOrder.signal.chosen.outcome.toUpperCase()}@${takeProfitOrder.signal.chosen.price.toFixed(
+                    3
+                )} ] 开始处理止盈订单`
+            );
+            const orderId = await this.placeTakeProfitOrder(takeProfitOrder);
+            takeProfitOrder.orderId = orderId;
+        }
 
         let signals = [];
         // 获取信号 若信号已存在则跳过
@@ -217,7 +197,9 @@ class TailConvergenceStrategy {
         return orderID;
     }
 
-    // 请求单个 slug 的事件详情，再逐一检查旗下市场
+    /**
+     * 请求单个 slug 的事件详情，再逐一检查旗下市场。
+     */
     async processSlug(slug) {
         const markets = await this.listMarkets(slug);
         if (!markets.length) {
@@ -251,30 +233,11 @@ class TailConvergenceStrategy {
      * @returns
      */
     async listMarkets(slug) {
-        const event = await polyClient.getEventBySlug(slug);
-        if (!event) {
-            console.log(`[@${dayjs().format("YYYY-MM-DD HH:mm:ss")} ${slug}] 事件获取失败`);
-            return [];
-        }
-        const markets = event?.markets || [];
+        const markets = await fetchMarketsWithinTime(slug, this.maxMinutesToEnd);
         if (!markets.length) {
-            console.log(`[@${dayjs().format("YYYY-MM-DD HH:mm:ss")} ${slug}] 未找到开放市场`);
             return [];
         }
-        const timeMs = Date.parse(event.endDate) - Date.now();
-        const minutesToEnd = timeMs / 60_000;
-        if (minutesToEnd > this.maxMinutesToEnd) {
-            console.log(
-                `[@${dayjs().format("YYYY-MM-DD HH:mm:ss")} ${slug}] 事件剩余时间=${Math.round(
-                    minutesToEnd
-                )}分钟 超过最大时间=${this.maxMinutesToEnd}分钟，不处理`
-            );
-            return [];
-        }
-        if (this.ampMin > 0) {
-            // 涨跌事件 不进行价格预检查
-            return markets;
-        }
+        // YesNo事件：基于lastTradePrice进行价格预检查
         return markets.filter((market) => {
             const lastTradePrice = market.lastTradePrice ?? 0.5;
             if (
@@ -287,13 +250,15 @@ class TailConvergenceStrategy {
         });
     }
 
-    // 构建交易信号：限定剩余时间，并找出概率 >= entryTrigger 的方向
+    /**
+     * 构建交易信号：限定剩余时间，并找出概率 >= entryTrigger 的方向。
+     */
     async buildSignal(eventSlug, market) {
         const [yesTokenId, noTokenId] = JSON.parse(market.clobTokenIds);
 
         const [yesPrice, noPrice] = await Promise.all([
-            this.fetchBestAsk(yesTokenId),
-            this.fetchBestAsk(noTokenId),
+            fetchBestAsk(this.client, yesTokenId),
+            fetchBestAsk(this.client, noTokenId),
         ]);
         const topPrice = Math.max(yesPrice, noPrice);
 
@@ -306,28 +271,6 @@ class TailConvergenceStrategy {
                 }],不处理`
             );
             return null;
-        }
-        if (this.ampMin > 0) {
-            // 波动率检查、仅涨跌事件
-            // 查询该币对、最近一根小时级别k线、检查波动率是否大于${this.ampMin}
-            const kline = await this.fetchHourKline(market.slug);
-            if (!kline) {
-                return null;
-            }
-            const amp = Math.abs(kline[1] - kline[4]) / kline[1];
-            if (amp < this.ampMin) {
-                console.log(
-                    `[@${dayjs().format("YYYY-MM-DD HH:mm:ss")} ${eventSlug}-${
-                        market.slug
-                    }] 波动率=${amp.toFixed(3)} 小于最小波动率=${this.ampMin}，不处理`
-                );
-                return null;
-            }
-            console.log(
-                `[@${dayjs().format("YYYY-MM-DD HH:mm:ss")} ${eventSlug}-${
-                    market.slug
-                }] 波动率=${amp.toFixed(3)} 大于最小波动率=${this.ampMin}，处理`
-            );
         }
 
         const candidate =
@@ -355,27 +298,10 @@ class TailConvergenceStrategy {
             noPrice,
         };
     }
-    async fetchHourKline(slug) {
-        // 调用binance 现货api获取ETH最近一根小时级别k线、
-        const kline = await axios.get(
-            `https://api.binance.com/api/v3/klines?symbol=ETHUSDT&interval=1h&limit=1`
-        );
-        if (!kline) {
-            return null;
-        }
-        return kline.data[0];
-    }
 
-    async fetchBestAsk(tokenId) {
-        const orderBook = await this.client.getOrderBook(tokenId);
-        if (!orderBook) {
-            return null;
-        }
-        const asks = orderBook.asks;
-        return asks.length ? Number(asks[asks.length - 1].price) : 0;
-    }
-
-    // 检查是否已建仓，未建仓则执行建仓
+    /**
+     * 检查是否已建仓，未建仓则执行建仓。
+     */
     async handleSignal(signal) {
         const eventSlug = signal.eventSlug;
         const marketSlug = signal.marketSlug;
@@ -410,7 +336,9 @@ class TailConvergenceStrategy {
         });
     }
 
-    // 负责下买单、并记录状态、同时止盈订单入队列
+    /**
+     * 负责下买单、并记录状态、同时止盈订单入队列。
+     */
     async openPosition({ tokenId, price, sizeUsd, signal }) {
         const sizeShares = Math.abs(Math.round(sizeUsd / price));
         if (sizeShares <= 0) {
@@ -433,65 +361,60 @@ class TailConvergenceStrategy {
                     3
                 )} 数量=${sizeShares}`
             );
-            orderId = `test-${Date.now()}`;
-        } else {
-            console.log(
-                `[@${dayjs().format("YYYY-MM-DD HH:mm:ss")} ${signal.eventSlug}-${
-                    signal.marketSlug
-                }-${signal.chosen.outcome.toUpperCase()}@${signal.chosen.price.toFixed(
-                    3
-                )} ] 建仓 -> ${signal.chosen.outcome.toUpperCase()} @ ${price.toFixed(
-                    3
-                )} 数量=${sizeShares}`
-            );
-            const entryOrder = await this.client
-                .placeOrder(price, sizeShares, PolySide.BUY, tokenId)
-                .catch((err) => {
-                    console.error(
-                        `[@${dayjs().format("YYYY-MM-DD HH:mm:ss")} ${signal.eventSlug}-${
-                            signal.marketSlug
-                        }-${signal.chosen.outcome.toUpperCase()}@${signal.chosen.price.toFixed(
-                            3
-                        )} ] 建仓订单失败`,
-                        err?.message ?? err
-                    );
-                    return null;
-                });
-
-            if (!entryOrder?.success) {
-                console.log(
+            return;
+        }
+        console.log(
+            `[@${dayjs().format("YYYY-MM-DD HH:mm:ss")} ${signal.eventSlug}-${
+                signal.marketSlug
+            }-${signal.chosen.outcome.toUpperCase()}@${signal.chosen.price.toFixed(
+                3
+            )} ] 建仓 -> ${signal.chosen.outcome.toUpperCase()} @ ${price.toFixed(
+                3
+            )} 数量=${sizeShares}`
+        );
+        const entryOrder = await this.client
+            .placeOrder(price, sizeShares, PolySide.BUY, tokenId)
+            .catch((err) => {
+                console.error(
                     `[@${dayjs().format("YYYY-MM-DD HH:mm:ss")} ${signal.eventSlug}-${
                         signal.marketSlug
                     }-${signal.chosen.outcome.toUpperCase()}@${signal.chosen.price.toFixed(
                         3
-                    )} ] 建仓被拒绝:`,
-                    entryOrder
+                    )} ] 建仓订单失败`,
+                    err?.message ?? err
                 );
+                return null;
+            });
 
-                return;
-            }
-            orderId = entryOrder.orderID || entryOrder.id;
+        if (!entryOrder?.success) {
             console.log(
                 `[@${dayjs().format("YYYY-MM-DD HH:mm:ss")} ${signal.eventSlug}-${
                     signal.marketSlug
                 }-${signal.chosen.outcome.toUpperCase()}@${signal.chosen.price.toFixed(
                     3
-                )} ] 建仓成交，订单号=${orderId}`
+                )} ] 建仓被拒绝:`,
+                entryOrder
             );
 
-            if (this.ampMin > 0) {
-                // 涨跌事件 就此结束、暂不进行止盈、下单精度异义
-                 return;
-            }
-            // 待止盈订单入队列 涨跌事件的
-            this.takeProfitOrders.push({
-                tokenId: tokenId,
-                price: this.takeProfitPrice,
-                size: sizeShares,
-                signal: signal,
-                orderId: null,
-            });
+            return;
         }
+        orderId = entryOrder.orderID || entryOrder.id;
+        console.log(
+            `[@${dayjs().format("YYYY-MM-DD HH:mm:ss")} ${signal.eventSlug}-${
+                signal.marketSlug
+            }-${signal.chosen.outcome.toUpperCase()}@${signal.chosen.price.toFixed(
+                3
+            )} ] 建仓成交，订单号=${orderId}`
+        );
+
+        // YesNo事件：待止盈订单入队列
+        this.takeProfitOrders.push({
+            tokenId: tokenId,
+            price: this.takeProfitPrice,
+            size: sizeShares,
+            signal: signal,
+            orderId: null,
+        });
 
         // 记录订单到orders字段
         const eventSlug = signal.eventSlug;
@@ -522,7 +445,6 @@ class TailConvergenceStrategy {
                 triggerPriceLt: this.triggerPriceLt,
                 takeProfitPrice: this.takeProfitPrice,
                 maxMinutesToEnd: this.maxMinutesToEnd,
-                ampMin: this.ampMin,
                 test: this.test,
                 slugList: this.rawSlugList,
                 cronExpression: this.cronExpression,

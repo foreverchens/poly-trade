@@ -12,8 +12,6 @@ const { ClobClient, OrderType, Side, AssetType } = pkg;
 
 const DEFAULT_HOST = "https://clob.polymarket.com";
 const DEFAULT_CHAIN_ID = 137;
-const DEFAULT_TOKEN_ID =
-    "87769991026114894163580777793845523168226980076553814689875238288185044414090";
 
 const DEFAULT_ORDER_TYPE = OrderType.GTC;
 const DEFAULT_SIGNATURE_TYPE = SignatureType.EOA;
@@ -49,7 +47,6 @@ export class PolyClient {
 
         this.host = DEFAULT_HOST;
         this.chainId = DEFAULT_CHAIN_ID;
-        this.tokenId = DEFAULT_TOKEN_ID;
         this.signatureType = DEFAULT_SIGNATURE_TYPE;
         this.orderType = DEFAULT_ORDER_TYPE;
         this.rewardsHost = DEFAULT_REWARDS_HOST;
@@ -139,7 +136,7 @@ export class PolyClient {
             return "";
         };
 
-        const resolvedMarket = normalizeMarket(market) || normalizeMarket(this.tokenId);
+        const resolvedMarket = normalizeMarket(market);
         if (!resolvedMarket) {
             throw new Error("market is required to fetch price history");
         }
@@ -171,7 +168,7 @@ export class PolyClient {
      * @param tokenId
      * @returns {Promise<*>}
      */
-    async getPrice(side, tokenId = this.tokenId) {
+    async getPrice(side, tokenId) {
         if (!side) {
             throw new Error("side is required to fetch price");
         }
@@ -203,7 +200,7 @@ export class PolyClient {
      * @param tokenId
      * @returns {Promise<*|OrderBookSummary>}
      */
-    async getOrderBook(tokenId = this.tokenId) {
+    async getOrderBook(tokenId) {
         try {
             const client = await this.getClient();
             return client.getOrderBook(tokenId);
@@ -568,28 +565,34 @@ export class PolyClient {
      *   success: true
      * }}
      */
-    async placeOrder(price, size, side, tokenId = this.tokenId) {
+    async placeOrder(price, size, side, tokenId) {
         if (this.mock) {
             return {
-                orderID: "0x8e818dd295884776b0929b768ceaa43104ec2a34866127ca3d765280e3498054",
+                success: true,
+                orderID: `0xTest-${Date.now()}`,
+                takingAmount: size,
+                status: "live"
             };
         }
-        side = side.toUpperCase();
-        const client = await this.getClient();
-        const [tickSize, negRisk] = await Promise.all([
-            client.getTickSize(tokenId),
-            client.getNegRisk(tokenId),
-        ]);
 
-        // Validate price range based on tickSize: min = tickSize, max = 1 - tickSize
-        const tickSizeNum = parseFloat(tickSize);
-        const minPrice = tickSizeNum;
-        const maxPrice = 1 - tickSizeNum;
         if (price < 0 || price > 1) {
             // 有些事件明明最小tickSize是0.01，但是价格却可以到0.001，这里需要进行处理
-            throw new Error(`invalid price (${price}), min: ${minPrice} - max: ${maxPrice}`);
+            throw new Error(`invalid price (${price}), min: 0 - max: 1`);
         }
 
+        side = side.toUpperCase();
+        const client = await this.getClient();
+
+        // 清除缓存以确保获取最新值
+        // 这是关键：必须在每次下单前清除缓存，因为 tickSize 可能会动态变化
+        // 例如：市场初始 tickSize 是 0.01，后来变为 0.001，如果不清除缓存会一直使用旧的 0.01
+        delete client.tickSizes[tokenId];
+        delete client.negRisk[tokenId];
+
+        // 获取 negRisk（negRisk 通常不会变化，但为了保险也清除缓存）
+        const negRisk = await client.getNegRisk(tokenId);
+        const tickSize = await client.getTickSize(tokenId);
+        
         const orderRequest = {
             tokenID: tokenId,
             price,

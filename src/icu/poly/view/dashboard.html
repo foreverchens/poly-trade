@@ -26,9 +26,11 @@
         }
 
         .wrap {
-            max-width: 1080px;
-            margin: 24px auto;
-            padding: 0 16px;
+            width: 100%;
+            max-width: none;
+            margin: 0;
+            padding: 24px 16px;
+            box-sizing: border-box;
         }
 
         .title {
@@ -169,7 +171,6 @@
 
         thead th {
             font-weight: 600;
-            text-align: left;
             padding: 10px;
             border-bottom: 1px solid var(--line);
             white-space: nowrap
@@ -183,6 +184,11 @@
 
         #tradeTable th,
         #tradeTable td {
+            text-align: center;
+        }
+
+        #tbl th,
+        #tbl td {
             text-align: center;
         }
 

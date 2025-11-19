@@ -5,7 +5,9 @@
   "scripts": {
     "test": "node --test test/**/*.test.js",
     "test:single": "node --test --test-name-pattern",
-    "start": "node src/icu/poly/web-server.js"
+    "start": "node src/icu/poly/web-server.js",
+    "lint": "eslint . --ext .js,.mjs,.cjs",
+    "format": "prettier --write ."
   },
   "keywords": [],
   "author": "",
@@ -24,5 +26,12 @@
     "node-cron": "^4.2.1",
     "viem": "^2.38.6",
     "zod": "^4.1.12"
+  },
+  "devDependencies": {
+    "eslint": "^9.39.1",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-import": "^2.32.0",
+    "eslint-plugin-prettier": "^5.5.4",
+    "prettier": "^3.6.2"
   }
 }

@@ -367,7 +367,7 @@ export class PolyClient {
     async listCryptoMarketSortedByEndDate(tagId = 21) {
         const url = `${this.marketHost}/markets`;
         const endDateMin = new Date().toISOString();
-        const endDateMax = new Date(new Date().getTime() + 1000 * 60 * 60 * 24 * 7).toISOString();
+        const endDateMax = new Date(new Date().getTime() + 1000 * 60 * 60 * 24 * 2).toISOString();
         const startDateMax = new Date(new Date().getTime() - 1000 * 60 * 60 * 24).toISOString();
         const params = {
             tag_id: tagId,
@@ -592,7 +592,7 @@ export class PolyClient {
         // 获取 negRisk（negRisk 通常不会变化，但为了保险也清除缓存）
         const negRisk = await client.getNegRisk(tokenId);
         const tickSize = await client.getTickSize(tokenId);
-        
+
         const orderRequest = {
             tokenID: tokenId,
             price,
@@ -811,8 +811,7 @@ export class PolyClient {
             ]);
 
             // 格式化余额，保留代币的小数位精度 (ethers v5)
-            const formattedBalance = ethers.utils.formatUnits(balance, decimals);
-            return formattedBalance;
+            return ethers.utils.formatUnits(balance, decimals);
         } catch (error) {
             throw new Error(`Failed to fetch USDC.e balance: ${error.message}`);
         }
@@ -842,6 +841,7 @@ export class PolyClient {
         }
     }
 }
+
 export const PolySide = Side;
 export const PolyAssetType = AssetType;
 export const polyClient = new PolyClient();

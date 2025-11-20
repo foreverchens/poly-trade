@@ -60,13 +60,25 @@
             border-radius: 8px;
         }
 
-        input {
+        input:not([type="checkbox"]) {
             min-width: 420px;
             flex: 1 1 420px;
         }
 
         button {
-            cursor: pointer
+            cursor: pointer;
+            transition: all 0.2s ease;
+            font-weight: 500;
+        }
+
+        button:hover {
+            background: #1a2332;
+            border-color: #2d3a4e;
+            transform: translateY(-1px);
+        }
+
+        button:active {
+            transform: translateY(0);
         }
 
         .close-order {
@@ -280,8 +292,72 @@
         .section-actions {
             display: flex;
             align-items: center;
-            gap: 10px;
+            gap: 12px;
             flex-wrap: wrap;
+        }
+
+        .section-actions label {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            cursor: pointer;
+            padding: 6px 12px;
+            border-radius: 6px;
+            transition: all 0.2s ease;
+            user-select: none;
+        }
+
+        .section-actions label:hover {
+            background: rgba(255, 255, 255, 0.05);
+        }
+
+        .section-actions input[type="checkbox"] {
+            width: 18px;
+            height: 18px;
+            min-width: 18px;
+            margin: 0;
+            cursor: pointer;
+            appearance: none;
+            background: #1a2332;
+            border: 2px solid #2d3a4e;
+            border-radius: 4px;
+            position: relative;
+            transition: all 0.2s ease;
+            flex-shrink: 0;
+        }
+
+        .section-actions input[type="checkbox"]:hover {
+            border-color: #4a5f7f;
+            background: #1f2a3a;
+        }
+
+        .section-actions input[type="checkbox"]:checked {
+            background: var(--green);
+            border-color: var(--green);
+        }
+
+        .section-actions input[type="checkbox"]:checked::after {
+            content: '';
+            position: absolute;
+            left: 5px;
+            top: 2px;
+            width: 5px;
+            height: 10px;
+            border: solid white;
+            border-width: 0 2px 2px 0;
+            transform: rotate(45deg);
+        }
+
+        .section-actions label span {
+            font-size: 14px;
+            color: var(--text);
+            transition: color 0.2s ease;
+        }
+
+        .section-actions button {
+            padding: 8px 16px;
+            font-size: 14px;
+            min-width: auto;
         }
 
         a.link {
@@ -338,7 +414,8 @@
         }
 
         @media (max-width:700px) {
-            input {
+            input[type="text"],
+            input[type="number"] {
                 min-width: 240px
             }
 
@@ -415,9 +492,9 @@
         <div class="section-head">
             <h2 class="subtitle">持仓</h2>
             <div class="section-actions">
-                <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
-                    <input type="checkbox" id="hideSmallPositions" style="cursor: pointer;" />
-                    <span>隐藏小额仓位</span>
+                <label>
+                    <input type="checkbox" id="hideSmallPositions" />
+                    <span>显示小额仓位</span>
                 </label>
                 <button id="positionRefresh">刷新持仓</button>
             </div>
@@ -536,7 +613,8 @@
             return text.length <= head + tail ? text : `${text.slice(0, head)}…${text.slice(-tail)}`;
         };
         const POLY_EVENT_BASE_URL = "https://polymarket.com/event/";
-        const MIN_CURRENT_VALUE = 1;
+        const MIN_CURRENT_VALUE = 0.1;
+        let cachedPositions = []; // 保存已加载的原始持仓数据
 
         async function fetchPositions(addr) {
             const url = `https://data-api.polymarket.com/positions?sizeThreshold=1&limit=100&sortBy=TOKENS&sortDirection=DESC&user=${addr}`;
@@ -550,14 +628,9 @@
                     .replace(/'/g, '"');
                 data = JSON.parse(fixed);
             }
+            // 移除过滤逻辑，返回所有仓位，让 renderPositions 根据复选框状态决定是否过滤
             if (Array.isArray(data)) {
-                return data.filter((item) => {
-                    const currentValue = Number(item?.currentValue ?? item?.current_value ?? 0);
-                    if (!Number.isFinite(currentValue) || currentValue <= MIN_CURRENT_VALUE) {
-                        return false;
-                    }
-                    return true;
-                });
+                return data;
             }
             return data;
         }
@@ -620,25 +693,63 @@
             const tbody = $('tbody');
             tbody.innerHTML = '';
 
-            const enrichedRows = await Promise.all(rows.map(async (r) => {
+            // 先用 curPrice 判断哪些是小额仓位，小额仓位永远不调用订单簿API
+            const showSmall = $('hideSmallPositions')?.checked || false;
+
+            // 判断是否为小额仓位（基于 curPrice）
+            const isSmallPosition = (r) => {
+                const size = Number(r.size ?? 0);
+                const cur = Number(r.curPrice ?? 0);
+                const currentValue = size * cur;
+                return currentValue <= MIN_CURRENT_VALUE;
+            };
+
+            // 只对非小额仓位获取订单簿数据（小额仓位永远不调用API）
+            const nonSmallRows = rows.filter(r => !isSmallPosition(r));
+            const tokenIdSet = new Set();
+            nonSmallRows.forEach(r => {
                 const tokenId = r.asset || r.tokenId || r.asset_id || r.assetId || r.token_id || '';
+                if (tokenId) tokenIdSet.add(tokenId);
+            });
+
+            // 只对非小额仓位获取订单簿数据
+            const orderBookMap = new Map();
+            await Promise.all(Array.from(tokenIdSet).map(async (tokenId) => {
                 const { bestBid, bestAsk } = await fetchOrderBook(tokenId);
-                return { ...r, bestBid, bestAsk, tokenId };
+                orderBookMap.set(tokenId, { bestBid, bestAsk });
             }));
 
-            // 根据单选框状态过滤小额仓位
-            const hideSmall = $('hideSmallPositions')?.checked || false;
-            const filteredRows = hideSmall
-                ? enrichedRows.filter(r => {
-                    const size = Number(r.size ?? 0);
-                    const cur = r.bestAsk !== null ? r.bestAsk : Number(r.curPrice ?? 0);
-                    const currentValue = size * cur;
-                    return currentValue > MIN_CURRENT_VALUE;
-                })
-                : enrichedRows;
+            // 为所有仓位添加订单簿数据（只对非小额仓位有数据，小额仓位永远为 null）
+            const enrichedRows = rows.map(r => {
+                const tokenId = r.asset || r.tokenId || r.asset_id || r.assetId || r.token_id || '';
+                // 小额仓位永远不调用API，订单簿数据为 null
+                const orderBook = orderBookMap.get(tokenId) || { bestBid: null, bestAsk: null };
+                return { ...r, ...orderBook, tokenId };
+            });
 
+            // 根据单选框状态过滤小额仓位：选中时显示小额仓位，未选中时隐藏小额仓位
+            const filteredRows = showSmall
+                ? enrichedRows // 选中时显示所有仓位（包括小额）
+                : enrichedRows.filter(r => !isSmallPosition(r)); // 未选中时隐藏小额仓位
+
+            // 用于计算盈亏的仓位：始终排除小额仓位，不管复选框状态
+            const nonSmallRowsForCalc = enrichedRows.filter(r => !isSmallPosition(r));
+
+            // 基于非小额仓位计算盈亏（非小额仓位已经有订单簿数据）
             let totalValue = 0, totalPnl = 0, totalCost = 0;
+            nonSmallRowsForCalc.forEach(r => {
+                const size = Number(r.size ?? 0);
+                const avg = Number(r.avgPrice ?? 0);
+                const cur = r.bestAsk !== null ? r.bestAsk : Number(r.curPrice ?? 0);
+                const holdValue = size * cur;
+                const costValue = size * avg;
+                const cashPnl = isFinite(r.cashPnl) ? Number(r.cashPnl) : (holdValue - costValue);
+                totalValue += holdValue;
+                totalPnl += cashPnl;
+                totalCost += costValue;
+            });
 
+            // 基于过滤后的列表显示持仓（根据复选框状态）
             filteredRows.forEach(r => {
                 const title = r.title || r.slug || r.asset || '—';
                 const outcome = r.outcome ? `（${r.outcome}）` : '';
@@ -654,9 +765,7 @@
                 const cashPnl = isFinite(r.cashPnl) ? Number(r.cashPnl) : (holdValue - costValue);
                 const percentPnl = isFinite(r.percentPnl) ? Number(r.percentPnl) : (costValue ? (cashPnl / costValue) : 0);
 
-                totalValue += holdValue;
-                totalPnl += cashPnl;
-                totalCost += costValue;
+                // 注意：盈亏计算已在 nonSmallRows 中完成，这里只用于显示单行数据
 
                 const tr = document.createElement('tr');
                 const rowId = `row-${tokenId || Math.random().toString(36).slice(2, 9)}`;
@@ -710,6 +819,9 @@
                 const colorClass = pnlPct >= 0 ? 'green' : 'red';
                 currentPnlPctEl.innerHTML = `<span class="${colorClass}">${(pnlPct >= 0 ? '+' : '') + (pnlPct * 100).toFixed(2)}%</span>`;
             }
+
+            // 返回计算好的盈亏数据，供外部使用
+            return { currentPnl: totalPnl, currentPnlPct: pnlPct };
         }
 
         function parseOrderTime(value) {
@@ -826,13 +938,21 @@
             }
             try {
                 const rows = await fetchPositions(addr);
-                await renderPositions(Array.isArray(rows) ? rows : []);
-                if (st) st.textContent = `已加载 ${Array.isArray(rows) ? rows.length : 0} 条持仓`;
+                cachedPositions = Array.isArray(rows) ? rows : [];
+                await renderPositions(cachedPositions);
+                if (st) st.textContent = `已加载 ${cachedPositions.length} 条持仓`;
             } catch (err) {
                 console.error('Failed to refresh positions:', err);
                 if (st) st.textContent = '资产刷新失败';
             } finally {
                 if (st) st.classList.remove('loading');
+            }
+        }
+
+        // 重新渲染已缓存的持仓数据（不重新获取）
+        async function rerenderCachedPositions() {
+            if (cachedPositions.length > 0) {
+                await renderPositions(cachedPositions);
             }
         }
 
@@ -1167,25 +1287,17 @@
                 }
 
                 const rows = positionResult.value;
-                await renderPositions(Array.isArray(rows) ? rows : []);
+                cachedPositions = Array.isArray(rows) ? rows : [];
+
+                // renderPositions 会基于过滤后的持仓计算盈亏并返回
+                const positionPnl = await renderPositions(cachedPositions);
 
                 // 计算已实现盈亏并更新收益看板
                 const realizedPnl = calculateRealizedPnl(trades);
-                const currentPnl = Array.isArray(rows) ? rows.reduce((sum, r) => {
-                    const size = Number(r.size ?? 0);
-                    const avg = Number(r.avgPrice ?? 0);
-                    const cur = Number(r.curPrice ?? 0);
-                    const holdValue = size * cur;
-                    const costValue = size * avg;
-                    const cashPnl = isFinite(r.cashPnl) ? Number(r.cashPnl) : (holdValue - costValue);
-                    return sum + cashPnl;
-                }, 0) : 0;
-                const totalCost = Array.isArray(rows) ? rows.reduce((sum, r) => {
-                    const size = Number(r.size ?? 0);
-                    const avg = Number(r.avgPrice ?? 0);
-                    return sum + (size * avg);
-                }, 0) : 0;
-                const currentPnlPct = totalCost ? (currentPnl / totalCost) : 0;
+
+                // 使用 renderPositions 返回的基于过滤后持仓的盈亏数据
+                const currentPnl = positionPnl?.currentPnl ?? 0;
+                const currentPnlPct = positionPnl?.currentPnlPct ?? 0;
 
                 updatePnlDashboard({
                     currentPnl,
@@ -1213,9 +1325,14 @@
         const hideSmallPositionsCheckbox = $('hideSmallPositions');
         if (hideSmallPositionsCheckbox) {
             hideSmallPositionsCheckbox.addEventListener('change', () => {
-                const addr = $('addr').value.trim();
-                if (addr && addr.startsWith('0x') && addr.length >= 10) {
-                    refreshPositionsSection(addr);
+                // 如果有缓存的数据，直接重新渲染；否则尝试刷新
+                if (cachedPositions.length > 0) {
+                    rerenderCachedPositions();
+                } else {
+                    const addr = $('addr').value.trim();
+                    if (addr && addr.startsWith('0x') && addr.length >= 10) {
+                        refreshPositionsSection(addr);
+                    }
                 }
             });
         }

@@ -9,7 +9,6 @@
         "cronTimeZone": "America/New_York",
         "test": false,
         "tickIntervalSeconds": 30,
-        "takeProfitIntervalSeconds": 60,
         "slugList": [
             "bitcoin-above-on-november-${day}",
             "bitcoin-price-on-november-${day}",

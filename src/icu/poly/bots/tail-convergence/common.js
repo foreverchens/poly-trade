@@ -5,13 +5,13 @@ import { polyClient } from "../../core/PolyClient.js";
 const EASTERN_TZ = "America/New_York";
 
 export const TAKE_PROFIT_ORDER_STATUS = {
-    "PENDING":"待提交",
-    "PARTIALLY_MATCHED":"部分成交",
-    "FULLY_MATCHED":"全部成交",
-    "CANCELLED":"已取消",
+    PENDING: "待提交",
+    PARTIALLY_MATCHED: "部分成交",
+    FULLY_MATCHED: "全部成交",
+    CANCELLED: "已取消",
 };
 
-export function resolveSlugList(slugList, referenceDate = new Date()) {
+export function resolveSlugList(slugOrList, referenceDate = new Date()) {
     const dayFormatter = new Intl.DateTimeFormat("en-US", {
         timeZone: EASTERN_TZ,
         day: "numeric",
@@ -27,7 +27,9 @@ export function resolveSlugList(slugList, referenceDate = new Date()) {
     const hour = parseInt(hourParts.find((part) => part.type === "hour")?.value || "0", 10);
     const amPm = hourParts.find((part) => part.type === "dayPeriod")?.value || "AM";
 
-    return slugList.map((slug) => {
+    const list = Array.isArray(slugOrList) ? slugOrList : [slugOrList];
+
+    const results = list.map((slug) => {
         let resolved = slug;
         if (resolved.includes("${day}")) {
             resolved = resolved.replace(/\$\{day\}/g, day.toString());
@@ -40,6 +42,8 @@ export function resolveSlugList(slugList, referenceDate = new Date()) {
         }
         return resolved;
     });
+
+    return Array.isArray(slugOrList) ? results : results[0];
 }
 
 export function loadStateFile(stateFilePath) {
@@ -70,7 +74,7 @@ export async function fetchMarketsWithinTime(slug, maxMinutesToEnd) {
     const minutesToEnd = timeMs / 60_000;
     if (minutesToEnd > maxMinutesToEnd) {
         console.log(
-            `[@${now} ${slug}] 事件剩余时间=${Math.round(minutesToEnd)}分钟 超过最大时间=${maxMinutesToEnd}分钟，不处理`
+            `[@${now} ${slug}] 事件剩余时间=${Math.round(minutesToEnd)}分钟 超过最大时间=${maxMinutesToEnd}分钟，不处理`,
         );
         return [];
     }
@@ -82,20 +86,40 @@ export async function fetchBestAsk(client, tokenId) {
     return bestAsk;
 }
 
-
 /**
+ * a + b * (t/600)^k
+ * a: 基础值 0.92
+ * b: 增长值 0.06
+ * k: 发散程度 0.4
+ * t: 剩余时间(秒) 600秒时、阈值为0.98
+ *
+ * t      k=0.1    k=0.2    k=0.3    k=0.4    k=0.5
+ * ------------------------------------------------------------
+ * 600    0.980    0.980    0.980    0.980    0.980
+ * ------------------------------------------------------------
+ * 500    0.978    0.977    0.976    0.975    0.974
+ * ------------------------------------------------------------
+ * 400    0.976    0.975    0.972    0.969    0.968
+ * ------------------------------------------------------------
+ * 300    0.973    0.971    0.967    0.963    0.961
+ * ------------------------------------------------------------
+ * 200    0.969    0.966    0.960    0.955    0.952
+ * ------------------------------------------------------------
+ * 100    0.963    0.956    0.950    0.944    0.940
+ * ------------------------------------------------------------
+ * 0      0.920    0.920    0.920    0.920    0.920
+ * ------------------------------------------------------------
+ * k与发散程度 负相关、k越小、曲线前期越平缓、后期越发散 发散程度越大、阈值对剩余时间的变化越敏感
+ *
  * 事件最后十分钟、价格阈值对剩余时间的发散函数
- * 剩余时间越短、价格阈值越大
- * sec = 600时、阈值为0.98
- * sec = 300时、阈值为0.95
- * sec = 120时、阈值为0.90
+ * 剩余时间越短、价格阈值越小
  * @param {number} sec
- * @param {*} k
- * @returns {number}
+ * @param {number} baseValue
+ * @param {number} growthRate
+ * @param {*} k 发散程度
+ * @returns {number} 阈值
  */
-export function threshold(sec, k = 0.5) {
+export function threshold(sec, k = 0.3, a = 0.92, b = 0.06) {
     const s = Math.max(0, Math.min(600, sec));
-    return Number((0.90 + 0.08 * Math.pow(s / 600, k)).toFixed(3));
-  }
-
-
+    return Number((a + b * Math.pow(s / 600, k)).toFixed(3));
+}

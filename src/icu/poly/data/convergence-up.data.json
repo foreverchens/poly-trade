@@ -4,106 +4,15 @@
         "triggerPriceGt": 0.99,
         "takeProfitPrice": 0.998,
         "maxMinutesToEnd": 10,
-        "cronExpression": "0 50 * * * *",
+        "cronExpression": "0 50-51 * * * *",
         "cronTimeZone": "America/New_York",
         "ampMin": 0.001,
+        "zMin": 2,
         "test": false,
-        "tickIntervalSeconds": 20,
+        "tickIntervalSeconds": 10,
         "allowExtraEntryAtCeiling": true,
-        "slugList": [
-            "ethereum-up-or-down-november-${day}-${hour}${am_pm}-et"
-        ]
+        "slug": "ethereum-up-or-down-november-${day}-${hour}${am_pm}-et",
+        "symbol": "ETH/USDT"
     },
-    "orders": {
-        "ethereum-up-or-down-november-21-6am-et": [
-            {
-                "marketSlug": "ethereum-up-or-down-november-21-6am-et",
-                "side": "NO",
-                "orderId": "0x0b6c1d8667c8bb88cb8af14e56a7392a973442132ca08e331c9893907b2d3095",
-                "price": 0.97,
-                "size": 10,
-                "takeProfitOrderId": "0x50d7fdf775733d94f02ce00388e3701d79f98b51b37c63b0b5a55d4da8939ce5"
-            },
-            {
-                "marketSlug": "ethereum-up-or-down-november-21-6am-et",
-                "side": "NO",
-                "orderId": "0x98dd9b5d2dcf5cba5125acdca6253e86a35446ec892fbfad7a3e894632bc9df3",
-                "price": 0.96,
-                "size": 2,
-                "takeProfitOrderId": "0x50bba4206ce0308c5acf920711f603d9851fa401960a4cdf78be8c0195fed7be"
-            }
-        ],
-        "ethereum-up-or-down-november-21-7am-et": [
-            {
-                "marketSlug": "ethereum-up-or-down-november-21-7am-et",
-                "side": "YES",
-                "orderId": "0xcfcd143c09d1d9ddd8a095f60f14db7cc4841ab34ae272e37887df7e73be6042",
-                "price": 0.98,
-                "size": 10,
-                "takeProfitOrderId": "0x4df3a840112d6a240b614f58ef803770b6b2e41a771fe2fe5647bb763734210e"
-            },
-            {
-                "marketSlug": "ethereum-up-or-down-november-21-7am-et",
-                "side": "YES",
-                "orderId": "0xed58db3fe3e70069e42b85ff689e8f5b44148d52e11b6cca56b6d421a8fc687d",
-                "price": 0.99,
-                "size": 86,
-                "takeProfitOrderId": "0x36f6aeab590d531496f347b2c3b9f98a7a3826f20b09622e9cf82bae40050515"
-            }
-        ],
-        "ethereum-up-or-down-november-21-8am-et": [
-            {
-                "marketSlug": "ethereum-up-or-down-november-21-8am-et",
-                "side": "YES",
-                "orderId": "0x10f55eba1c0bbc8b3a6a6612f72e6987b152bd1cbb48fd90a4786471feea08cc",
-                "price": 0.99,
-                "size": 10,
-                "takeProfitOrderId": "0x9e2988fe3a4b42576a9a8e9ce3c7602dadad6b0846e0dcae8a398eb6e95125df"
-            },
-            {
-                "marketSlug": "ethereum-up-or-down-november-21-8am-et",
-                "side": "YES",
-                "orderId": "0xb06e944ad432bb6c62e77cfad4098216c5fecbd890ae019ad182f3704bbe1b59",
-                "price": 0.99,
-                "size": 87,
-                "takeProfitOrderId": "0x63aea7b2ac102dbf147b29ebe3af770565c4a3c2377a8fde81cef7d8c5fde617"
-            }
-        ],
-        "ethereum-up-or-down-november-21-9am-et": [
-            {
-                "marketSlug": "ethereum-up-or-down-november-21-9am-et",
-                "side": "YES",
-                "orderId": "0xf6653e2ddae7ee7b2ad478e6e3412857837fd08a37090f76297e4124350921e7",
-                "price": 0.97,
-                "size": 10,
-                "takeProfitOrderId": "0xa1bbaa399122194c0276c17b5e16b2216bec1cb35e9af5651085b0eea951f04a"
-            },
-            {
-                "marketSlug": "ethereum-up-or-down-november-21-9am-et",
-                "side": "YES",
-                "orderId": "0xcf4396d3d9f2ebc575254b5d95820bbabbaa055d499828a48fb01fb502c43019",
-                "price": 0.98,
-                "size": 89,
-                "takeProfitOrderId": "0xcc47e287eae2b378494ded6261673846fcd9bd94c4e2ab6ac91ab72120a6feac"
-            }
-        ],
-        "ethereum-up-or-down-november-21-11am-et": [
-            {
-                "marketSlug": "ethereum-up-or-down-november-21-11am-et",
-                "side": "YES",
-                "orderId": "0x708c758a5ac7fb748e87e7022de626776a7bc949ad36619d98cd63f62c1b1f57",
-                "price": 0.98,
-                "size": 10,
-                "takeProfitOrderId": "0xa61ed6ba02271bc24c66fa2284406da9c3e09a0a019e271564d45d7b981cab1b"
-            },
-            {
-                "marketSlug": "ethereum-up-or-down-november-21-11am-et",
-                "side": "YES",
-                "orderId": "0x5bb06f30d0e4b801cb041e62ba610296d315e461427b228426d2bfebc5bf8bac",
-                "price": 0.99,
-                "size": 95,
-                "takeProfitOrderId": "0x7bf85eaf28b25bb09f7d099241408486b51919eb8e6067174288b6d63d5cb1ac"
-            }
-        ]
-    }
+    "orders": {}
 }

@@ -19,12 +19,14 @@
     "@polymarket/clob-client": "^4.22.8",
     "@polymarket/order-utils": "^2.1.0",
     "axios": "^1.6.8",
+    "chalk": "^5.6.2",
     "dayjs": "^1.11.19",
     "dotenv": "^17.2.3",
     "ethers": "^5.7.2",
     "express": "^4.19.2",
     "node-cron": "^4.2.1",
     "viem": "^2.38.6",
+    "yargs": "^17.7.2",
     "zod": "^4.1.12"
   },
   "devDependencies": {

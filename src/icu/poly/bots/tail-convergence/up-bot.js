@@ -34,6 +34,7 @@ import { fileURLToPath } from "url";
 import dayjs from "dayjs";
 import cron from "node-cron";
 import { PolyClient, PolySide } from "../../core/PolyClient.js";
+import { getZ } from "../../core/z-score.js";
 import {
     loadStateFile,
     resolveSlugList,
@@ -41,6 +42,7 @@ import {
     fetchBestAsk,
     threshold,
 } from "./common.js";
+import { checkLiquidityDepletion } from "./liquidity-check.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -76,7 +78,7 @@ class TailConvergenceStrategy {
          * - ampMin：最近 1 小时振幅下限,波动太小忽略。
          * - tickIntervalSeconds：主循环 tick 间隔秒数。
          * - cronExpression / cronTimeZone：调度 cron 表达式及时区。
-         * - slugList：日内跟踪的事件 slug 模板,可包含 ${day} 占位符。
+         * - slug：日内跟踪的事件 slug 模板,可包含 ${day} 占位符 (单值)。
          * - triggerPriceGt：触发信号的最高价格(超过该价格不建仓)。
          */
         const {
@@ -87,9 +89,11 @@ class TailConvergenceStrategy {
             tickIntervalSeconds = 30,
             cronExpression,
             cronTimeZone,
-            slugList,
+            slug,
             triggerPriceGt,
             allowExtraEntryAtCeiling = false,
+            zMin,
+            symbol = "ETH/USDT",
         } = config;
 
         Object.assign(this, {
@@ -102,6 +106,8 @@ class TailConvergenceStrategy {
             cronTimeZone,
             triggerPriceGt,
             allowExtraEntryAtCeiling,
+            zMin,
+            symbol,
         });
 
         this.httpTimeout = 10000;
@@ -110,9 +116,10 @@ class TailConvergenceStrategy {
          */
         this.tickIntervalMs = tickIntervalSeconds * 1000;
 
-        // 保存原始 slug 列表模板（包含 ${day} 占位符）,每个 tick 重新解析即可支持日滚动。
-        this.rawSlugList = slugList;
-        this.whitelist = resolveSlugList(this.rawSlugList);
+        // 保存原始 slug 模板
+        this.slugTemplate = slug;
+        // 解析当天的 slug
+        this.targetSlug = resolveSlugList(this.slugTemplate);
     }
 
     /**
@@ -126,13 +133,16 @@ class TailConvergenceStrategy {
      * takeProfitCronTask：止盈监控 cron 任务句柄。
      */
     initializeRuntimeState(orders) {
-        this.orders = orders;
+        this.orders = orders || {};
+        // 内存中的状态位
+        this.initialEntryDone = false;
+        this.extraEntryDone = false;
+
         this.takeProfitOrders = [];
         this.loopTimer = null;
         this.loopActive = false;
         this.currentLoopHour = null;
         this.takeProfitCronTask = null;
-        this.extraEntryUsed = false;
     }
 
     /**
@@ -157,7 +167,8 @@ class TailConvergenceStrategy {
             静态最高建仓价格=${this.triggerPriceGt}
             最大剩余时间=${this.maxMinutesToEnd}分钟,
             最小振幅=${this.ampMin},
-            止盈价格=${this.takeProfitPrice},
+            最小Z-Score=${this.zMin},
+            最小止盈价格=${this.takeProfitPrice},
             tick间隔=${this.tickIntervalSeconds}s,
             是否测试模式=${this.test},
             Cron表达式=${this.cronExpression},时区=${this.cronTimeZone}`,
@@ -175,7 +186,7 @@ class TailConvergenceStrategy {
                 timezone: this.cronTimeZone,
             },
         );
-        console.log(`[扫尾盘策略] 主任务已启动,等待50分触发...白名单=${this.whitelist.join(",")}`);
+        console.log(`[扫尾盘策略] 主任务已启动,等待50分触发...Slug=${this.targetSlug}`);
 
         // 启动止盈监控（每小时0-20分钟执行）
         this.startTakeProfitMonitor();
@@ -189,7 +200,7 @@ class TailConvergenceStrategy {
 
     startHourlyLoop(source = "cron") {
         if (this.loopActive) {
-            console.log(`[扫尾盘策略] 当前小时循环仍在执行,跳过本次触发(${source})`);
+            console.log(`[扫尾盘策略] 当前小时循环执行中,跳过本次触发(${source})`);
             return;
         }
         this.loopActive = true;
@@ -205,7 +216,11 @@ class TailConvergenceStrategy {
         }
         this.loopActive = false;
         this.currentLoopHour = null;
-        this.extraEntryUsed = false;
+        // 循环结束时重置状态位
+        this.initialEntryDone = false;
+        this.extraEntryDone = false;
+        // 重置 tick 间隔为初始配置值
+        this.tickIntervalMs = this.tickIntervalSeconds * 1000;
         console.log(`[扫尾盘策略] 小时循环已结束\n`);
     }
 
@@ -228,28 +243,17 @@ class TailConvergenceStrategy {
     }
 
     async tick() {
-        // 每次tick时重新解析slugList,确保使用当天的日期
-        this.whitelist = resolveSlugList(this.rawSlugList);
+        // 每次tick时重新解析slug,确保使用当天的日期
+        this.targetSlug = resolveSlugList(this.slugTemplate);
 
-        let signals = [];
-        // 获取信号 若信号已存在则跳过
-        for (const slug of this.whitelist) {
-            const signal = await this.processSlug(slug);
-            if (!signal) {
-                continue;
-            }
-            signals.push(signal);
-        }
-
-        if (!signals.length) {
+        // 获取信号
+        const signal = await this.processSlug(this.targetSlug);
+        if (!signal) {
             return;
         }
-        signals = signals.sort((a, b) => a.chosen.price - b.chosen.price).slice(0, 4);
-        console.table(signals);
-        // 处理信号 若订单已存在则跳过
-        for (const signal of signals) {
-            await this.handleSignal(signal);
-        }
+
+        console.table([signal]);
+        await this.handleSignal(signal);
     }
 
     /**
@@ -258,14 +262,17 @@ class TailConvergenceStrategy {
      */
     async processTakeProfitOrders() {
         const pendingOrders = this.takeProfitOrders.filter((order) => !order.takeProfitOrderId);
-        if (!pendingOrders.length) {
+        const errorOrders = this.takeProfitOrders.filter((order) => order.error);
+        if (pendingOrders.length == errorOrders.length) {
+            // pendingOrders 永远包含 errorOrders 中的订单 以及一些新提交的订单
+            // 如果当前止盈订单队列 都为异常订单，结束调度、此时待处理止盈订单肯定为0
             if (this.takeProfitOrders.length) {
                 console.log(
                     `[@${dayjs().format("YYYY-MM-DD HH:mm:ss")}] [止盈] 无待处理止盈订单、结束调度\n`,
                 );
                 console.log(this.takeProfitOrders);
             }
-            this.takeProfitOrders = [];
+            this.takeProfitOrders = errorOrders;
             return;
         }
         let processedCount = 0;
@@ -274,6 +281,10 @@ class TailConvergenceStrategy {
         let errorCount = 0;
         let skippedCount = 0;
         for (const takeProfitOrder of pendingOrders) {
+            if (takeProfitOrder.error) {
+                // 跳过已有错误的订单，避免重复执行
+                continue;
+            }
             const orderKey = takeProfitOrder.signal.marketSlug;
             try {
                 // 查询建仓订单状态
@@ -315,7 +326,13 @@ class TailConvergenceStrategy {
                 takeProfitCount++;
                 processedCount++;
             } catch (err) {
+                console.error(
+                    `[@${dayjs().format("YYYY-MM-DD HH:mm:ss")}] [止盈] ${orderKey} 止盈执行异常`,
+                    err?.message ?? err,
+                );
                 errorCount++;
+                processedCount++;
+                takeProfitOrder.error = err?.message ?? err;
             }
         }
 
@@ -351,22 +368,19 @@ class TailConvergenceStrategy {
                 `[@${dayjs().format("YYYY-MM-DD HH:mm:ss")}] [止盈] ${orderKey} 准备提交止盈订单: SELL price=${bestBidPrice.toFixed(3)} size=${size} 预期收益=${expectedRevenue.toFixed(2)}`,
             );
 
-            const takeProfitOrderResp = await this.client
-                .placeOrder(bestBidPrice, size, PolySide.SELL, takeProfitOrder.tokenId)
-                .catch((err) => {
-                    console.error(
-                        `[@${dayjs().format("YYYY-MM-DD HH:mm:ss")}] [止盈] ${orderKey} 止盈订单提交失败`,
-                        err?.message ?? err,
-                    );
-                    return null;
-                });
+            const takeProfitOrderResp = await this.client.placeOrder(
+                bestBidPrice,
+                size,
+                PolySide.SELL,
+                takeProfitOrder.tokenId,
+            );
 
             if (!takeProfitOrderResp?.success) {
                 console.log(
                     `[@${dayjs().format("YYYY-MM-DD HH:mm:ss")}] [止盈] ${orderKey} 止盈订单被拒绝`,
-                    takeProfitOrderResp,
+                    takeProfitOrderResp?.message ?? takeProfitOrderResp.errorMsg,
                 );
-                return false;
+                throw new Error(`止盈订单被拒绝: ${takeProfitOrderResp?.message ?? takeProfitOrderResp.errorMsg}`);
             }
 
             const takeProfitOrderId = takeProfitOrderResp.orderID;
@@ -386,7 +400,7 @@ class TailConvergenceStrategy {
                 `[@${dayjs().format("YYYY-MM-DD HH:mm:ss")}] [止盈] ${orderKey} 止盈执行异常`,
                 err?.message ?? err,
             );
-            return false;
+            throw new Error(`止盈执行异常: ${err?.message ?? err}`);
         }
     }
 
@@ -443,6 +457,11 @@ class TailConvergenceStrategy {
 
     // 构建交易信号：限定剩余时间,并找出概率 >= entryTrigger 的方向
     async buildSignal(eventSlug, market) {
+        const secondsToEnd = Math.abs(Math.floor((Date.parse(market.endDate) - Date.now()) / 1000));
+        const zVal = await getZ(this.symbol, secondsToEnd);
+        console.log(`[@${dayjs().format("YYYY-MM-DD HH:mm:ss")} ${market.slug}] Z-Score=${zVal}`);
+
+        let isLiquiditySignal = false;
         const [yesTokenId, noTokenId] = JSON.parse(market.clobTokenIds);
 
         const [yesPrice, noPrice] = await Promise.all([
@@ -451,27 +470,47 @@ class TailConvergenceStrategy {
         ]);
         const topPrice = Math.max(yesPrice, noPrice);
 
-        const secondsToEnd = Math.max(
-            0,
-            Math.floor((Date.parse(market.endDate) - Date.now()) / 1000),
-        );
-        const priceThreshold = threshold(secondsToEnd);
-        if (topPrice < priceThreshold) {
-            console.log(
-                `[@${dayjs().format("YYYY-MM-DD HH:mm:ss")} ${market.slug}] 顶部价格=${topPrice} 小于动态阈值=${priceThreshold},不处理`,
-            );
-            return null;
+        if (zVal < this.zMin) {
+            // 检查是否满足尾端流动性追踪条件：时间 > 57 分钟
+            if (topPrice > 0.98 && dayjs().minute() > 58) {
+                // 触发低波动率信号、等待流动性匮乏信号, 加速 tick 频率
+                this.tickIntervalMs = Math.max(1000, this.tickIntervalMs / 2);
+
+                const candidateTokenId = yesPrice >= noPrice ? yesTokenId : noTokenId;
+                // 检查 0.99 流动性是否枯竭
+                const isDepleted = await checkLiquidityDepletion(this.client, candidateTokenId);
+
+                if (isDepleted) {
+                    console.log(
+                        `[@${dayjs().format(
+                            "YYYY-MM-DD HH:mm:ss",
+                        )} ${market.slug}] 触发尾端流动性追踪信号 (Z=${zVal} < ${this.zMin}, Time>57, LiquidityDepleted=true)`,
+                    );
+                    isLiquiditySignal = true;
+                } else {
+                    return null;
+                }
+            } else {
+                return null;
+            }
         }
-        if (topPrice > this.triggerPriceGt) {
+
+
+
+        const priceThreshold = threshold(secondsToEnd);
+        // 检查价格是否在触发价格范围内
+        // 如果是流动性信号，跳过 triggerPriceGt 上限检查（因为目标是追 0.99）
+        if (!isLiquiditySignal && (topPrice < priceThreshold || topPrice > this.triggerPriceGt)) {
             console.log(
-                `[@${dayjs().format("YYYY-MM-DD HH:mm:ss")} ${market.slug}] 顶部价格=${topPrice} 大于静态阈值=${this.triggerPriceGt} ,不处理`,
+                `[@${dayjs().format("YYYY-MM-DD HH:mm:ss")} ${market.slug}] 顶部价格=${topPrice} 不在触发价格范围=[${priceThreshold}, ${this.triggerPriceGt}],不处理`,
             );
             return null;
         }
         // UpDown事件：波动率检查
         // 查询该币对、最近一根小时级别k线、检查波动率是否大于${this.ampMin}
         const amp = await this.get1HourAmp();
-        if (amp < this.ampMin) {
+        // 如果是 Liquidity Signal，跳过波动率检查
+        if (!isLiquiditySignal && amp < this.ampMin) {
             console.log(
                 `[@${dayjs().format("YYYY-MM-DD HH:mm:ss")} ${market.slug}] 波动率=${amp.toFixed(3)} 小于最小波动率=${this.ampMin},不处理`,
             );
@@ -503,8 +542,9 @@ class TailConvergenceStrategy {
     }
     async get1HourAmp() {
         // 调用binance 现货api获取ETH最近一根小时级别k线、
+        const symbol = this.symbol.replace("/", "");
         const klines = await axios.get(
-            `https://api.binance.com/api/v3/klines?symbol=ETHUSDT&interval=1h&limit=1`,
+            `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=1h&limit=1`,
         );
         if (!klines?.data?.length) {
             return 1;
@@ -538,20 +578,16 @@ class TailConvergenceStrategy {
 
     // 检查是否已建仓,未建仓则执行建仓
     async handleSignal(signal) {
-        const eventSlug = signal.eventSlug;
         const marketSlug = signal.marketSlug;
 
-        // 检查该市场是否已有订单
-        const eventOrders = this.orders[eventSlug] || [];
-        const existingOrder = eventOrders.find((order) => order.marketSlug === marketSlug);
-
-        if (!existingOrder) {
+        if (!this.initialEntryDone) {
             // 未建仓则执行建仓
             await this.openPosition({
                 tokenId: signal.chosen.tokenId,
                 price: signal.chosen.price,
                 sizeUsd: this.positionSizeUsdc,
                 signal,
+                isExtra: false
             });
             return;
         }
@@ -568,17 +604,21 @@ class TailConvergenceStrategy {
                 break;
             }
             // 在检查是否已用过额外买入
-            if (this.extraEntryUsed) {
+            if (this.extraEntryDone) {
                 console.log(
                     `[@${dayjs().format(
                         "YYYY-MM-DD HH:mm:ss",
-                    )} ${marketSlug}-${signal.chosen.outcome.toUpperCase()}@额外买入] 本小时额外买入次数已达上限，跳过`,
+                    )} ${marketSlug}-${signal.chosen.outcome.toUpperCase()}@额外买入] 额外买入次数已达上限，跳过`,
                 );
                 break;
             }
             const price = Number(signal.chosen.price);
             // 再检查是否满足额外时间和流动性条件
-            if (dayjs().minute() < 55 && price < 0.97 && (await this.checkSellerLiquidity(signal.chosen.tokenId))) {
+            if (
+                dayjs().minute() < 55 &&
+                price < 0.97 &&
+                (await this.checkSellerLiquidity(signal.chosen.tokenId))
+            ) {
                 console.log(
                     `[@${dayjs().format(
                         "YYYY-MM-DD HH:mm:ss",
@@ -594,14 +634,44 @@ class TailConvergenceStrategy {
             if (price >= 0.97) {
                 let requiredAmp;
                 if (price >= 0.99) {
+                    // 当价格为0.99的场合、入场条件、时间大于50分钟、且波动率大于0.002
                     requiredAmp = 0.002;
-                } else if (price >= 0.98) {
-                    requiredAmp = 0.003;
-                } else {
+                } else if (price >= 0.98 && dayjs().minute() > 55) {
+                    // 当价格为0.98的场合、入场条件、时间大于55分钟、且波动率大于0.004
+                    requiredAmp = 0.004;
+                } else if (
+                    price >= 0.97 &&
+                    dayjs().minute() > 57 &&
+                    this.checkSellerLiquidity(signal.chosen.tokenId)
+                ) {
                     // price >= 0.97 && price < 0.98
-                    requiredAmp = 0.005;
+                    // 当价格为0.97的场合、入场条件、时间大于57分钟、且波动率大于0.008
+                    requiredAmp = 0.008;
+                } else {
+                    console.log(
+                        `[@${dayjs().format(
+                            "YYYY-MM-DD HH:mm:ss",
+                        )} ${marketSlug}-${signal.chosen.outcome.toUpperCase()}@额外买入] 价格=${price.toFixed(3)} 不在额外买入时间范围内,不处理`,
+                    );
+                    break;
                 }
                 const amp = await this.get1HourAmp();
+                try {
+                    const secondsRemaining = Math.max(
+                        0,
+                        3600 - (dayjs().minute() * 60 + dayjs().second()),
+                    );
+                    const zVal = await getZ(this.symbol, secondsRemaining);
+                    console.log(
+                        `[@${dayjs().format(
+                            "YYYY-MM-DD HH:mm:ss",
+                        )} ${marketSlug}-${signal.chosen.outcome.toUpperCase()}@额外买入] [观察] Z-Score=${zVal.toFixed(
+                            4,
+                        )} (amp=${amp.toFixed(4)})`,
+                    );
+                } catch (err) {
+                    console.error(`[观察] 获取Z-Score失败:`, err.message);
+                }
                 if (amp < requiredAmp) {
                     console.log(
                         `[@${dayjs().format(
@@ -616,7 +686,7 @@ class TailConvergenceStrategy {
                     )} ${marketSlug}-${signal.chosen.outcome.toUpperCase()}@额外买入] 价格=${price.toFixed(3)} 波动率=${amp.toFixed(3)} 满足要求波动率=${requiredAmp},继续`,
                 );
             }
-            this.extraEntryUsed = true;
+            // this.extraEntryUsed = true;
             const sizeUsd = await this.resolvePositionSize();
             console.log(
                 `[@${dayjs().format("YYYY-MM-DD HH:mm:ss")} ${marketSlug}-${signal.chosen.outcome.toUpperCase()}@额外买入] -> ${signal.chosen.outcome.toUpperCase()}  price@${signal.chosen.price.toFixed(3)} 数量@${sizeUsd}`,
@@ -626,6 +696,7 @@ class TailConvergenceStrategy {
                 price: signal.chosen.price,
                 sizeUsd,
                 signal,
+                isExtra: true
             });
             return;
         } while (false);
@@ -662,7 +733,7 @@ class TailConvergenceStrategy {
     }
 
     // 负责下买单、并记录状态、同时止盈订单入队列
-    async openPosition({ tokenId, price, sizeUsd, signal }) {
+    async openPosition({ tokenId, price, sizeUsd, signal, isExtra }) {
         const sizeShares = Math.floor(sizeUsd / price);
         console.log(
             `[@${dayjs().format("YYYY-MM-DD HH:mm:ss")} ${signal.marketSlug} ${
@@ -713,7 +784,13 @@ class TailConvergenceStrategy {
             `[@${dayjs().format("YYYY-MM-DD HH:mm:ss")} ${signal.marketSlug}] 已加入止盈队列,当前止盈队列长度=${this.takeProfitOrders.length}`,
         );
 
-        // 记录订单到orders字段
+        // 更新状态
+        if (isExtra) {
+            this.extraEntryDone = true;
+        } else {
+            this.initialEntryDone = true;
+        }
+
         const eventSlug = signal.eventSlug;
         if (!this.orders[eventSlug]) {
             this.orders[eventSlug] = [];
@@ -746,25 +823,29 @@ class TailConvergenceStrategy {
             triggerPriceGt: this.triggerPriceGt,
             maxMinutesToEnd: this.maxMinutesToEnd,
             ampMin: this.ampMin,
+            zMin: this.zMin,
+            symbol: this.symbol,
             takeProfitPrice: this.takeProfitPrice,
             test: this.test,
-            slugList: this.rawSlugList,
+            slug: this.slugTemplate,
             cronExpression: this.cronExpression,
             cronTimeZone: this.cronTimeZone,
             tickIntervalSeconds: this.tickIntervalSeconds,
             allowExtraEntryAtCeiling: this.allowExtraEntryAtCeiling,
         };
+        delete currentConfig.slugList;
 
         // 限制orders对象最多拥有5个字段（5个市场），保存时只保留最后5个
         const MAX_MARKETS = 5;
         const entries = Object.entries(this.orders);
         let limitedOrders = {};
-        if(entries.length > MAX_MARKETS) {
+        if (entries.length > MAX_MARKETS) {
             const limitedEntries = entries.slice(-MAX_MARKETS);
             limitedOrders = Object.fromEntries(limitedEntries);
         } else {
             limitedOrders = this.orders;
         }
+
         const payload = {
             config: currentConfig,
             orders: limitedOrders,

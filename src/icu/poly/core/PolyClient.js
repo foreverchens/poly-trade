@@ -40,7 +40,7 @@ const CTF_ABI = [
 
 export class PolyClient {
     constructor(mock) {
-        const privateKey = process.env.PRIVATE_KEY;
+        const privateKey = process.env.PK_poly_01;
         if (!privateKey) {
             throw new Error("Missing PRIVATE_KEY for PolyClient");
         }
@@ -72,7 +72,7 @@ export class PolyClient {
                     this.signer,
                     creds,
                     this.signatureType,
-                    this.funderAddress
+                    this.funderAddress,
                 );
             })();
         }
@@ -97,9 +97,8 @@ export class PolyClient {
             } catch (err) {
                 cnt++;
                 console.error(
-                    `[${slug}] HTTP请求失败: ${err.code} ${err.message} ${err.response?.status} ${err.response?.data}`
+                    `[${slug}] HTTP请求失败: ${err.code} ${err.message} ${err.response?.status} ${err.response?.data}`,
                 );
-                await sleep(1000);
             }
         } while (cnt < 3);
         return resp?.data;
@@ -218,7 +217,10 @@ export class PolyClient {
     async getBestPrice(tokenId) {
         const orderBook = await this.getOrderBook(tokenId);
         if (!orderBook) {
-            return 0;
+            return [0, 0];
+        }
+        if (!orderBook.asks || !orderBook.bids) {
+            return [0, 0];
         }
         const asks = orderBook.asks;
         let bestAsk = asks.length ? Number(asks[asks.length - 1].price) : 0;
@@ -571,7 +573,7 @@ export class PolyClient {
                 success: true,
                 orderID: `0xTest-${Date.now()}`,
                 takingAmount: size,
-                status: "live"
+                status: "live",
             };
         }
 

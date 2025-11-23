@@ -58,7 +58,7 @@ export function loadStateFile(stateFilePath) {
     }
 }
 
-export async function fetchMarketsWithinTime(slug, maxMinutesToEnd) {
+export async function fetchMarkets(slug, maxMinutesToEnd, shouldFilterTime = true) {
     const now = dayjs().format("YYYY-MM-DD HH:mm:ss");
     const event = await polyClient.getEventBySlug(slug);
     if (!event) {
@@ -70,14 +70,20 @@ export async function fetchMarketsWithinTime(slug, maxMinutesToEnd) {
         console.log(`[@${now} ${slug}] 未找到开放市场`);
         return [];
     }
-    const timeMs = Date.parse(event.endDate) - Date.now();
-    const minutesToEnd = timeMs / 60_000;
-    if (minutesToEnd > maxMinutesToEnd) {
-        console.log(
-            `[@${now} ${slug}] 事件剩余时间=${Math.round(minutesToEnd)}分钟 超过最大时间=${maxMinutesToEnd}分钟，不处理`,
-        );
-        return [];
+
+    if (shouldFilterTime) {
+        const firstMarket = markets[0];
+        const timeMs = Date.parse(firstMarket.endDate) - Date.now();
+        const minutesToEnd = timeMs / 60_000;
+
+        if (minutesToEnd > maxMinutesToEnd) {
+            console.log(
+                `[@${now} ${slug}] 事件剩余时间=${Math.round(minutesToEnd)}分钟 超过最大时间=${maxMinutesToEnd}分钟，不处理`,
+            );
+            return [];
+        }
     }
+
     return markets;
 }
 
@@ -157,26 +163,15 @@ export async function checkSellerLiquidity(client, tokenId, threshold = 1000) {
     }
 }
 
-export async function resolvePositionSize(client, defaultPositionSize) {
+export async function resolvePositionSize(client) {
     try {
         const balanceRaw = await client.getUsdcEBalance();
         const balance = Math.floor(Number(balanceRaw));
         if (Number.isFinite(balance) && balance > 0) {
             return balance;
         }
-        console.log(
-            `[@${dayjs().format(
-                "YYYY-MM-DD HH:mm:ss",
-            )}] [建仓预算] USDC.e 余额无效(${balanceRaw}),使用默认建仓金额=${defaultPositionSize}`,
-        );
     } catch (err) {
-        console.error(
-            `[@${dayjs().format(
-                "YYYY-MM-DD HH:mm:ss",
-            )}] [建仓预算] 获取USDC.e余额失败,使用默认建仓金额`,
-            err?.message ?? err,
-        );
+        console.error(`[@${dayjs().format("YYYY-MM-DD HH:mm:ss")}] 获取USDC.e余额失败`, err?.message ?? err);
     }
-    return defaultPositionSize;
+    return 0;
 }
-

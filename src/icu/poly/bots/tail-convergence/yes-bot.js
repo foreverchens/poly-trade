@@ -38,7 +38,7 @@ import { PolyClient, PolySide } from "../../core/PolyClient.js";
 import {
     loadStateFile,
     resolveSlugList,
-    fetchMarketsWithinTime,
+    fetchMarkets,
     fetchBestAsk,
 } from "./common.js";
 
@@ -233,7 +233,7 @@ class TailConvergenceStrategy {
      * @returns
      */
     async listMarkets(slug) {
-        const markets = await fetchMarketsWithinTime(slug, this.maxMinutesToEnd);
+        const markets = await fetchMarkets(slug, this.maxMinutesToEnd);
         if (!markets.length) {
             return [];
         }

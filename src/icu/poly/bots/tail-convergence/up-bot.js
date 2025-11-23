@@ -9,7 +9,7 @@ import { getZ } from "../../core/z-score.js";
 import {
     loadStateFile,
     resolveSlugList,
-    fetchMarketsWithinTime,
+    fetchMarkets,
     fetchBestAsk,
     threshold,
     get1HourAmp,
@@ -214,7 +214,8 @@ class TailConvergenceStrategy {
             this.stopHourlyLoop();
             return;
         }
-        if(this.initialEntryDone && (this.extraEntryDone || !this.allowExtraEntryAtCeiling)) {
+        if(this.initialEntryDone && (this.extraEntryDone || !this.allowExtraEntryAtCeiling) && dayjs().minute() >= 52) {
+            // 初始建仓 且 额外买入 且 时间大于52分钟、则提前结束小时循环
             console.log(`[扫尾盘策略] 所有预期建仓均已完成(额外买入=${this.allowExtraEntryAtCeiling}), 提前结束小时循环`);
             this.stopHourlyLoop();
             return;
@@ -248,10 +249,33 @@ class TailConvergenceStrategy {
      */
     async processSlug(slug) {
         // 获取事件下可用的市场列表、仅先进行结束时间过滤、后续再基于订单簿价格确认
-        const markets = await fetchMarketsWithinTime(slug, this.maxMinutesToEnd);
+        // false 表示不进行时间过滤
+        const markets = await fetchMarkets(slug, this.maxMinutesToEnd, false);
         if (!markets.length) {
             return null;
         }
+        /**
+         *  在小时高波动场合、波动后概率往往以及接近95左右、后续会不断收敛到1、
+         *  在收敛过程中、如果发生流动性匮乏、则可以提前买入、
+         *  主任务新增30到50分的触发逻辑、修改为 30分开始触发、每5分钟一次、
+         *  如果中途发生流动性匮乏、则提前进入高频节奏、进行买入监控
+         */
+        // const timeMs = Date.parse(markets[0].endDate) - Date.now();
+        // const minutesToEnd = timeMs / 60_000;
+        // if (minutesToEnd > this.maxMinutesToEnd) {
+        //     console.log(
+        //         `[@${now} ${slug}] 事件剩余时间=${Math.round(minutesToEnd)}分钟 超过最大时间=${maxMinutesToEnd}分钟，不处理`,
+        //     );
+        //     return null;
+        // }
+        // const market = markets[0];
+        // // 流动性匮乏信号
+        // const [yesTokenId, noTokenId] = JSON.parse(market.clobTokenIds);
+        // const isLiquiditySufficient = await checkSellerLiquidity(this.client, yesTokenId);
+        // const isLiquiditySufficientNo = await checkSellerLiquidity(this.client, noTokenId);
+        // if(!isLiquiditySufficient || !isLiquiditySufficientNo) {
+        //     // 一方存在流动性匮乏
+        // }
 
         try {
             return await this.buildSignal(slug, markets[0]);
@@ -293,6 +317,9 @@ class TailConvergenceStrategy {
             // === 常规阶段：时间早且流动性好 ===
             // 严格遵守 Z-Score
             if (zVal < this.zMin) {
+                console.log(
+                    `[@${dayjs().format("YYYY-MM-DD HH:mm:ss")} ${market.slug}] 流动性好但统计信号不好(Z=${zVal} < ${this.zMin}),不处理`,
+                );
                 return null;
             }
         } else {
@@ -305,6 +332,9 @@ class TailConvergenceStrategy {
                 // 只要 Z-Score 达标就买
                 if (zVal < this.zMin) {
                     // 流动性好但统计信号不好 -> 放弃
+                    console.log(
+                        `[@${dayjs().format("YYYY-MM-DD HH:mm:ss")} ${market.slug}] 流动性好但统计信号不好(Z=${zVal} < ${this.zMin}),不处理`,
+                    );
                     return null;
                 }
                 // 流动性好且Z-Score好 -> 继续执行 (isLiquiditySignal 保持 false，走正常风控)
@@ -322,8 +352,8 @@ class TailConvergenceStrategy {
 
         const priceThreshold = threshold(secondsToEnd);
         // 检查价格是否在触发价格范围内
-        // 如果是流动性信号，跳过 triggerPriceGt 上限检查（因为目标是追 0.99）
-        if (!isLiquiditySignal && (topPrice < priceThreshold || topPrice > this.triggerPriceGt)) {
+        // 统一检查：无论是否流动性信号，价格都不能超过 triggerPriceGt (0.99)
+        if (topPrice > this.triggerPriceGt || topPrice < priceThreshold) {
             console.log(
                 `[@${dayjs().format("YYYY-MM-DD HH:mm:ss")} ${market.slug}] 顶部价格=${topPrice} 不在触发价格范围=[${priceThreshold}, ${this.triggerPriceGt}],不处理`,
             );
@@ -448,11 +478,7 @@ class TailConvergenceStrategy {
                     // 当价格为0.97的场合、入场条件、时间大于57分钟、且波动率大于0.008
                     requiredAmp = 0.008;
                 } else {
-                    console.log(
-                        `[@${dayjs().format(
-                            "YYYY-MM-DD HH:mm:ss",
-                        )} ${marketSlug}-${signal.chosen.outcome.toUpperCase()}@额外买入] 价格=${price.toFixed(3)} 不在额外买入时间范围内,结束处理`,
-                    );
+                   console.log(`[@${dayjs().format("YYYY-MM-DD HH:mm:ss")} ${marketSlug}-${signal.chosen.outcome.toUpperCase()}@额外买入] 价格 ${price.toFixed(3)} 波动率 ${requiredAmp.toFixed(3)} 不满足要求,结束处理`);
                     return;
                 }
                 // const amp = await this.get1HourAmp();
@@ -473,7 +499,13 @@ class TailConvergenceStrategy {
             }
         } while (false);
 
-        const sizeUsd = await resolvePositionSize(this.client, this.positionSizeUsdc);
+        const sizeUsd = await resolvePositionSize(this.client);
+        if(sizeUsd <= 0) {
+            console.log(
+                `[@${dayjs().format("YYYY-MM-DD HH:mm:ss")} ${marketSlug}-${signal.chosen.outcome.toUpperCase()}@额外买入] 建仓预算不足,结束处理`,
+            );
+            return;
+        }
         console.log(
             `[@${dayjs().format("YYYY-MM-DD HH:mm:ss")} ${marketSlug}-${signal.chosen.outcome.toUpperCase()}@额外买入] -> ${signal.chosen.outcome.toUpperCase()}  price@${signal.chosen.price.toFixed(3)} 数量@${sizeUsd}`,
         );

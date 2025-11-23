@@ -107,7 +107,12 @@ export class TakeProfitManager {
                         errorCount++;
                     }
                     processedCount++;
-                    continue;
+                    if(matchedSize < 1) {
+                        // 事件结束、未成交、视为错误
+                        takeProfitOrder.error = "未成交";
+                        continue;
+                    }
+                    // 部分成交、继续处理
                 }
 
                 // 完全成交，执行止盈

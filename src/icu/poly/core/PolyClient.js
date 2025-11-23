@@ -7,6 +7,7 @@ import { Wallet as EthersV5Wallet } from "@ethersproject/wallet";
 import { JsonRpcProvider } from "@ethersproject/providers";
 import axios from "axios";
 import dayjs from "dayjs";
+import { generateAccountFromMnemonic } from "./gen-key.js";
 
 const { ClobClient, OrderType, Side, AssetType } = pkg;
 
@@ -40,10 +41,14 @@ const CTF_ABI = [
 
 export class PolyClient {
     constructor(mock) {
-        const privateKey = process.env.PK_poly_01;
-        if (!privateKey) {
-            throw new Error("Missing PRIVATE_KEY for PolyClient");
+        const mnemonic = process.env.poly_mnemonic;
+        const index = process.env.poly_mnemonic_idx;
+        const account = generateAccountFromMnemonic(mnemonic, index);
+        if (!account) {
+            throw new Error("Failed to generate account from mnemonic");
         }
+        console.log(`account.address: ${account.address}`);
+        this.privateKey = account.privateKey;
 
         this.host = DEFAULT_HOST;
         this.chainId = DEFAULT_CHAIN_ID;
@@ -53,10 +58,8 @@ export class PolyClient {
         this.dataHost = DEFAULT_DATA_HOST;
         this.marketHost = DEFAULT_MARKET_HOST;
         // 使用 ethers v5 的 Wallet 给 ClobClient（@polymarket/clob-client 需要 v5 API）
-        this.signer = new EthersV5Wallet(privateKey);
+        this.signer = new EthersV5Wallet(this.privateKey);
         this.funderAddress = this.signer.address;
-        // 保存私钥供 redeemToken 等新功能使用（需要 ethers v6）
-        this.privateKey = privateKey;
         this.clientPromise = null;
         this.mock = mock;
     }
@@ -771,32 +774,6 @@ export class PolyClient {
         });
         return rltArr;
     }
-
-    /**
-     * 获取 USDC 余额（collateral）
-     * @returns {Promise<string>}
-     */
-    async getUsdcBalance() {
-        const client = await this.getClient();
-        const response = await client.getBalanceAllowance({ asset_type: AssetType.COLLATERAL });
-        if (!response) {
-            throw new Error("Failed to fetch USDC balance: empty response");
-        }
-        if (response.error) {
-            throw new Error(`Failed to fetch USDC balance: ${response.error}`);
-        }
-
-        if (typeof response.balance === "string") {
-            return response.balance;
-        }
-
-        if (response.balance && typeof response.balance.balance === "string") {
-            return response.balance.balance;
-        }
-
-        throw new Error("Failed to fetch USDC balance: unexpected response shape");
-    }
-
     /**
      * 获取 USDC.e 余额（ERC20 代币）
      * @returns {Promise<string>}
@@ -843,7 +820,6 @@ export class PolyClient {
         }
     }
 }
-
 export const PolySide = Side;
 export const PolyAssetType = AssetType;
 export const polyClient = new PolyClient();

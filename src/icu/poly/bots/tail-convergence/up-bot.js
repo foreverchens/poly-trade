@@ -1,5 +1,4 @@
 import "dotenv/config";
-import { writeFile } from "fs/promises";
 import { readFileSync } from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -17,10 +16,8 @@ import {
     checkSellerLiquidity,
     resolvePositionSize,
 } from "./common.js";
-import { checkLiquidityDepletion } from "./liquidity-check.js";
 import { TakeProfitManager } from "./take-profit.js";
 import { saveOrder } from "../../db/repository.js";
-import e from "express";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -217,6 +214,11 @@ class TailConvergenceStrategy {
             this.stopHourlyLoop();
             return;
         }
+        if(this.initialEntryDone && (this.extraEntryDone || !this.allowExtraEntryAtCeiling)) {
+            console.log(`[扫尾盘策略] 所有预期建仓均已完成(额外买入=${this.allowExtraEntryAtCeiling}), 提前结束小时循环`);
+            this.stopHourlyLoop();
+            return;
+        }
         try {
             await this.tick();
         } catch (err) {
@@ -236,8 +238,6 @@ class TailConvergenceStrategy {
         if (!signal) {
             return;
         }
-
-        console.table([signal]);
         await this.handleSignal(signal);
     }
 
@@ -268,7 +268,6 @@ class TailConvergenceStrategy {
     async buildSignal(eventSlug, market) {
         const secondsToEnd = Math.abs(Math.floor((Date.parse(market.endDate) - Date.now()) / 1000));
         const zVal = await getZ(this.symbol, secondsToEnd);
-        console.log(`[@${dayjs().format("YYYY-MM-DD HH:mm:ss")} ${market.slug}] Z-Score=${zVal}`);
 
         let isLiquiditySignal = false;
         const [yesTokenId, noTokenId] = JSON.parse(market.clobTokenIds);
@@ -281,36 +280,43 @@ class TailConvergenceStrategy {
         const topTokenId = yesPrice >= noPrice ? yesTokenId : noTokenId;
 
         /**
-         * 在56分钟之前、大概流动性还比较充足、使用zscore信号、来判断是否建仓
-         * 在56分钟之后、大概流动性已经比较匮乏、使用流动性信号、来判断是否建仓
+         * 逻辑分支优化：
+         * 分支A (常规): 时间早 且 流动性充沛 -> 严格校验 Z-Score
+         * 分支B (尾部): 时间晚 或 流动性下降 -> 加速扫描，检查 枯竭信号 或 捡漏
          */
-        if (dayjs().minute() < 55 && (await checkSellerLiquidity(this.client, topTokenId,2000))) {
-            // 在前5分钟内 并且流动性充足、则使用zscore信号、来判断是否建仓
+        // 55分钟 = 剩余 300秒
+        const isLateStage = secondsToEnd < 300;
+        // 使用默认阈值 (通常是1000) 检查基础流动性
+        const isLiquiditySufficient = await checkSellerLiquidity(this.client, topTokenId);
+
+        if (!isLateStage && isLiquiditySufficient) {
+            // === 常规阶段：时间早且流动性好 ===
+            // 严格遵守 Z-Score
             if (zVal < this.zMin) {
                 return null;
             }
         } else {
-            // 在56分钟之后、大概流动性已经比较匮乏、使用流动性信号、来判断是否建仓
+            // === 尾部/低流动性阶段 ===
             // 触发低波动率信号、等待流动性匮乏信号, 加速 tick 频率
             this.tickIntervalMs = Math.max(1000, this.tickIntervalMs / 2);
 
-            // 检查 0.99 流动性是否枯竭
-            const isDepleted = await checkLiquidityDepletion(this.client, topTokenId);
-
-            if (isDepleted) {
+            if (isLiquiditySufficient) {
+                // === 场景：晚期但流动性依然充足 ===
+                // 只要 Z-Score 达标就买
+                if (zVal < this.zMin) {
+                    // 流动性好但统计信号不好 -> 放弃
+                    return null;
+                }
+                // 流动性好且Z-Score好 -> 继续执行 (isLiquiditySignal 保持 false，走正常风控)
+            } else {
+                // === 场景：流动性枯竭 (无论早晚) ===
+                // 触发尾端流动性追踪信号
                 console.log(
                     `[@${dayjs().format(
                         "YYYY-MM-DD HH:mm:ss",
-                    )} ${market.slug}] 触发尾端流动性追踪信号 (Z=${zVal} < ${this.zMin}, Time>58, LiquidityDepleted=true)`,
+                    )} ${market.slug}] 触发尾端流动性追踪信号 (Z=${zVal}, Time=${secondsToEnd}s, LiquidityInsufficient)`,
                 );
                 isLiquiditySignal = true;
-            } else {
-                console.log(
-                    `[@${dayjs().format(
-                        "YYYY-MM-DD HH:mm:ss",
-                    )} ${market.slug}] 未触发尾端流动性追踪信号 (Z=${zVal} >= ${this.zMin}, Time<=58, LiquidityDepleted=false)`,
-                );
-                return null;
             }
         }
 
@@ -340,12 +346,12 @@ class TailConvergenceStrategy {
                 ? {
                       tokenId: yesTokenId,
                       price: yesPrice,
-                      outcome: "yes",
+                      outcome: "UP",
                   }
                 : {
                       tokenId: noTokenId,
                       price: noPrice,
-                      outcome: "no",
+                      outcome: "DOWN",
                   };
         console.log(
             `[@${dayjs().format("YYYY-MM-DD HH:mm:ss")} ${market.slug}] 选择=${candidate.outcome.toUpperCase()}@${candidate.price.toFixed(3)}`,
@@ -362,10 +368,6 @@ class TailConvergenceStrategy {
             amp,
         };
     }
-
-    // async get1HourAmp() { ... } // 已移动到 common.js
-
-    // async checkSellerLiquidity(...) { ... } // 已移动到 common.js
 
     // 检查是否已建仓,未建仓则执行建仓
     async handleSignal(signal) {
@@ -396,11 +398,6 @@ class TailConvergenceStrategy {
             }
             // 在检查是否已用过额外买入
             if (this.extraEntryDone) {
-                console.log(
-                    `[@${dayjs().format(
-                        "YYYY-MM-DD HH:mm:ss",
-                    )} ${marketSlug}-${signal.chosen.outcome.toUpperCase()}@额外买入] 额外买入次数已达上限，结束处理`,
-                );
                 return;
             }
 
@@ -577,43 +574,6 @@ class TailConvergenceStrategy {
             priceChange: signal.amp,
             isLiquiditySignal: signal.liquiditySignal,
         }).catch((err) => console.error("Failed to save entry order to DB", err));
-
-        await this.saveState();
-    }
-
-    async saveState() {
-        // 读取当前配置,确保保存时保留配置
-        let currentConfig = {};
-        try {
-            const data = JSON.parse(readFileSync(this.stateFilePath, "utf8"));
-            currentConfig = data.config || {};
-        } catch (err) {
-            // 如果读取失败,使用当前实例的配置值
-            currentConfig = {};
-        }
-
-        currentConfig = {
-            ...currentConfig,
-            positionSizeUsdc: this.positionSizeUsdc,
-            triggerPriceGt: this.triggerPriceGt,
-            maxMinutesToEnd: this.maxMinutesToEnd,
-            ampMin: this.ampMin,
-            zMin: this.zMin,
-            symbol: this.symbol,
-            takeProfitPrice: this.takeProfitPrice,
-            test: this.test,
-            slug: this.slugTemplate,
-            cronExpression: this.cronExpression,
-            cronTimeZone: this.cronTimeZone,
-            tickIntervalSeconds: this.tickIntervalSeconds,
-            allowExtraEntryAtCeiling: this.allowExtraEntryAtCeiling,
-        };
-        delete currentConfig.slugList;
-
-        const payload = {
-            config: currentConfig,
-        };
-        await writeFile(this.stateFilePath, `${JSON.stringify(payload, null, 4)}\n`);
     }
 }
 

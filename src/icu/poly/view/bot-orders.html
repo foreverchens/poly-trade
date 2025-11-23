@@ -43,20 +43,19 @@
     <table id="ordersTable" style="display:none;">
         <thead>
             <tr>
-                <th>Time</th>
-                <th>Event Slug</th>
-                <th>Market Slug</th>
-                <th>Side</th>
-                <th>Outcome</th>
-                <th>Price</th>
-                <th>Size</th>
-                <th>Order ID</th>
-                <th>Parent Order ID</th>
-                <th>Z-Score</th>
-                <th>Secs Left</th>
-                <th>Volatility</th>
-                <th>Type</th>
-                <th>Actions</th>
+                <th>time</th>
+                <th>market slug</th>
+                <th>outcome</th>
+                <th>side</th>
+                <th>price</th>
+                <th>size</th>
+                <th>order id</th>
+                <th>parent order id</th>
+                <th>z-score</th>
+                <th>secs left</th>
+                <th>volatility</th>
+                <th>type</th>
+                <th>actions</th>
             </tr>
         </thead>
         <tbody id="ordersBody">
@@ -118,17 +117,15 @@
                     const row = document.createElement('tr');
                     const date = new Date(order.createdAt).toLocaleString();
                     const sideClass = order.side === 'BUY' ? 'side-yes' : 'side-no';
-                    const outcomeClass = order.outcome === 'YES' ? 'side-yes' : 'side-no';
 
                     // Store in global array for edit modal
                     window.ordersData = data;
 
                     row.innerHTML = `
                         <td>${date}</td>
-                        <td>${order.eventSlug}</td>
                         <td>${order.marketSlug}</td>
+                        <td>${order.outcome}</td>
                         <td class="${sideClass}">${order.side}</td>
-                        <td class="${outcomeClass}">${order.outcome}</td>
                         <td>${order.price.toFixed(3)}</td>
                         <td>${order.size}</td>
                         <td title="${order.orderId}"><small>${truncateId(order.orderId)}</small></td>

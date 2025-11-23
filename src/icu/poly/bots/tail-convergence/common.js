@@ -1,5 +1,6 @@
 import { readFileSync } from "fs";
 import dayjs from "dayjs";
+import axios from "axios";
 import { polyClient } from "../../core/PolyClient.js";
 
 const EASTERN_TZ = "America/New_York";
@@ -123,3 +124,60 @@ export function threshold(sec, k = 0.3, a = 0.92, b = 0.06) {
     const s = Math.max(0, Math.min(600, sec));
     return Number((a + b * Math.pow(s / 600, k)).toFixed(3));
 }
+
+export async function get1HourAmp(symbol) {
+    // 调用binance 现货api获取ETH最近一根小时级别k线、
+    const cleanSymbol = symbol.replace("/", "");
+    const klines = await axios.get(
+        `https://api.binance.com/api/v3/klines?symbol=${cleanSymbol}&interval=1h&limit=1`,
+    );
+    if (!klines?.data?.length) {
+        return 1;
+    }
+    const kline = klines.data[0];
+    return Math.abs(kline[1] - kline[4]) / kline[1];
+}
+
+/**
+ * 检查卖方流动性是否充沛
+ */
+export async function checkSellerLiquidity(client, tokenId, threshold = 1000) {
+    try {
+        const orderBook = await client.getOrderBook(tokenId);
+        if (!orderBook?.asks?.length) {
+            return false;
+        }
+        // 计算所有卖方订单的总流动性（size总和）
+        const totalLiquidity = orderBook.asks.reduce((sum, ask) => {
+            const size = Number(ask.size) || 0;
+            return sum + size;
+        }, 0);
+        return totalLiquidity >= threshold;
+    } catch (err) {
+        return false;
+    }
+}
+
+export async function resolvePositionSize(client, defaultPositionSize) {
+    try {
+        const balanceRaw = await client.getUsdcEBalance();
+        const balance = Math.floor(Number(balanceRaw));
+        if (Number.isFinite(balance) && balance > 0) {
+            return balance;
+        }
+        console.log(
+            `[@${dayjs().format(
+                "YYYY-MM-DD HH:mm:ss",
+            )}] [建仓预算] USDC.e 余额无效(${balanceRaw}),使用默认建仓金额=${defaultPositionSize}`,
+        );
+    } catch (err) {
+        console.error(
+            `[@${dayjs().format(
+                "YYYY-MM-DD HH:mm:ss",
+            )}] [建仓预算] 获取USDC.e余额失败,使用默认建仓金额`,
+            err?.message ?? err,
+        );
+    }
+    return defaultPositionSize;
+}
+

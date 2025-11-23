@@ -3,6 +3,7 @@ import path from "path";
 import {fileURLToPath} from "url";
 import axios from "axios";
 import {PolyClient} from "./core/PolyClient.js";
+import {listOrders, deleteOrder, updateOrder} from "./db/repository.js";
 
 const PORT = process.env.PORT || 3001;
 const BTC_PRICE_SOURCE = process.env.BTC_PRICE_SOURCE || "https://api.binance.com/api/v3/klines";
@@ -39,6 +40,7 @@ const CLIENT_ERROR_PATTERNS = [/market is required/i, /Invalid interval/i];
 const PAGE_ROUTES = [
     {label: "Crypto Markets", path: "/"},
     {label: "dashboard", path: "/dashboard"},
+    {label: "Bot Orders", path: "/bot-orders"},
 ];
 const TRADE_LOOKBACK_DAYS = 3;
 const MAX_TRADE_ITEMS = 10;
@@ -360,12 +362,59 @@ async function enrichOrdersWithMarketMeta(orders) {
     return orders;
 }
 
+app.get("/api/bot-orders", async (req, res) => {
+    try {
+        const limit = req.query.limit ? parseInt(req.query.limit) : 100;
+        const orders = await listOrders(limit);
+        res.json(orders);
+    } catch (err) {
+        console.error("Failed to fetch bot orders:", err.message);
+        res.status(500).json({
+            error: "failed_to_fetch_bot_orders",
+            message: err.message,
+        });
+    }
+});
+
+app.delete("/api/bot-orders/:id", async (req, res) => {
+    try {
+        const {id} = req.params;
+        await deleteOrder(id);
+        res.json({success: true});
+    } catch (err) {
+        console.error("Failed to delete order:", err.message);
+        res.status(500).json({
+            error: "failed_to_delete_order",
+            message: err.message,
+        });
+    }
+});
+
+app.put("/api/bot-orders/:id", async (req, res) => {
+    try {
+        const {id} = req.params;
+        const data = req.body;
+        const updated = await updateOrder(id, data);
+        res.json(updated);
+    } catch (err) {
+        console.error("Failed to update order:", err.message);
+        res.status(500).json({
+            error: "failed_to_update_order",
+            message: err.message,
+        });
+    }
+});
+
 app.get("/", (_req, res) => {
     res.sendFile(path.join(viewDir, "crypto-markets.html"));
 });
 
 app.get("/dashboard", (_req, res) => {
     res.sendFile(path.join(viewDir, "dashboard.html"));
+});
+
+app.get("/bot-orders", (_req, res) => {
+    res.sendFile(path.join(viewDir, "bot-orders.html"));
 });
 
 app.listen(PORT, () => {

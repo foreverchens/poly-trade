@@ -52,7 +52,6 @@ export function loadStateFile(stateFilePath) {
         const data = JSON.parse(readFileSync(stateFilePath, "utf8"));
         return {
             config: data.config || {},
-            orders: data.orders || {},
         };
     } catch (err) {
         throw new Error(`Failed to load state file ${stateFilePath}: ${err.message}`);

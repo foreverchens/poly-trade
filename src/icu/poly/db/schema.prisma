@@ -1,0 +1,41 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = "file:./orders.db"
+}
+
+model Order {
+  id                String   @id @default(uuid())
+  eventSlug         String
+  marketSlug        String
+
+  // 订单基本信息
+  side              String   // BUY / SELL
+  outcome           String   // YES / NO
+  orderId           String   @unique
+  price             Float
+  size              Float
+
+  // 关联信息 (如果是止盈单，可以关联到建仓单)
+  parentOrderId     String?  // 关联的建仓单ID
+
+  // Signal context
+  tokenId           String?
+  zScore            Float?
+  secondsToEnd      Int?     // 下单时距离结束/开始的秒数
+  priceChange       Float?   // 距离开盘价的涨跌幅
+  isLiquiditySignal Boolean? @default(false)
+
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@index([eventSlug])
+  @@index([marketSlug])
+  @@index([parentOrderId])
+}

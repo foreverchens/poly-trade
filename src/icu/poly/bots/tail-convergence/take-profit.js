@@ -1,13 +1,13 @@
 import dayjs from "dayjs";
 import cron from "node-cron";
 import { PolySide } from "../../core/PolyClient.js";
+import { saveOrder } from "../../db/repository.js";
 
 export class TakeProfitManager {
-    constructor(client, config, updateOrderCallback) {
+    constructor(client, config) {
         this.client = client;
         this.cronTimeZone = config.cronTimeZone;
         this.takeProfitPrice = config.takeProfitPrice;
-        this.updateOrderCallback = updateOrderCallback; // 回调用于更新主策略的 state
 
         this.takeProfitOrders = [];
         this.takeProfitCronTask = null;
@@ -179,12 +179,23 @@ export class TakeProfitManager {
             const takeProfitOrderId = takeProfitOrderResp.orderID;
             takeProfitOrder.takeProfitOrderId = takeProfitOrderId;
 
-            // 调用回调更新外部状态
-            this.updateOrderCallback(
-                takeProfitOrder.signal,
-                takeProfitOrder.entryOrderId,
-                takeProfitOrderId,
-            );
+            // 保存止盈订单
+            saveOrder({
+                eventSlug: takeProfitOrder.signal.eventSlug,
+                marketSlug: takeProfitOrder.signal.marketSlug,
+                side: "SELL",
+                outcome: takeProfitOrder.signal.chosen.outcome.toUpperCase(),
+                orderId: takeProfitOrderId,
+                price: bestBidPrice,
+                size: size,
+                parentOrderId: takeProfitOrder.entryOrderId,
+
+                tokenId: takeProfitOrder.tokenId,
+                zScore: takeProfitOrder.signal.zVal,
+                secondsToEnd: takeProfitOrder.signal.secondsToEnd, // 使用建仓时的信号数据作为上下文
+                priceChange: takeProfitOrder.signal.amp,
+                isLiquiditySignal: takeProfitOrder.signal.liquiditySignal
+            }).catch(err => console.error("Failed to save TP order to DB", err));
 
             console.log(
                 `[@${dayjs().format("YYYY-MM-DD HH:mm:ss")}] [止盈] ${orderKey} ✅ 止盈订单已成功提交, 订单号=${takeProfitOrderId}`,

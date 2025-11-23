@@ -15,10 +15,12 @@ import {
     threshold,
     get1HourAmp,
     checkSellerLiquidity,
-    resolvePositionSize
+    resolvePositionSize,
 } from "./common.js";
 import { checkLiquidityDepletion } from "./liquidity-check.js";
 import { TakeProfitManager } from "./take-profit.js";
+import { saveOrder } from "../../db/repository.js";
+import e from "express";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -28,7 +30,7 @@ class TailConvergenceStrategy {
     constructor(stateFilePath = DEFAULT_STATE_FILE) {
         this.stateFilePath = stateFilePath;
 
-        const { config, orders } = loadStateFile(this.stateFilePath);
+        const { config } = loadStateFile(this.stateFilePath);
         this.test = config.test ?? true;
         this.client = new PolyClient(this.test);
         console.log(
@@ -36,17 +38,13 @@ class TailConvergenceStrategy {
         );
 
         this.initializeConfig(config);
-        this.initializeRuntimeState(orders);
+        this.initializeRuntimeState();
 
         // 初始化止盈管理器
-        this.tpManager = new TakeProfitManager(
-            this.client,
-            {
-                cronTimeZone: this.cronTimeZone,
-                takeProfitPrice: this.takeProfitPrice
-            },
-            this.updateOrderTakerId.bind(this) // 传入回调
-        );
+        this.tpManager = new TakeProfitManager(this.client, {
+            cronTimeZone: this.cronTimeZone,
+            takeProfitPrice: this.takeProfitPrice,
+        });
 
         this.validateCronConfig();
         this.logBootstrapSummary();
@@ -119,8 +117,7 @@ class TailConvergenceStrategy {
      * currentLoopHour：当前 tick 循环对应的小时数,用于跨小时重置。
      * takeProfitCronTask：止盈监控 cron 任务句柄。
      */
-    initializeRuntimeState(orders) {
-        this.orders = orders || {};
+    initializeRuntimeState() {
         // 内存中的状态位
         this.initialEntryDone = false;
         this.extraEntryDone = false;
@@ -281,33 +278,38 @@ class TailConvergenceStrategy {
             fetchBestAsk(this.client, noTokenId),
         ]);
         const topPrice = Math.max(yesPrice, noPrice);
+        const topTokenId = yesPrice >= noPrice ? yesTokenId : noTokenId;
 
-        if (zVal < this.zMin) {
-            // 检查是否满足尾端流动性追踪条件：时间 > 57 分钟
-            if (topPrice > 0.98 && dayjs().minute() > 58) {
-                // 触发低波动率信号、等待流动性匮乏信号, 加速 tick 频率
-                this.tickIntervalMs = Math.max(1000, this.tickIntervalMs / 2);
+        /**
+         * 在56分钟之前、大概流动性还比较充足、使用zscore信号、来判断是否建仓
+         * 在56分钟之后、大概流动性已经比较匮乏、使用流动性信号、来判断是否建仓
+         */
+        if (dayjs().minute() < 55 && (await checkSellerLiquidity(this.client, topTokenId,2000))) {
+            // 在前5分钟内 并且流动性充足、则使用zscore信号、来判断是否建仓
+            if (zVal < this.zMin) {
+                return null;
+            }
+        } else {
+            // 在56分钟之后、大概流动性已经比较匮乏、使用流动性信号、来判断是否建仓
+            // 触发低波动率信号、等待流动性匮乏信号, 加速 tick 频率
+            this.tickIntervalMs = Math.max(1000, this.tickIntervalMs / 2);
 
-                const candidateTokenId = yesPrice >= noPrice ? yesTokenId : noTokenId;
-                // 检查 0.99 流动性是否枯竭
-                const isDepleted = await checkLiquidityDepletion(this.client, candidateTokenId);
+            // 检查 0.99 流动性是否枯竭
+            const isDepleted = await checkLiquidityDepletion(this.client, topTokenId);
 
-                if (isDepleted) {
-                    console.log(
-                        `[@${dayjs().format(
-                            "YYYY-MM-DD HH:mm:ss",
-                        )} ${market.slug}] 触发尾端流动性追踪信号 (Z=${zVal} < ${this.zMin}, Time>58, LiquidityDepleted=true)`,
-                    );
-                    isLiquiditySignal = true;
-                } else {
-                    console.log(
-                        `[@${dayjs().format(
-                            "YYYY-MM-DD HH:mm:ss",
-                        )} ${market.slug}] 未触发尾端流动性追踪信号 (Z=${zVal} >= ${this.zMin}, Time<=58, LiquidityDepleted=false)`,
-                    );
-                    return null;
-                }
+            if (isDepleted) {
+                console.log(
+                    `[@${dayjs().format(
+                        "YYYY-MM-DD HH:mm:ss",
+                    )} ${market.slug}] 触发尾端流动性追踪信号 (Z=${zVal} < ${this.zMin}, Time>58, LiquidityDepleted=true)`,
+                );
+                isLiquiditySignal = true;
             } else {
+                console.log(
+                    `[@${dayjs().format(
+                        "YYYY-MM-DD HH:mm:ss",
+                    )} ${market.slug}] 未触发尾端流动性追踪信号 (Z=${zVal} >= ${this.zMin}, Time<=58, LiquidityDepleted=false)`,
+                );
                 return null;
             }
         }
@@ -355,6 +357,9 @@ class TailConvergenceStrategy {
             yesPrice,
             noPrice,
             liquiditySignal: isLiquiditySignal,
+            zVal,
+            secondsToEnd,
+            amp,
         };
     }
 
@@ -373,7 +378,7 @@ class TailConvergenceStrategy {
                 price: signal.chosen.price,
                 sizeUsd: this.positionSizeUsdc,
                 signal,
-                isExtra: false
+                isExtra: false,
             });
             return;
         }
@@ -411,7 +416,11 @@ class TailConvergenceStrategy {
             const price = Number(signal.chosen.price);
             // 再检查是否满足额外时间和流动性条件
             // if (dayjs().minute() < 55 && price < 0.97 && (await this.checkSellerLiquidity(signal.chosen.tokenId))) { // 改为调用 common
-            if (dayjs().minute() < 55 && price < 0.97 && (await checkSellerLiquidity(this.client, signal.chosen.tokenId))) {
+            if (
+                dayjs().minute() < 55 &&
+                price < 0.97 &&
+                (await checkSellerLiquidity(this.client, signal.chosen.tokenId))
+            ) {
                 console.log(
                     `[@${dayjs().format(
                         "YYYY-MM-DD HH:mm:ss",
@@ -436,7 +445,7 @@ class TailConvergenceStrategy {
                     price >= 0.97 &&
                     dayjs().minute() > 57 &&
                     // this.checkSellerLiquidity(signal.chosen.tokenId)
-                    await checkSellerLiquidity(this.client, signal.chosen.tokenId)
+                    (await checkSellerLiquidity(this.client, signal.chosen.tokenId))
                 ) {
                     // price >= 0.97 && price < 0.98
                     // 当价格为0.97的场合、入场条件、时间大于57分钟、且波动率大于0.008
@@ -476,7 +485,7 @@ class TailConvergenceStrategy {
             price: signal.chosen.price,
             sizeUsd,
             signal,
-            isExtra: true
+            isExtra: true,
         });
         console.log(
             `[@${dayjs().format(
@@ -551,18 +560,24 @@ class TailConvergenceStrategy {
             this.initialEntryDone = true;
         }
 
-        const eventSlug = signal.eventSlug;
-        if (!this.orders[eventSlug]) {
-            this.orders[eventSlug] = [];
-        }
-        this.orders[eventSlug].push({
+        // 保存建仓订单
+        saveOrder({
+            eventSlug: signal.eventSlug,
             marketSlug: signal.marketSlug,
-            side: signal.chosen.outcome.toUpperCase(),
+            side: "BUY",
+            outcome: signal.chosen.outcome.toUpperCase(),
             orderId: orderId,
             price: price,
             size: sizeShares,
-            takeProfitOrderId: null,
-        });
+            parentOrderId: null,
+
+            tokenId: tokenId,
+            zScore: signal.zVal,
+            secondsToEnd: signal.secondsToEnd,
+            priceChange: signal.amp,
+            isLiquiditySignal: signal.liquiditySignal,
+        }).catch((err) => console.error("Failed to save entry order to DB", err));
+
         await this.saveState();
     }
 
@@ -595,40 +610,10 @@ class TailConvergenceStrategy {
         };
         delete currentConfig.slugList;
 
-        // 限制orders对象最多拥有5个字段（5个市场），保存时只保留最后5个
-        const MAX_MARKETS = 5;
-        const entries = Object.entries(this.orders);
-        let limitedOrders = {};
-        if (entries.length > MAX_MARKETS) {
-            const limitedEntries = entries.slice(-MAX_MARKETS);
-            limitedOrders = Object.fromEntries(limitedEntries);
-        } else {
-            limitedOrders = this.orders;
-        }
-
         const payload = {
             config: currentConfig,
-            orders: limitedOrders,
         };
         await writeFile(this.stateFilePath, `${JSON.stringify(payload, null, 4)}\n`);
-    }
-
-    updateOrderTakerId(signal, entryOrderId, takeProfitOrderId) {
-        if (!entryOrderId || !takeProfitOrderId) {
-            return;
-        }
-        const eventOrders = this.orders[signal.eventSlug];
-        if (!eventOrders?.length) {
-            return;
-        }
-        const targetOrder = eventOrders.find((order) => order.orderId === entryOrderId);
-        if (!targetOrder) {
-            return;
-        }
-        targetOrder.takeProfitOrderId = takeProfitOrderId;
-        this.saveState().catch((err) => {
-            console.error("[扫尾盘策略] 保存taker订单状态失败", err);
-        });
     }
 }
 

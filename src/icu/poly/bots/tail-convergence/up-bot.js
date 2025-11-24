@@ -218,7 +218,7 @@ class TailConvergenceStrategy {
         if (
             this.initialEntryDone &&
             (this.extraEntryDone || !this.allowExtraEntryAtCeiling) &&
-            dayjs().minute() >= 52
+            dayjs().minute() >= 51
         ) {
             // 初始建仓 且 额外买入 且 时间大于52分钟、则提前结束小时循环
             logger.info(
@@ -259,41 +259,8 @@ class TailConvergenceStrategy {
         if (!market) {
             return null;
         }
-        /**
-         *  在小时高波动场合、波动后概率往往已经接近95左右、后续会不断收敛到100%、
-         *  在收敛过程中、如果趋势不变、流动性会更早的进入枯竭状态、此时可能都没有抵达50分钟
-         *  所以、如果在30分到50分之间、发生流动性匮乏、则可以提前进入监控状态
-         *  主任务新增30到50分的触发逻辑、修改为 30分开始触发、每5分钟一次、
-         *  如果中途发生流动性匮乏、则提前进入监控模式、提高tick频率
-         */
-        if (this.loopState === 0) {
-            // 30~50分钟、流动性充足、待机
-            if (dayjs().minute() < 50 && (await this.checkAllLiquiditySufficient(market))) {
-                // 流动性充足、继续等待
-                logger.info(`[${market.slug}] pending...`);
-                return null;
-            }
-            // 超过50分钟、或者流动性枯竭、转换为监控模式、提高tick频率
-            logger.info(
-                `[${market.slug}] 状态转换: 待机模式 -> 监控模式 (tick间隔: ${this.tickIntervalMs}ms -> 10000ms, 原因: ${dayjs().minute() >= 50 ? "时间超过50分" : "流动性枯竭"})`,
-            );
-            this.loopState = 1;
-            this.tickIntervalMs = 1000 * 10;
-        }
         // 构建交易信号
         return await this.buildSignal(slug, market);
-    }
-
-    /**
-     * 检查双方流动性是否充足
-     * @param {*} market
-     * @returns
-     */
-    async checkAllLiquiditySufficient(market) {
-        const [yesTokenId, noTokenId] = JSON.parse(market.clobTokenIds);
-        const yesOk = await this.cache.checkLiquidity(this.client, yesTokenId);
-        const noOk = await this.cache.checkLiquidity(this.client, noTokenId);
-        return yesOk && noOk;
     }
 
     /**
@@ -316,6 +283,38 @@ class TailConvergenceStrategy {
         const topTokenId = yesPrice >= noPrice ? yesTokenId : noTokenId;
 
         /**
+         *  在小时高波动场合、波动后概率往往已经接近95左右、后续会不断收敛到100%、
+         *  在收敛过程中、如果趋势不变、流动性会更早的进入枯竭状态、此时可能都没有抵达50分钟
+         *  所以、如果在30分到50分之间、发生流动性匮乏、则可以提前进入监控状态
+         *  主任务新增30到50分的触发逻辑、修改为 30分开始触发、每5分钟一次、
+         *  如果中途发生流动性匮乏、则提前进入监控模式、提高tick频率
+         */
+        if (this.loopState === 0) {
+            // 30~50分钟、价格未触发、待机
+            if (dayjs().minute() < 50 && topPrice < this.triggerPriceGt) {
+                // 非高波动场合、价格未触发、继续等待
+                logger.info(`[${market.slug}] pending... yesPrice=${yesPrice} noPrice=${noPrice}`);
+                return null;
+            }
+            // 超过50分钟、或者高波动发生、价格触发、转换为监控模式、提高tick频率
+            logger.info(
+                `[${market.slug}] 状态转换: 待机模式 -> 监控模式 (tick间隔: ${this.tickIntervalMs}ms -> 10000ms, 原因: ${dayjs().minute() >= 50 ? "时间超过50分" : "高波动发生"})`,
+            );
+            this.loopState = 1;
+            this.tickIntervalMs = 1000 * 10;
+        }
+
+        // 先检查价格是否在触发价格范围内
+        const priceThreshold = threshold(secondsToEnd);
+        // 价格不能超出 triggerPriceGt (0.99) 和 priceThreshold 的范围
+        if (topPrice > this.triggerPriceGt || topPrice < priceThreshold) {
+            logger.info(
+                `[${market.slug}] 顶部价格=${topPrice} 超出触发价格范围=[${priceThreshold}, ${this.triggerPriceGt}],继续等待`,
+            );
+            return null;
+        }
+
+        /**
          * 逻辑分支优化：
          * 分支A (常规): 时间早 且 流动性充沛 -> 严格校验 Z-Score
          * 分支B (尾部): 时间晚 或 流动性下降 -> 加速扫描，检查 枯竭信号 或 捡漏
@@ -323,7 +322,8 @@ class TailConvergenceStrategy {
         // 剩余时间小于300秒、进入尾部阶段
         const isLateStage = secondsToEnd < 300;
         // 使用默认阈值 (通常是1000) 检查基础流动性 检查卖方流动性是否充足
-        const isLiquiditySufficient = await this.cache.checkLiquidity(this.client, topTokenId);
+        const asksLiq = await this.cache.getAsksLiq(this.client, topTokenId);
+        const isLiquiditySufficient = asksLiq >= 1000;
 
         // 流动性信号标记
         let isLiquiditySignal = false;
@@ -368,16 +368,6 @@ class TailConvergenceStrategy {
                 // 触发尾端流动性追踪信号、设置流动性信号标记
                 isLiquiditySignal = true;
             }
-        }
-
-        const priceThreshold = threshold(secondsToEnd);
-        // 检查价格是否在触发价格范围内
-        // 统一检查：无论是否流动性信号，价格都不能超出 triggerPriceGt (0.99) 和 priceThreshold 的范围
-        if (topPrice > this.triggerPriceGt || topPrice < priceThreshold) {
-            logger.info(
-                `[${market.slug}] 顶部价格=${topPrice} 超出触发价格范围=[${priceThreshold}, ${this.triggerPriceGt}],继续等待`,
-            );
-            return null;
         }
 
         // UpDown事件：波动率检查
@@ -447,18 +437,22 @@ class TailConvergenceStrategy {
 
         // 4. 简化风控：只允许价格>=0.99时额外买入
         // 理由：价格到0.99本身就是强烈的收敛信号，不需要额外的时间和波动率检查
-        if (price < 0.99) {
+        // 若流动性尚且充足、等待匮乏机会
+        const chosenAsksLiq = await this.cache.getAsksLiq(this.client, signal.chosen.tokenId);
+        if (price < 0.99 || chosenAsksLiq >= 2000) {
+            // price >= 0.99
+            // 流动性大于2000、就还能再等等
             return {
                 allowed: false,
-                reason: `价格${price.toFixed(3)}<0.99，不满足额外买入条件`,
+                reason: `价格${price.toFixed(3)}<0.99 或流动性充足(${chosenAsksLiq}>=${2000})，等待更佳时机`,
             };
         }
 
         logger.info(
-            `[${marketSlug}-${signal.chosen.outcome.toUpperCase()}@额外买入] 风控检查通过: 价格=${price.toFixed(3)}>=0.99`,
+            `[${marketSlug}-${signal.chosen.outcome.toUpperCase()}@额外买入] 风控检查通过: 价格=${price.toFixed(3)}>=0.99 或流动性已经不足(threshold=2000)`,
         );
 
-        return { allowed: true, reason: "价格>=0.99，风控通过" };
+        return { allowed: true, reason: "价格>=0.99 或流动性已经不足(threshold=2000) 风控通过" };
 
         /* ==================== 复杂风控逻辑（已注释） ====================
         // 5. 价格+时间+流动性联合风控

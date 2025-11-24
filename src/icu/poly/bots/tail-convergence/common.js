@@ -144,22 +144,26 @@ export async function get1HourAmp(symbol) {
 }
 
 /**
- * 检查卖方流动性是否充沛
+ * 获取卖方流动性总量
  */
-export async function checkSellerLiquidity(client, tokenId, threshold = 1000) {
+export async function getAsksLiq(client, tokenId) {
     try {
         const orderBook = await client.getOrderBook(tokenId);
         if (!orderBook?.asks?.length) {
-            return false;
+            return 0;
         }
         // 计算所有卖方订单的总流动性（size总和）
         const totalLiquidity = orderBook.asks.reduce((sum, ask) => {
+            if(ask.price > 0.99) {
+                // 非0.99价格、不计算流动性
+                return sum;
+            }
             const size = Number(ask.size) || 0;
             return sum + size;
         }, 0);
-        return totalLiquidity >= threshold;
+        return totalLiquidity;
     } catch (err) {
-        return false;
+        return 0;
     }
 }
 

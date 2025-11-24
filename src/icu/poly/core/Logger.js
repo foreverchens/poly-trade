@@ -81,17 +81,17 @@ function configure(dateYmd) {
             console: {
                 type: 'stdout',
                 // ✅ 用 hh（log4js 的小时 token），而不是 HH
-                layout: {type: 'pattern', pattern: '[%d{yyyy-MM-dd hh:mm:ss.SSS}] %-5p %m'},
+                layout: {type: 'pattern', pattern: '[%d{yyyy-MM-dd hh:mm:ss}] %-5p %m'},
             },
             errorFile: {
                 type: 'file',
                 filename: errorFile,
-                layout: {type: 'pattern', pattern: '[%d{yyyy-MM-dd hh:mm:ss.SSS}] %-5p %m'},
+                layout: {type: 'pattern', pattern: '[%d{yyyy-MM-dd hh:mm:ss}] %-5p %m'},
             },
             infoFile: {
                 type: 'file',
                 filename: infoFile,
-                layout: {type: 'pattern', pattern: '[%d{yyyy-MM-dd hh:mm:ss.SSS}] %-5p %m'},
+                layout: {type: 'pattern', pattern: '[%d{yyyy-MM-dd hh:mm:ss}] %-5p %m'},
             },
             errorOnly: {type: 'logLevelFilter', appender: 'errorFile', level: 'error'},
             importantOnly: {type: 'logLevelFilter', appender: 'infoFile', level: 'info', maxLevel: 'warn'},
@@ -112,10 +112,11 @@ function wrapWithCaller(level) {
     return (...args) => {
         const {functionName, file, line} = getCallerFrame();
         const loc = `${path.basename(file)}:${line}`;
-        const fn = functionName && functionName !== 'anonymous' ? ` [${functionName}]` : '';
+        // const fn = functionName && functionName !== 'anonymous' ? ` [${functionName}]` : '';
         // Java风格：<loc><func> - <message>
         const msg = args.map(a => (a instanceof Error && a.stack) ? a.stack : String(a)).join(' ');
-        raw(`${loc}${fn} - ${msg}`);
+        // raw(`${loc}${fn} - ${msg}`);
+        raw(`${loc} ${msg}`);
     };
 }
 

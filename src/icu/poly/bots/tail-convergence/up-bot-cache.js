@@ -1,5 +1,5 @@
 import dayjs from "dayjs";
-import { resolveSlugList, fetchMarkets, checkSellerLiquidity, resolvePositionSize } from "./common.js";
+import { resolveSlugList, fetchMarkets, getAsksLiq, resolvePositionSize } from "./common.js";
 import logger from "../../core/Logger.js";
 
 export class UpBotCache {
@@ -77,20 +77,18 @@ export class UpBotCache {
     /**
      * 获取余额 (带TTL)
      * @param {Object} client - PolyClient 实例
-     * @param {boolean} forceRefresh - 是否强制从 API 刷新
      */
-    async getBalance(client, forceRefresh = false) {
+    async getBalance(client, maxBalance = 100) {
         const now = Date.now();
 
-        // 如果不是强制刷新，且缓存有效，直接返回
-        if (!forceRefresh && this.store.balance.val > 0 && (now - this.store.balance.ts <= this.TTL.BALANCE)) {
+        // 如果缓存有效，直接返回
+        if (this.store.balance.val > 0 && (now - this.store.balance.ts <= this.TTL.BALANCE)) {
             return this.store.balance.val;
         }
 
-        // 缓存过期或强制刷新，重新请求
-        logger.info(`[UpBotCache] 余额正在刷新 (Force=${forceRefresh})...`);
         try {
-            const val = await resolvePositionSize(client);
+            let val = await resolvePositionSize(client);
+            val = Math.min(val, maxBalance);
             this.store.balance = { val, ts: now };
             logger.info(`[UpBotCache] 余额更新完毕: ${val} USDC`);
         } catch (err) {
@@ -116,9 +114,9 @@ export class UpBotCache {
     }
 
     /**
-     * 检查流动性 (带TTL)
+     * 获取卖方流动性 (带TTL)
      */
-    async checkLiquidity(client, tokenId) {
+    async getAsksLiq(client, tokenId) {
         const now = Date.now();
         const cached = this.store.liquidity.get(tokenId);
 
@@ -128,7 +126,7 @@ export class UpBotCache {
         }
 
         // 缓存过期或不存在
-        const val = await checkSellerLiquidity(client, tokenId);
+        const val = await getAsksLiq(client, tokenId);
         this.store.liquidity.set(tokenId, { val, ts: now });
         return val;
     }

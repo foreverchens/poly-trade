@@ -17,7 +17,7 @@ export class UpBotCache {
 
         // TTL 配置 (毫秒)
         this.TTL = {
-            BALANCE: 10_000,      // 余额缓存 10秒
+            BALANCE: 3600_000,    // 余额缓存 1小时 (实际由 _rotate 控制每小时刷新一次)
             LIQUIDITY: 5_000      // 流动性缓存 5秒
         };
     }
@@ -32,6 +32,7 @@ export class UpBotCache {
             this.store.hour = currentHour;
             this.store.targetSlug = null;
             this.store.market = null;
+            this.store.balance = { val: 0, ts: 0 }; // 重置余额，强制下一次刷新
             this.store.liquidity.clear();
         }
     }
@@ -74,21 +75,43 @@ export class UpBotCache {
 
     /**
      * 获取余额 (带TTL)
+     * @param {Object} client - PolyClient 实例
+     * @param {boolean} forceRefresh - 是否强制从 API 刷新
      */
-    async getBalance(client) {
+    async getBalance(client, forceRefresh = false) {
         const now = Date.now();
-        // 命中缓存
-        if (now - this.store.balance.ts <= this.TTL.BALANCE) {
-            console.log(`[UpBotCache] 余额使用缓存: ${this.store.balance.val} USDC`);
+
+        // 如果不是强制刷新，且缓存有效，直接返回
+        if (!forceRefresh && this.store.balance.val > 0 && (now - this.store.balance.ts <= this.TTL.BALANCE)) {
             return this.store.balance.val;
         }
 
-        // 缓存过期或不存在，重新获取
-        console.log(`[UpBotCache] 余额缓存过期，重新请求...`);
-        const val = await resolvePositionSize(client);
-        this.store.balance = { val, ts: now };
-        console.log(`[UpBotCache] 余额更新完毕: ${val} USDC`);
+        // 缓存过期或强制刷新，重新请求
+        console.log(`[UpBotCache] 余额正在刷新 (Force=${forceRefresh})...`);
+        try {
+            const val = await resolvePositionSize(client);
+            this.store.balance = { val, ts: now };
+            console.log(`[UpBotCache] 余额更新完毕: ${val} USDC`);
+        } catch (err) {
+            console.error("[UpBotCache] 余额刷新失败, 保持旧值", err);
+        }
         return this.store.balance.val;
+    }
+
+    /**
+     * 本地扣减余额 (乐观更新)
+     * @param {number} amount - 扣减金额
+     */
+    deductBalance(amount) {
+        // 向上取整
+        amount = Math.ceil(amount);
+        if (this.store.balance && typeof this.store.balance.val === 'number') {
+            const oldVal = this.store.balance.val;
+            this.store.balance.val = Math.max(0, oldVal - amount);
+            // 更新时间戳，以此推迟下一次自动刷新，避免刚扣减就被旧的API数据覆盖
+            this.store.balance.ts = Date.now();
+            console.log(`[UpBotCache] 本地扣减余额: ${oldVal} -> ${this.store.balance.val} (-${amount})`);
+        }
     }
 
     /**
@@ -100,29 +123,12 @@ export class UpBotCache {
 
         // 如果缓存存在且未过期
         if (cached && (now - cached.ts < this.TTL.LIQUIDITY)) {
-            console.log(`[UpBotCache] 流动性[${tokenId}] 使用缓存: ${cached.val}`);
             return cached.val;
         }
 
         // 缓存过期或不存在
-        console.log(`[UpBotCache] 流动性[${tokenId}] 缓存过期/不存在，重新检查...`);
         const val = await checkSellerLiquidity(client, tokenId);
         this.store.liquidity.set(tokenId, { val, ts: now });
-        console.log(`[UpBotCache] 流动性[${tokenId}] 更新完毕: ${val}`);
         return val;
-    }
-
-    /**
-     * 获取数据快照 (供Web端展示用)
-     */
-    getSnapshot() {
-        return {
-            ts: dayjs().format("HH:mm:ss"),
-            hour: this.store.hour,
-            slug: this.store.targetSlug,
-            market: this.store.market?.slug ?? "None",
-            balance: this.store.balance.val,
-            liquidityCacheSize: this.store.liquidity.size
-        };
     }
 }

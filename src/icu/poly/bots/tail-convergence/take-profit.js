@@ -95,7 +95,7 @@ export class TakeProfitManager {
                 const remainingSize = originalSize - matchedSize;
 
                 console.log(
-                    `[@${dayjs().format("YYYY-MM-DD HH:mm:ss")}] [止盈] ${orderKey} 订单状态: 原始数量=${originalSize}, 已成交=${matchedSize}, 剩余=${remainingSize}`,
+                    `[@${dayjs().format("YYYY-MM-DD HH:mm:ss")}] [止盈] ${orderKey} 成交情况: ${matchedSize}/${originalSize}`,
                 );
 
                 if (matchedSize === 0 || matchedSize < originalSize) {
@@ -156,14 +156,13 @@ export class TakeProfitManager {
             // 再检查是否满足止盈价格要求
             if (bestBidPrice < this.takeProfitPrice) {
                 console.log(
-                    `[@${dayjs().format("YYYY-MM-DD HH:mm:ss")}] [止盈] ${orderKey} 最优买价=${bestBidPrice} 小于止盈价格=${this.takeProfitPrice}，跳过 @${takeProfitOrder.tokenId}`,
+                    `[@${dayjs().format("YYYY-MM-DD HH:mm:ss")}] [止盈] ${orderKey} 最优买价=${bestBidPrice} 小于止盈价格=${this.takeProfitPrice}，跳过`,
                 );
                 return false;
             }
 
-            const expectedRevenue = bestBidPrice * size;
             console.log(
-                `[@${dayjs().format("YYYY-MM-DD HH:mm:ss")}] [止盈] ${orderKey} 准备提交止盈订单: SELL price=${bestBidPrice.toFixed(3)} size=${size} 预期收益=${expectedRevenue.toFixed(2)}`,
+                `[@${dayjs().format("YYYY-MM-DD HH:mm:ss")}] [止盈] ${orderKey} 提交止盈: SELL --> ${bestBidPrice}@${size}`,
             );
 
             const takeProfitOrderResp = await this.client.placeOrder(

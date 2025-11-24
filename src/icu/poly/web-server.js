@@ -375,7 +375,7 @@ app.get("/api/bot-orders", async (req, res) => {
         });
     }
 });
-         
+
 app.delete("/api/bot-orders/:id", async (req, res) => {
     try {
         const {id} = req.params;

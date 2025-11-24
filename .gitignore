@@ -7,3 +7,6 @@ node_modules
 # SQLite database
 src/icu/poly/db/*.db
 
+# Log files
+logs/
+*.log

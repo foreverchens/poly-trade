@@ -47,7 +47,6 @@ export class PolyClient {
         if (!account) {
             throw new Error("Failed to generate account from mnemonic");
         }
-        console.log(`account.address: ${account.address}`);
         this.privateKey = account.privateKey;
 
         this.host = DEFAULT_HOST;

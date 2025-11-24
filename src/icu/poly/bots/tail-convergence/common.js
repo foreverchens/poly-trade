@@ -157,7 +157,6 @@ export async function checkSellerLiquidity(client, tokenId, threshold = 1000) {
             const size = Number(ask.size) || 0;
             return sum + size;
         }, 0);
-        console.log(`[@${dayjs().format("YYYY-MM-DD HH:mm:ss")}] 流动性=${totalLiquidity.toFixed(1)} 阈值=${threshold}`);
         return totalLiquidity >= threshold;
     } catch (err) {
         return false;

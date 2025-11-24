@@ -2,6 +2,7 @@ import dayjs from "dayjs";
 import cron from "node-cron";
 import { PolySide } from "../../core/PolyClient.js";
 import { saveOrder } from "../../db/repository.js";
+import logger from "../../core/Logger.js";
 
 export class TakeProfitManager {
     constructor(client, config) {
@@ -15,8 +16,8 @@ export class TakeProfitManager {
 
     addOrder(order) {
         this.takeProfitOrders.push(order);
-        console.log(
-            `[@${dayjs().format("YYYY-MM-DD HH:mm:ss")} ${order.signal.marketSlug}] 已加入止盈队列,当前止盈队列长度=${this.takeProfitOrders.length}`,
+        logger.info(
+            `[${order.signal.marketSlug}] 已加入止盈队列,当前止盈队列长度=${this.takeProfitOrders.length}`,
         );
     }
 
@@ -25,13 +26,13 @@ export class TakeProfitManager {
      */
     startTakeProfitMonitor() {
         if (this.takeProfitCronTask) {
-            console.log(`[扫尾盘策略] 止盈监控已启动，跳过重复启动`);
+            logger.info(`[扫尾盘策略] 止盈监控已启动，跳过重复启动`);
             return; // 已启动
         }
 
         // Cron表达式：每小时0-20分钟，每3分钟执行一次 (0-20/3 * * * *)
         const takeProfitCronExpression = "0-20/3 * * * *";
-        console.log(
+        logger.info(
             `[扫尾盘策略] 止盈任务已启动，Cron表达式=${takeProfitCronExpression} (时区: ${this.cronTimeZone})`,
         );
 
@@ -59,10 +60,10 @@ export class TakeProfitManager {
             // pendingOrders 永远包含 errorOrders 中的订单 以及一些新提交的订单
             // 如果当前止盈订单队列 都为异常订单，结束调度、此时待处理止盈订单肯定为0
             if (this.takeProfitOrders.length) {
-                console.log(
-                    `[@${dayjs().format("YYYY-MM-DD HH:mm:ss")}] [止盈] 无待处理止盈订单、结束调度\n`,
+                logger.info(
+                    `[止盈] 无待处理止盈订单、结束调度\n`,
                 );
-                console.log(this.takeProfitOrders);
+                logger.info(JSON.stringify(this.takeProfitOrders, null, 4));
             }
             this.takeProfitOrders = errorOrders;
             return;
@@ -82,8 +83,8 @@ export class TakeProfitManager {
                 // 查询建仓订单状态
                 const order = await this.client.getOrder(takeProfitOrder.entryOrderId);
                 if (!order) {
-                    console.log(
-                        `[@${dayjs().format("YYYY-MM-DD HH:mm:ss")}] [止盈] ${orderKey} 订单不存在(可能已完全成交或取消)，跳过`,
+                    logger.info(
+                        `[止盈] ${orderKey} 订单不存在(可能已完全成交或取消)，跳过`,
                     );
                     skippedCount++;
                     processedCount++;
@@ -94,8 +95,8 @@ export class TakeProfitManager {
                 const originalSize = Number(order.original_size) || 0;
                 const remainingSize = originalSize - matchedSize;
 
-                console.log(
-                    `[@${dayjs().format("YYYY-MM-DD HH:mm:ss")}] [止盈] ${orderKey} 成交情况: ${matchedSize}/${originalSize}`,
+                logger.info(
+                    `[止盈] ${orderKey} 成交情况: ${matchedSize}/${originalSize}`,
                 );
 
                 if (matchedSize === 0 || matchedSize < originalSize) {
@@ -124,8 +125,8 @@ export class TakeProfitManager {
                 }
                 takeProfitCount++;
             } catch (err) {
-                console.error(
-                    `[@${dayjs().format("YYYY-MM-DD HH:mm:ss")}] [止盈] ${orderKey} 止盈执行异常`,
+                logger.error(
+                    `[止盈] ${orderKey} 止盈执行异常`,
                     err?.message ?? err,
                 );
                 errorCount++;
@@ -134,8 +135,8 @@ export class TakeProfitManager {
             }
         }
 
-        console.log(
-            `[@${dayjs().format("YYYY-MM-DD HH:mm:ss")}] [止盈] 处理完成: 总计=${processedCount}, 已止盈=${takeProfitCount}, 已撤单=${cancelledCount}, 跳过=${skippedCount}, 错误=${errorCount}`,
+        logger.info(
+            `[止盈] 处理完成: 总计=${processedCount}, 已止盈=${takeProfitCount}, 已撤单=${cancelledCount}, 跳过=${skippedCount}, 错误=${errorCount}`,
         );
     }
 
@@ -155,14 +156,14 @@ export class TakeProfitManager {
 
             // 再检查是否满足止盈价格要求
             if (bestBidPrice < this.takeProfitPrice) {
-                console.log(
-                    `[@${dayjs().format("YYYY-MM-DD HH:mm:ss")}] [止盈] ${orderKey} 最优买价=${bestBidPrice} 小于止盈价格=${this.takeProfitPrice}，跳过`,
+                logger.info(
+                    `[止盈] ${orderKey} 最优买价=${bestBidPrice} 小于止盈价格=${this.takeProfitPrice}，跳过`,
                 );
                 return false;
             }
 
-            console.log(
-                `[@${dayjs().format("YYYY-MM-DD HH:mm:ss")}] [止盈] ${orderKey} 提交止盈: SELL --> ${bestBidPrice}@${size}`,
+            logger.info(
+                `[止盈] ${orderKey} 提交止盈: SELL --> ${bestBidPrice}@${size}`,
             );
 
             const takeProfitOrderResp = await this.client.placeOrder(
@@ -173,8 +174,8 @@ export class TakeProfitManager {
             );
 
             if (!takeProfitOrderResp?.success) {
-                console.log(
-                    `[@${dayjs().format("YYYY-MM-DD HH:mm:ss")}] [止盈] ${orderKey} 止盈订单被拒绝`,
+                logger.info(
+                    `[止盈] ${orderKey} 止盈订单被拒绝`,
                     takeProfitOrderResp?.message ?? takeProfitOrderResp.errorMsg,
                 );
                 throw new Error(`止盈订单被拒绝: ${takeProfitOrderResp?.message ?? takeProfitOrderResp.errorMsg}`);
@@ -199,15 +200,15 @@ export class TakeProfitManager {
                 secondsToEnd: takeProfitOrder.signal.secondsToEnd, // 使用建仓时的信号数据作为上下文
                 priceChange: takeProfitOrder.signal.amp,
                 isLiquiditySignal: takeProfitOrder.signal.liquiditySignal
-            }).catch(err => console.error("Failed to save TP order to DB", err));
+            }).catch(err => logger.error("Failed to save TP order to DB", err));
 
-            console.log(
-                `[@${dayjs().format("YYYY-MM-DD HH:mm:ss")}] [止盈] ${orderKey} ✅ 止盈订单已成功提交, 订单号=${takeProfitOrderId}`,
+            logger.info(
+                `[止盈] ${orderKey} ✅ 止盈订单已成功提交, 订单号=${takeProfitOrderId}`,
             );
             return true;
         } catch (err) {
-            console.error(
-                `[@${dayjs().format("YYYY-MM-DD HH:mm:ss")}] [止盈] ${orderKey} 止盈执行异常`,
+            logger.error(
+                `[止盈] ${orderKey} 止盈执行异常`,
                 err?.message ?? err,
             );
             throw new Error(`止盈执行异常: ${err?.message ?? err}`);

@@ -2,6 +2,7 @@ import { readFileSync } from "fs";
 import dayjs from "dayjs";
 import axios from "axios";
 import { polyClient } from "../../core/PolyClient.js";
+import logger from "../../core/Logger.js";
 
 const EASTERN_TZ = "America/New_York";
 
@@ -59,15 +60,14 @@ export function loadStateFile(stateFilePath) {
 }
 
 export async function fetchMarkets(slug, maxMinutesToEnd, shouldFilterTime = true) {
-    const now = dayjs().format("YYYY-MM-DD HH:mm:ss");
     const event = await polyClient.getEventBySlug(slug);
     if (!event) {
-        console.log(`[@${now} ${slug}] 事件获取失败`);
+        logger.info(`[${slug}] 事件获取失败`);
         return [];
     }
     const markets = event.markets || [];
     if (!markets.length) {
-        console.log(`[@${now} ${slug}] 未找到开放市场`);
+        logger.info(`[${slug}] 未找到开放市场`);
         return [];
     }
 
@@ -77,8 +77,8 @@ export async function fetchMarkets(slug, maxMinutesToEnd, shouldFilterTime = tru
         const minutesToEnd = timeMs / 60_000;
 
         if (minutesToEnd > maxMinutesToEnd) {
-            console.log(
-                `[@${now} ${slug}] 事件剩余时间=${Math.round(minutesToEnd)}分钟 超过最大时间=${maxMinutesToEnd}分钟，不处理`,
+            logger.info(
+                `[${slug}] 事件剩余时间=${Math.round(minutesToEnd)}分钟 超过最大时间=${maxMinutesToEnd}分钟，不处理`,
             );
             return [];
         }
@@ -171,7 +171,7 @@ export async function resolvePositionSize(client) {
             return balance;
         }
     } catch (err) {
-        console.error(`[@${dayjs().format("YYYY-MM-DD HH:mm:ss")}] 获取USDC.e余额失败`, err?.message ?? err);
+        logger.error(`获取USDC.e余额失败`, err?.message ?? err);
     }
     return 0;
 }

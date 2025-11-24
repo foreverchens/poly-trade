@@ -1,5 +1,6 @@
 import dayjs from "dayjs";
 import { resolveSlugList, fetchMarkets, checkSellerLiquidity, resolvePositionSize } from "./common.js";
+import logger from "../../core/Logger.js";
 
 export class UpBotCache {
     constructor(config) {
@@ -17,7 +18,7 @@ export class UpBotCache {
 
         // TTL 配置 (毫秒)
         this.TTL = {
-            BALANCE: 3600_000,    // 余额缓存 1小时 (实际由 _rotate 控制每小时刷新一次)
+            BALANCE: 60_000,    // 余额缓存 1分钟
             LIQUIDITY: 5_000      // 流动性缓存 5秒
         };
     }
@@ -28,7 +29,7 @@ export class UpBotCache {
     _rotate() {
         const currentHour = dayjs().hour();
         if (this.store.hour !== currentHour) {
-            console.log(`[UpBotCache] 小时轮转 ${this.store.hour} -> ${currentHour}, 重置缓存`);
+            logger.info(`[UpBotCache] 小时轮转 ${this.store.hour} -> ${currentHour}, 重置缓存`);
             this.store.hour = currentHour;
             this.store.targetSlug = null;
             this.store.market = null;
@@ -44,7 +45,7 @@ export class UpBotCache {
         this._rotate();
         if (!this.store.targetSlug) {
             this.store.targetSlug = resolveSlugList(this.slugTemplate);
-            console.log(`[UpBotCache] 重新解析TargetSlug: ${this.store.targetSlug}`);
+            logger.info(`[UpBotCache] 重新解析TargetSlug: ${this.store.targetSlug}`);
         }
         // Slug 变化不频繁，不需要每次命中都打印，仅在解析时打印
         return this.store.targetSlug;
@@ -63,9 +64,9 @@ export class UpBotCache {
 
             if (markets && markets.length > 0) {
                 this.store.market = markets[0];
-                console.log(`[UpBotCache] 市场已缓存更新: ${this.store.market.slug} (Slug=${slug})`);
+                logger.info(`[UpBotCache] 市场已缓存更新: ${this.store.market.slug} (Slug=${slug})`);
             } else {
-                console.log(`[UpBotCache] 未找到市场, 缓存为空: ${slug}`);
+                logger.info(`[UpBotCache] 未找到市场, 缓存为空: ${slug}`);
                 return null;
             }
         }
@@ -87,13 +88,13 @@ export class UpBotCache {
         }
 
         // 缓存过期或强制刷新，重新请求
-        console.log(`[UpBotCache] 余额正在刷新 (Force=${forceRefresh})...`);
+        logger.info(`[UpBotCache] 余额正在刷新 (Force=${forceRefresh})...`);
         try {
             const val = await resolvePositionSize(client);
             this.store.balance = { val, ts: now };
-            console.log(`[UpBotCache] 余额更新完毕: ${val} USDC`);
+            logger.info(`[UpBotCache] 余额更新完毕: ${val} USDC`);
         } catch (err) {
-            console.error("[UpBotCache] 余额刷新失败, 保持旧值", err);
+            logger.error("[UpBotCache] 余额刷新失败, 保持旧值", err);
         }
         return this.store.balance.val;
     }
@@ -110,7 +111,7 @@ export class UpBotCache {
             this.store.balance.val = Math.max(0, oldVal - amount);
             // 更新时间戳，以此推迟下一次自动刷新，避免刚扣减就被旧的API数据覆盖
             this.store.balance.ts = Date.now();
-            console.log(`[UpBotCache] 本地扣减余额: ${oldVal} -> ${this.store.balance.val} (-${amount})`);
+            logger.info(`[UpBotCache] 本地扣减余额: ${oldVal} -> ${this.store.balance.val} (-${amount})`);
         }
     }
 

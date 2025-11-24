@@ -4,7 +4,7 @@
         "triggerPriceGt": 0.99,
         "takeProfitPrice": 0.998,
         "maxMinutesToEnd": 10,
-        "cronExpression": "0 30-51 * * * *",
+        "cronExpression": "0 30-35 * * * *",
         "cronTimeZone": "America/New_York",
         "ampMin": 0.001,
         "zMin": 2,

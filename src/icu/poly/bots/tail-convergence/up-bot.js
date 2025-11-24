@@ -17,6 +17,7 @@ import {
     resolvePositionSize,
 } from "./common.js";
 import { TakeProfitManager } from "./take-profit.js";
+import { UpBotCache } from "./up-bot-cache.js";
 import { saveOrder } from "../../db/repository.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -36,6 +37,12 @@ class TailConvergenceStrategy {
 
         this.initializeConfig(config);
         this.initializeRuntimeState();
+
+        // 初始化缓存层 (UpBot专用)
+        this.cache = new UpBotCache({
+            slug: this.slugTemplate,
+            maxMinutesToEnd: this.maxMinutesToEnd
+        });
 
         // 初始化止盈管理器
         this.tpManager = new TakeProfitManager(this.client, {
@@ -101,7 +108,7 @@ class TailConvergenceStrategy {
         // 保存原始 slug 模板
         this.slugTemplate = slug;
         // 解析当天的 slug
-        this.targetSlug = resolveSlugList(this.slugTemplate);
+        // this.targetSlug = resolveSlugList(this.slugTemplate); // [删除] 改由 cache 动态获取
     }
 
     /**
@@ -119,11 +126,15 @@ class TailConvergenceStrategy {
         this.initialEntryDone = false;
         this.extraEntryDone = false;
 
-        // this.takeProfitOrders = []; // 已移入 tpManager
         this.loopTimer = null;
         this.loopActive = false;
         this.currentLoopHour = null;
-        // this.takeProfitCronTask = null; // 已移入 tpManager
+
+        /**
+         * 0 30~50分钟且流动性充足、待机
+         * 1 50~60分钟或者流动性枯竭、监控
+         */
+        this.loopState = 0;
     }
 
     /**
@@ -203,6 +214,8 @@ class TailConvergenceStrategy {
         this.extraEntryDone = false;
         // 重置 tick 间隔为初始配置值
         this.tickIntervalMs = this.tickIntervalSeconds * 1000;
+        // 重置循环状态
+        this.loopState = 0;
         console.log(`[扫尾盘策略] 小时循环已结束\n`);
     }
 
@@ -232,7 +245,8 @@ class TailConvergenceStrategy {
 
     async tick() {
         // 每次tick时重新解析slug,确保使用当天的日期
-        this.targetSlug = resolveSlugList(this.slugTemplate);
+        // this.targetSlug = resolveSlugList(this.slugTemplate); // [删除]
+        this.targetSlug = this.cache.getTargetSlug(); // [修改] 使用缓存
 
         // 获取信号
         const signal = await this.processSlug(this.targetSlug);
@@ -250,35 +264,35 @@ class TailConvergenceStrategy {
     async processSlug(slug) {
         // 获取事件下可用的市场列表、仅先进行结束时间过滤、后续再基于订单簿价格确认
         // false 表示不进行时间过滤
-        const markets = await fetchMarkets(slug, this.maxMinutesToEnd, false);
-        if (!markets.length) {
+        // const markets = await fetchMarkets(slug, this.maxMinutesToEnd, false); // [删除]
+
+        // [修改] 直接从缓存获取唯一的 Market 对象
+        const market = await this.cache.getMarket();
+
+        if (!market) {
             return null;
         }
         /**
          *  在小时高波动场合、波动后概率往往以及接近95左右、后续会不断收敛到1、
-         *  在收敛过程中、如果发生流动性匮乏、则可以提前买入、
+         *  在收敛过程中、如果趋势不变、流动性会更早的进入枯竭状态、此时可能都没有过50分
+         *  所以、如果在30分到50分之间、发生流动性匮乏、则可以提前买入、
          *  主任务新增30到50分的触发逻辑、修改为 30分开始触发、每5分钟一次、
          *  如果中途发生流动性匮乏、则提前进入高频节奏、进行买入监控
          */
-        // const timeMs = Date.parse(markets[0].endDate) - Date.now();
-        // const minutesToEnd = timeMs / 60_000;
-        // if (minutesToEnd > this.maxMinutesToEnd) {
-        //     console.log(
-        //         `[@${now} ${slug}] 事件剩余时间=${Math.round(minutesToEnd)}分钟 超过最大时间=${maxMinutesToEnd}分钟，不处理`,
-        //     );
-        //     return null;
-        // }
-        // const market = markets[0];
-        // // 流动性匮乏信号
-        // const [yesTokenId, noTokenId] = JSON.parse(market.clobTokenIds);
-        // const isLiquiditySufficient = await checkSellerLiquidity(this.client, yesTokenId);
-        // const isLiquiditySufficientNo = await checkSellerLiquidity(this.client, noTokenId);
-        // if(!isLiquiditySufficient || !isLiquiditySufficientNo) {
-        //     // 一方存在流动性匮乏
-        // }
+        if(this.loopState === 0) {
+            // 30~50分钟、流动性充足、待机
+            // const market = markets[0]; // [删除] 不需要了，上方已直接获取 market
+            if(dayjs().minute()  < 50 && await this.checkAllLiquiditySufficient(market)) {
+                // 流动性充足、待机
+                return null;
+            }
+            // 超过50分钟、或者流动性枯竭、监控买入
+            this.loopState = 1;
+            this.tickIntervalMs = 1000 * 10;
+        }
 
         try {
-            return await this.buildSignal(slug, markets[0]);
+            return await this.buildSignal(slug, market);
         } catch (err) {
             console.error(
                 `[@${dayjs().format("YYYY-MM-DD HH:mm:ss")} ${slug}] 获取失败`,
@@ -286,6 +300,16 @@ class TailConvergenceStrategy {
             );
         }
         return null;
+    }
+
+    async checkAllLiquiditySufficient(market) {
+        // // 流动性匮乏信号
+        const [yesTokenId, noTokenId] = JSON.parse(market.clobTokenIds);
+        // const yesOk = await checkSellerLiquidity(this.client, yesTokenId); // [删除]
+        // const noOk = await checkSellerLiquidity(this.client, noTokenId);   // [删除]
+        const yesOk = await this.cache.checkLiquidity(this.client, yesTokenId); // [修改]
+        const noOk = await this.cache.checkLiquidity(this.client, noTokenId);   // [修改]
+        return yesOk && noOk;
     }
 
     // 构建交易信号：限定剩余时间,并找出概率 >= entryTrigger 的方向
@@ -311,7 +335,8 @@ class TailConvergenceStrategy {
         // 55分钟 = 剩余 300秒
         const isLateStage = secondsToEnd < 300;
         // 使用默认阈值 (通常是1000) 检查基础流动性
-        const isLiquiditySufficient = await checkSellerLiquidity(this.client, topTokenId);
+        // const isLiquiditySufficient = await checkSellerLiquidity(this.client, topTokenId); // [删除]
+        const isLiquiditySufficient = await this.cache.checkLiquidity(this.client, topTokenId); // [修改]
 
         if (!isLateStage && isLiquiditySufficient) {
             // === 常规阶段：时间早且流动性好 ===
@@ -446,7 +471,8 @@ class TailConvergenceStrategy {
             if (
                 dayjs().minute() < 55 &&
                 price < 0.97 &&
-                (await checkSellerLiquidity(this.client, signal.chosen.tokenId))
+                // (await checkSellerLiquidity(this.client, signal.chosen.tokenId)) // [删除]
+                (await this.cache.checkLiquidity(this.client, signal.chosen.tokenId)) // [修改]
             ) {
                 console.log(
                     `[@${dayjs().format(
@@ -472,7 +498,8 @@ class TailConvergenceStrategy {
                     price >= 0.97 &&
                     dayjs().minute() > 57 &&
                     // this.checkSellerLiquidity(signal.chosen.tokenId)
-                    (await checkSellerLiquidity(this.client, signal.chosen.tokenId))
+                    // (await checkSellerLiquidity(this.client, signal.chosen.tokenId)) // [删除]
+                    (await this.cache.checkLiquidity(this.client, signal.chosen.tokenId)) // [修改]
                 ) {
                     // price >= 0.97 && price < 0.98
                     // 当价格为0.97的场合、入场条件、时间大于57分钟、且波动率大于0.008
@@ -499,7 +526,8 @@ class TailConvergenceStrategy {
             }
         } while (false);
 
-        const sizeUsd = await resolvePositionSize(this.client);
+        // const sizeUsd = await resolvePositionSize(this.client); // [删除]
+        const sizeUsd = await this.cache.getBalance(this.client); // [修改]
         if(sizeUsd <= 0) {
             console.log(
                 `[@${dayjs().format("YYYY-MM-DD HH:mm:ss")} ${marketSlug}-${signal.chosen.outcome.toUpperCase()}@额外买入] 建仓预算不足,结束处理`,

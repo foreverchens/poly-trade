@@ -78,7 +78,7 @@ export class UpBotCache {
      * 获取余额 (带TTL)
      * @param {Object} client - PolyClient 实例
      */
-    async getBalance(client, maxBalance = 100) {
+    async getBalance(client, extraSizeUsdc = 100) {
         const now = Date.now();
 
         // 如果缓存有效，直接返回
@@ -88,7 +88,7 @@ export class UpBotCache {
 
         try {
             let val = await resolvePositionSize(client);
-            val = Math.min(val, maxBalance);
+            val = Math.min(val, extraSizeUsdc);
             this.store.balance = { val, ts: now };
             logger.info(`[UpBotCache] 余额更新完毕: ${val} USDC`);
         } catch (err) {

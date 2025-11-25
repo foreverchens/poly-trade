@@ -39,7 +39,7 @@ export function generateAccountFromMnemonic(mnemonic, index = 0) {
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
     // ===在此处填写您的助记词===
     // 如果留空，脚本将自动生成随机助记词用于演示
-    const mnemonic = "lava useless vault bar day hunt around lion general train traffic rich";
+    const mnemonic = "";
 
     // ===生成数量===
     const ACCOUNT_COUNT = 5;

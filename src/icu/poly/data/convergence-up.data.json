@@ -1,6 +1,7 @@
 {
     "config": {
-        "positionSizeUsdc": 10,
+        "positionSizeUsdc": 30,
+        "extraSizeUsdc": 300,
         "triggerPriceGt": 0.99,
         "takeProfitPrice": 0.998,
         "maxMinutesToEnd": 10,

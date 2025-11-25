@@ -93,7 +93,6 @@ export class TakeProfitManager {
 
                 const matchedSize = Number(order.size_matched) || 0;
                 const originalSize = Number(order.original_size) || 0;
-                const remainingSize = originalSize - matchedSize;
 
                 logger.info(
                     `[止盈] ${orderKey} 成交情况: ${matchedSize}/${originalSize}`,
@@ -156,9 +155,9 @@ export class TakeProfitManager {
 
             // 再检查是否满足止盈价格要求
             if (bestBidPrice < this.takeProfitPrice) {
-                logger.info(
-                    `[止盈] ${orderKey} 最优买价=${bestBidPrice} 小于止盈价格=${this.takeProfitPrice}，跳过`,
-                );
+                // logger.info(
+                //     `[止盈] ${orderKey} 最优买价=${bestBidPrice} 小于止盈价格=${this.takeProfitPrice}，跳过`,
+                // );
                 return false;
             }
 

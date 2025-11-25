@@ -46,6 +46,7 @@ class TailConvergenceStrategy {
         /**
          * config 字段说明：
          * - positionSizeUsdc：单次建仓的美元金额。
+         * - extraSizeUsdc：额外买入时的最大余额上限 (默认 100 USDC)。
          * - maxMinutesToEnd：离市场截止的剩余分钟数阈值,过期市场会被过滤。
          * - takeProfitPrice：止盈挂单价格。
          * - ampMin：最近 1 小时振幅下限,波动太小忽略。
@@ -56,6 +57,7 @@ class TailConvergenceStrategy {
          */
         const {
             positionSizeUsdc,
+            extraSizeUsdc = 100,
             maxMinutesToEnd,
             takeProfitPrice,
             ampMin = 0.001,
@@ -71,6 +73,7 @@ class TailConvergenceStrategy {
 
         Object.assign(this, {
             positionSizeUsdc,
+            extraSizeUsdc,
             maxMinutesToEnd,
             takeProfitPrice,
             ampMin,
@@ -131,6 +134,7 @@ class TailConvergenceStrategy {
         logger.info(
             `[扫尾盘策略-UpDown]
             建仓金额=${this.positionSizeUsdc}USDC
+            额外买入最大余额=${this.extraSizeUsdc}USDC
             动态触发价格阈值范围=[${earlyThreshold}(剩余10分) --> ${lateThreshold}(即将结束)] (基于剩余秒数)
             静态最高建仓价格=${this.triggerPriceGt}
             最大剩余时间=${this.maxMinutesToEnd}分钟,
@@ -293,7 +297,7 @@ class TailConvergenceStrategy {
             // 30~50分钟、价格未触发、待机
             if (dayjs().minute() < 50 && topPrice < this.triggerPriceGt) {
                 // 非高波动场合、价格未触发、继续等待
-                logger.info(`[${market.slug}] pending... yesPrice=${yesPrice} noPrice=${noPrice}`);
+                logger.info(`[${market.slug}] yesPrice=${yesPrice} noPrice=${noPrice} pending... `);
                 return null;
             }
             // 超过50分钟、或者高波动发生、价格触发、转换为监控模式、提高tick频率
@@ -545,7 +549,7 @@ class TailConvergenceStrategy {
         }
 
         // 预算检查
-        const sizeUsd = await this.cache.getBalance(this.client);
+        const sizeUsd = await this.cache.getBalance(this.client, this.extraSizeUsdc);
         if (sizeUsd <= 5) {
             logger.info(
                 `[${marketSlug}-${signal.chosen.outcome.toUpperCase()}@额外买入] 建仓预算不足，结束处理`,

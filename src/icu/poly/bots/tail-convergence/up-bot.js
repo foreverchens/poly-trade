@@ -131,6 +131,7 @@ class TailConvergenceStrategy {
     logBootstrapSummary() {
         const earlyThreshold = threshold(600);
         const lateThreshold = threshold(0);
+        this.cache.getBalance(this.client, this.extraSizeUsdc);
         logger.info(
             `[扫尾盘策略-UpDown]
             建仓金额=${this.positionSizeUsdc}USDC

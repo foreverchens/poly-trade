@@ -18,7 +18,7 @@ export class UpBotCache {
 
         // TTL 配置 (毫秒)
         this.TTL = {
-            BALANCE: 60_000,    // 余额缓存 1分钟
+            BALANCE: 600_000,    // 余额缓存 10分钟
             LIQUIDITY: 5_000      // 流动性缓存 5秒
         };
     }

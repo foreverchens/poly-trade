@@ -1,7 +1,8 @@
 import "dotenv/config";
 import dayjs from "dayjs";
 import cron from "node-cron";
-import { PolyClient, PolySide } from "../../core/PolyClient.js";
+import { PolySide } from "../../core/PolyClient.js";
+import { getPolyClient } from "../../core/poly-client-manage.js";
 import { getZ } from "../../core/z-score.js";
 import { loadStateFile, fetchBestAsk, threshold, get1HourAmp } from "./common.js";
 import { TakeProfitManager } from "./take-profit.js";
@@ -15,7 +16,7 @@ class TailConvergenceStrategy {
 
         const { config } = loadStateFile(this.stateFilePath);
         this.test = config.test ?? true;
-        this.client = new PolyClient(this.test);
+        this.client = getPolyClient(this.test);
         logger.info(
             `[扫尾盘策略] 读取状态文件=${this.stateFilePath},测试模式=${this.test ? "开启" : "关闭"}`,
         );
@@ -220,12 +221,8 @@ class TailConvergenceStrategy {
             this.stopHourlyLoop();
             return;
         }
-        if (
-            this.initialEntryDone &&
-            (this.extraEntryDone || !this.allowExtraEntryAtCeiling) &&
-            dayjs().minute() >= 51
-        ) {
-            // 初始建仓 且 额外买入 且 时间大于52分钟、则提前结束小时循环
+        if (this.initialEntryDone && (this.extraEntryDone || !this.allowExtraEntryAtCeiling)) {
+            // 初始建仓 且 额外买入、则提前结束小时循环
             logger.info(
                 `[扫尾盘策略] 所有预期建仓均已完成(额外买入=${this.allowExtraEntryAtCeiling}), 提前结束小时循环`,
             );

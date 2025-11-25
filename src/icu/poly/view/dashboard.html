@@ -797,7 +797,7 @@
                    id="${rowId}-price" value="${formatPriceInput(bestAsk)}" />
             <input type="number" step="0.01" min="0.01" placeholder="数量"
                    id="${rowId}-size" value="${size > 0 ? size.toFixed(3) : ''}" max="${size}" />
-            <button onclick="handleCloseOrder('${tokenId}', '${rowId}', 'SELL')">平仓</button>
+            <button${Number.isFinite(bestBid) ? ` data-best-bid="${bestBid}"` : ''} onclick="handleCloseOrder('${tokenId}', '${rowId}', 'SELL')">平仓</button>
           </td>
         `;
                 tbody.appendChild(tr);
@@ -1190,12 +1190,24 @@
 
             const priceInput = document.getElementById(`${rowId}-price`);
             const sizeInput = document.getElementById(`${rowId}-size`);
+            const actionContainer = priceInput?.parentElement;
+            const button = actionContainer?.querySelector('button');
+            if (!priceInput || !sizeInput || !button) {
+                alert('平仓控件缺失，请刷新页面后再试');
+                return;
+            }
             const price = parsePriceInput(priceInput.value);
             const size = Number(sizeInput.value);
 
             // 价格校验：双开区间 (0, 1)，不包含0和1
             if (!Number.isFinite(price) || price <= 0 || price >= 1) {
                 alert(`请输入有效的价格（大于 0% 且小于 100%）`);
+                return;
+            }
+            const bestBidAttr = button.dataset?.bestBid;
+            const currentBestBid = Number(bestBidAttr);
+            if (Number.isFinite(currentBestBid) && price < currentBestBid) {
+                alert(`卖单价格需≥当前最优买价 ${formatPrice(currentBestBid)}`);
                 return;
             }
 
@@ -1211,7 +1223,6 @@
                 return;
             }
 
-            const button = document.querySelector(`#${rowId}-price`).parentElement.querySelector('button');
             const originalText = button.textContent;
             button.disabled = true;
             button.textContent = '提交中...';

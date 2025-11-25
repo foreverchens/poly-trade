@@ -2108,14 +2108,37 @@ function handleTokenSelectionChange(tokenId, checked) {
         $("detailPanel").classList.remove("active");
     }
 
+    function normalizeOrderbookPrice(value) {
+        if (typeof value === "number") return Number.isFinite(value) ? value : null;
+        const numeric = Number(value);
+        return Number.isFinite(numeric) ? numeric : null;
+    }
+
+    function getBestAskFromItem(item, outcomeIndex) {
+        if (!item) return null;
+        const key = outcomeIndex === 0 ? "yesBestAsk" : "noBestAsk";
+        return normalizeOrderbookPrice(item?.[key]);
+    }
+
+    function getBestBidFromItem(item, outcomeIndex) {
+        if (!item) return null;
+        const key = outcomeIndex === 0 ? "yesBestBid" : "noBestBid";
+        return normalizeOrderbookPrice(item?.[key]);
+    }
+
     function getTokenOptions(item) {
         const tokens = getTokenIds(item);
         const outcomes = parseOutcomes(item?.outcomes);
-        return tokens.map((tokenId, idx) => ({
-            tokenId,
-            label: outcomes && outcomes[idx] ? outcomes[idx] : idx === 0 ? "YES" : "NO",
-            bestAsk: resolveBestAskForToken(tokenId, extractOutcomePrice(item, idx)),
-        }));
+        return tokens.map((tokenId, idx) => {
+            const fallbackBestAsk = getBestAskFromItem(item, idx);
+            const fallbackOutcomePrice = extractOutcomePrice(item, idx);
+            return {
+                tokenId,
+                label: outcomes && outcomes[idx] ? outcomes[idx] : idx === 0 ? "YES" : "NO",
+                bestAsk: resolveBestAskForToken(tokenId, fallbackBestAsk ?? fallbackOutcomePrice),
+                bestBid: getBestBidFromItem(item, idx),
+            };
+        });
     }
 
     function updateOrderTokenOptions(item) {
@@ -2401,6 +2424,12 @@ function handleTokenSelectionChange(tokenId, checked) {
             const tokenId = tokenInput?.value;
             if (!tokenId) {
                 setOrderStatus("请选择 token", true);
+                return;
+            }
+            const bestAskAttr = tokenInput?.dataset?.bestAsk;
+            const currentBestAsk = Number(bestAskAttr);
+            if (Number.isFinite(currentBestAsk) && price > currentBestAsk) {
+                setOrderStatus(`买单价格需≤当前最优卖价 ${formatBestAsk(currentBestAsk)}`, true);
                 return;
             }
 

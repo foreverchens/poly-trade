@@ -40,14 +40,18 @@ const CTF_ABI = [
 ];
 
 export class PolyClient {
-    constructor(mock) {
-        const mnemonic = process.env.poly_mnemonic;
-        const index = process.env.poly_mnemonic_idx;
-        const account = generateAccountFromMnemonic(mnemonic, index);
-        if (!account) {
-            throw new Error("Failed to generate account from mnemonic");
+    constructor(pk = null, mock = false) {
+        if (pk) {
+            this.privateKey = pk;
+        } else {
+            const mnemonic = process.env.poly_mnemonic;
+            const index = process.env.poly_mnemonic_idx;
+            const account = generateAccountFromMnemonic(mnemonic, index);
+            if (!account) {
+                throw new Error("Failed to generate account from mnemonic");
+            }
+            this.privateKey = account.privateKey;
         }
-        this.privateKey = account.privateKey;
 
         this.host = DEFAULT_HOST;
         this.chainId = DEFAULT_CHAIN_ID;
@@ -821,4 +825,3 @@ export class PolyClient {
 }
 export const PolySide = Side;
 export const PolyAssetType = AssetType;
-export const polyClient = new PolyClient();

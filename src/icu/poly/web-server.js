@@ -2,7 +2,7 @@ import express from "express";
 import path from "path";
 import {fileURLToPath} from "url";
 import axios from "axios";
-import {PolyClient} from "./core/PolyClient.js";
+import { getPolyClient } from "./core/poly-client-manage.js";
 import {listOrders, deleteOrder, updateOrder} from "./db/repository.js";
 
 const PORT = process.env.PORT || 3001;
@@ -33,7 +33,7 @@ const viewDir = path.join(__dirname, "view");
 
 const app = express();
 app.use(express.json());
-const polyClient = new PolyClient();
+const polyClient = getPolyClient();
 const SUPPORTED_TAGS = new Set([21, 235, 39]);
 const DEFAULT_TAG_ID = 235;
 const CLIENT_ERROR_PATTERNS = [/market is required/i, /Invalid interval/i];

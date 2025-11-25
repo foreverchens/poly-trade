@@ -1,10 +1,10 @@
 import { readFileSync } from "fs";
-import dayjs from "dayjs";
 import axios from "axios";
-import { polyClient } from "../../core/PolyClient.js";
+import { getPolyClient } from "../../core/poly-client-manage.js";
 import logger from "../../core/Logger.js";
 
 const EASTERN_TZ = "America/New_York";
+const polyClient = getPolyClient();
 
 export const TAKE_PROFIT_ORDER_STATUS = {
     PENDING: "待提交",
@@ -154,7 +154,7 @@ export async function getAsksLiq(client, tokenId) {
         }
         // 计算所有卖方订单的总流动性（size总和）
         const totalLiquidity = orderBook.asks.reduce((sum, ask) => {
-            if(ask.price > 0.99) {
+            if (ask.price > 0.99) {
                 // 非0.99价格、不计算流动性
                 return sum;
             }

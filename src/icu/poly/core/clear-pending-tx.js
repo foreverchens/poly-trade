@@ -2,14 +2,8 @@
 import 'dotenv/config';
 import { checkPendingTransactions, speedUpTransaction } from './ether-client.js';
 
-const privateKey = "";
 
-if (!privateKey) {
-    console.error('请设置 PRIVATE_KEY 环境变量');
-    process.exit(1);
-}
-
-async function main() {
+async function main(privateKey) {
     console.log('正在检查交易状态...\n');
 
     // 检查是否有 pending 交易
@@ -41,5 +35,6 @@ async function main() {
     }
 }
 
-main().catch(console.error);
+const privateKey = "";
+main(privateKey).catch(console.error);
 

@@ -167,9 +167,23 @@ export async function transferPOL(privateKeyFrom, addressTo, amount, options = {
         throw new Error(`余额不足: 当前 ${balanceInPOL} POL, 需要 ${amount} POL`);
     }
 
-    // 获取当前nonce
-    const currentNonce = nonce !== null ? nonce : await provider.getTransactionCount(wallet.address, "pending");
-    console.log(`[使用Nonce]: ${currentNonce}`);
+    // 获取 nonce
+    let currentNonce;
+    if (nonce !== null) {
+        // 手动指定 nonce，跳过检查
+        currentNonce = nonce;
+        console.log(`[手动指定Nonce]: ${currentNonce}`);
+    } else {
+        // 自动获取 nonce，检查 pending
+        const latestNonce = await provider.getTransactionCount(wallet.address, "latest");
+        const pendingNonce = await provider.getTransactionCount(wallet.address, "pending");
+        if (pendingNonce > latestNonce) {
+            console.warn(`⚠️ 检测到 ${pendingNonce - latestNonce} 笔 pending 交易，先清理或手动指定 nonce`);
+            throw new Error(`有 pending 交易，请手动指定 nonce 参数`);
+        }
+        currentNonce = latestNonce;
+        console.log(`[使用Nonce]: ${currentNonce}`);
+    }
 
     // 获取或设置gas费用
     let finalMaxFeePerGas, finalMaxPriorityFeePerGas;
@@ -353,7 +367,6 @@ export async function transferUSDC(privateKeyFrom, addressTo, amount, options = 
         nonce: currentNonce,
         maxFeePerGas: finalMaxFeePerGas,
         maxPriorityFeePerGas: finalMaxPriorityFeePerGas,
-        chainId: CHAIN_ID,
         type: 2, // EIP-1559 transaction
     };
 
@@ -485,6 +498,104 @@ export async function getLatestUsedNonce(privateKey, rpcUrl = RPC_URL) {
     return pendingNonce;
 }
 
+/**
+ * 检查是否有pending交易
+ * @param {string} privateKey - 私钥
+ * @param {string} rpcUrl - RPC节点
+ * @returns {Promise<{hasPending: boolean, confirmedNonce: number, pendingNonce: number, stuckCount: number}>}
+ */
+export async function checkPendingTransactions(privateKey, rpcUrl = RPC_URL) {
+    const provider = new ethers.providers.JsonRpcProvider(rpcUrl, CHAIN_ID);
+    const pk = privateKey.startsWith('0x') ? privateKey : '0x' + privateKey;
+    const wallet = new ethers.Wallet(pk, provider);
+
+    const confirmedNonce = await provider.getTransactionCount(wallet.address, "latest");
+    const pendingNonce = await provider.getTransactionCount(wallet.address, "pending");
+
+    const stuckCount = pendingNonce - confirmedNonce;
+    const hasPending = stuckCount > 0;
+
+    console.log(`\n========== 交易状态检查 ==========`);
+    console.log(`钱包地址: ${wallet.address}`);
+    console.log(`已确认 nonce: ${confirmedNonce}`);
+    console.log(`待处理 nonce: ${pendingNonce}`);
+    console.log(`卡住的交易数: ${stuckCount}`);
+
+    if (hasPending) {
+        console.log(`⚠️ 有 ${stuckCount} 笔交易在 pending 状态`);
+        console.log(`卡住的 nonce 范围: ${confirmedNonce} - ${pendingNonce - 1}`);
+    } else {
+        console.log(`✓ 没有 pending 交易`);
+    }
+    console.log(`==================================\n`);
+
+    return {
+        hasPending,
+        confirmedNonce,
+        pendingNonce,
+        stuckCount,
+    };
+}
+
+/**
+ * 加速或替换卡住的交易（发送一个相同nonce但更高gas的交易）
+ * @param {string} privateKey - 私钥
+ * @param {number} stuckNonce - 卡住的nonce
+ * @param {object} options - 可选配置
+ * @param {string} options.rpcUrl - RPC节点
+ * @param {number} options.gasPriceMultiplier - Gas价格倍数（默认1.5倍）
+ * @returns {Promise<{hash: string, receipt: any}>}
+ */
+export async function speedUpTransaction(privateKey, stuckNonce, options = {}) {
+    const {
+        rpcUrl = RPC_URL,
+        gasPriceMultiplier = 1.5,
+    } = options;
+
+    const provider = new ethers.providers.JsonRpcProvider(rpcUrl, CHAIN_ID);
+    const pk = privateKey.startsWith('0x') ? privateKey : '0x' + privateKey;
+    const wallet = new ethers.Wallet(pk, provider);
+
+    console.log(`\n========== 加速交易 ==========`);
+    console.log(`钱包地址: ${wallet.address}`);
+    console.log(`加速 nonce: ${stuckNonce}`);
+
+    // 获取当前推荐的 gas 价格
+    const gasPrice = await getGasPrice();
+
+    // 应用倍数
+    const boostedMaxFeePerGas = gasPrice.maxFeePerGas.mul(Math.floor(gasPriceMultiplier * 100)).div(100);
+    const boostedMaxPriorityFeePerGas = gasPrice.maxPriorityFeePerGas.mul(Math.floor(gasPriceMultiplier * 100)).div(100);
+
+    console.log(`原始 MaxFeePerGas: ${ethers.utils.formatUnits(gasPrice.maxFeePerGas, "gwei")} Gwei`);
+    console.log(`加速 MaxFeePerGas: ${ethers.utils.formatUnits(boostedMaxFeePerGas, "gwei")} Gwei (${gasPriceMultiplier}x)`);
+    console.log(`加速 MaxPriorityFeePerGas: ${ethers.utils.formatUnits(boostedMaxPriorityFeePerGas, "gwei")} Gwei (${gasPriceMultiplier}x)`);
+
+    // 发送一个空交易到自己地址，使用更高的 gas 来替换卡住的交易
+    const txParams = {
+        to: wallet.address,
+        value: 0,
+        nonce: stuckNonce,
+        maxFeePerGas: boostedMaxFeePerGas,
+        maxPriorityFeePerGas: boostedMaxPriorityFeePerGas,
+        gasLimit: 21000,
+        chainId: CHAIN_ID,
+        type: 2,
+    };
+
+    console.log(`发送替换交易（转账 0 POL 到自己地址）...`);
+    const tx = await wallet.sendTransaction(txParams);
+    console.log(`替换交易已提交: ${tx.hash}`);
+    console.log(`PolygonScan: https://polygonscan.com/tx/${tx.hash}`);
+    console.log(`==================================\n`);
+
+    // 等待确认
+    const receipt = await tx.wait(1, 120000);
+    console.log(`✓ 交易已确认! 区块: ${receipt.blockNumber}`);
+
+    return { hash: tx.hash, receipt };
+}
+
 // ========== 默认导出 ==========
 export default {
     getPOLBalance,
@@ -495,4 +606,6 @@ export default {
     getNonce,
     getConfirmedNonce,
     getLatestUsedNonce,
+    checkPendingTransactions,
+    speedUpTransaction,
 };

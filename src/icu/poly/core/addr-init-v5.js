@@ -4,23 +4,11 @@
 import 'dotenv/config';
 import { ethers } from "ethers";
 import { getGasPrice } from "./ether-client.js";
+import { generateAccountFromMnemonic } from "./gen-key.js";
 
 // ========== 环境变量 ==========
 const RPC_URL = process.env.RPC_URL || "https://polygon-rpc.com";
-
-// 处理私钥：移除可能存在的 '0x' 前缀，然后统一加上（ethers v5 接受 hex string）
-let privateKey = process.env.PRIVATE_KEY || "";
-if (privateKey && !privateKey.startsWith('0x')) {
-    privateKey = '0x' + privateKey;
-}
-
-const PUBLIC_KEY = process.env.PUBLIC_KEY || null;
 const CHAIN_ID = 137; // Polygon
-
-if (!privateKey) {
-    console.error("请设置 PRIVATE_KEY 环境变量");
-    process.exit(1);
-}
 
 // ========== 目标合约与地址 ==========
 const USDC_ADDRESS = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"; // Polygon USDC.e
@@ -44,11 +32,15 @@ const ERC1155_ABI = [
     "function isApprovedForAll(address account, address operator) view returns (bool)"
 ];
 
-async function main() {
+async function addrInitV5(privateKey) {
     // v5 Provider 实例化
+    if (!privateKey) {
+        console.error("请设置 PRIVATE_KEY 环境变量");
+        return;
+    }
     const provider = new ethers.providers.JsonRpcProvider(RPC_URL, CHAIN_ID);
     const wallet = new ethers.Wallet(privateKey, provider);
-    const owner = PUBLIC_KEY || wallet.address;
+    const owner = wallet.address;
 
     console.log(`使用地址: ${owner}`);
 
@@ -118,7 +110,16 @@ async function main() {
     console.log("\n全部处理完成。");
 }
 
-main().catch((e) => {
-    console.error("执行脚本出错:", e);
-    process.exit(1);
-});
+
+
+// const mnemonic = process.env.poly_mnemonic || "";
+// let curIdx = parseInt(process.env.poly_mnemonic_idx || "0", 10);
+// const account = generateAccountFromMnemonic(mnemonic, curIdx);
+// const pk = account.privateKey;
+// addrInitV5(pk).catch((e) => {
+//     console.error("执行脚本出错:", e);
+//     process.exit(1);
+// });
+
+
+export default addrInitV5;

@@ -11,15 +11,9 @@ export class UpBotCache {
         this.store = {
             hour: null,
             targetSlug: null,
-            market: null,         // 明确只缓存单个 market 对象
-            balance: { val: 0, ts: 0 },
-            liquidity: new Map(), // tokenId -> { val: boolean, ts: number }
-        };
-
-        // TTL 配置 (毫秒)
-        this.TTL = {
-            BALANCE: 600_000,    // 余额缓存 10分钟
-            LIQUIDITY: 5_000      // 流动性缓存 5秒
+            market: null, // 明确只缓存单个 market 对象
+            balance: 0,
+            liquidity: new Map(), // tokenId -> [val1, val2, val3, ...]
         };
     }
 
@@ -33,7 +27,7 @@ export class UpBotCache {
             this.store.hour = currentHour;
             this.store.targetSlug = null;
             this.store.market = null;
-            this.store.balance = { val: 0, ts: 0 }; // 重置余额，强制下一次刷新
+            this.store.balance = 0;
             this.store.liquidity.clear();
         }
     }
@@ -64,7 +58,9 @@ export class UpBotCache {
 
             if (markets && markets.length > 0) {
                 this.store.market = markets[0];
-                logger.info(`[UpBotCache] 市场已缓存更新: ${this.store.market.slug} (Slug=${slug})`);
+                logger.info(
+                    `[UpBotCache] 市场已缓存更新: ${this.store.market.slug} (Slug=${slug})`,
+                );
             } else {
                 logger.info(`[UpBotCache] 未找到市场, 缓存为空: ${slug}`);
                 return null;
@@ -79,22 +75,26 @@ export class UpBotCache {
      * @param {Object} client - PolyClient 实例
      */
     async getBalance(client, extraSizeUsdc = 100) {
-        const now = Date.now();
-
-        // 如果缓存有效，直接返回
-        if (this.store.balance.val > 0 && (now - this.store.balance.ts <= this.TTL.BALANCE)) {
-            return this.store.balance.val;
+        // 如果已有缓存值（大于0），直接返回
+        if (this.store.balance > 0) {
+            logger.info(`[UpBotCache] 余额缓存: ${this.store.balance} USDC`);
+            return this.store.balance;
         }
 
         try {
             let val = await resolvePositionSize(client);
+            if (val < 1) {
+                logger.error(`[UpBotCache] 余额为0，可能是API异常或钱包确实无余额`);
+                return 0;
+            }
             val = Math.min(val, extraSizeUsdc);
-            this.store.balance = { val, ts: now };
-            logger.info(`[UpBotCache] 余额更新完毕: ${val} USDC`);
+            this.store.balance = val;
+            logger.info(`[UpBotCache] 余额更新: ${val} USDC`);
+            return val;
         } catch (err) {
-            logger.error("[UpBotCache] 余额刷新失败, 保持旧值", err);
+            logger.error("[UpBotCache] 余额查询失败", err);
+            return 0;
         }
-        return this.store.balance.val;
     }
 
     /**
@@ -104,30 +104,31 @@ export class UpBotCache {
     deductBalance(amount) {
         // 向上取整
         amount = Math.ceil(amount);
-        if (this.store.balance && typeof this.store.balance.val === 'number') {
-            const oldVal = this.store.balance.val;
-            this.store.balance.val = Math.max(0, oldVal - amount);
-            // 更新时间戳，以此推迟下一次自动刷新，避免刚扣减就被旧的API数据覆盖
-            this.store.balance.ts = Date.now();
-            logger.info(`[UpBotCache] 本地扣减余额: ${oldVal} -> ${this.store.balance.val} (-${amount})`);
+        if (this.store.balance > 0) {
+            const oldVal = this.store.balance;
+            this.store.balance =oldVal - amount;
+            logger.info(
+                `[UpBotCache] 本地扣减余额: ${oldVal} -> ${this.store.balance} (-${amount})`,
+            );
         }
     }
 
     /**
-     * 获取卖方流动性 (带TTL)
+     * 获取卖方流动性 历史3个样本求平均值
      */
     async getAsksLiq(client, tokenId) {
-        const now = Date.now();
-        const cached = this.store.liquidity.get(tokenId);
-
-        // 如果缓存存在且未过期
-        if (cached && (now - cached.ts < this.TTL.LIQUIDITY)) {
-            return cached.val;
+        const newVal = await getAsksLiq(client, tokenId);
+        let queue = this.store.liquidity.get(tokenId) ?? [];
+        queue.push(newVal);
+        if (queue.length > 3) {
+            queue.shift();
         }
+        this.store.liquidity.set(tokenId, queue);
+        const avg = queue.reduce((sum, val) => sum + val, 0) / queue.length;
 
-        // 缓存过期或不存在
-        const val = await getAsksLiq(client, tokenId);
-        this.store.liquidity.set(tokenId, { val, ts: now });
-        return val;
+        logger.info(
+            `[UpBotCache] 流动性平均情况: 新值=${newVal}, 平均=${avg.toFixed(1)}`,
+        );
+        return Number(avg.toFixed(1));
     }
 }

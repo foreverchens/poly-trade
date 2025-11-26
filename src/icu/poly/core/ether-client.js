@@ -23,7 +23,7 @@ const ERC20_ABI = [
  * 从 Polygon Gas Station 获取推荐的 gas 价格
  * @returns {Promise<{maxFeePerGas: ethers.BigNumber, maxPriorityFeePerGas: ethers.BigNumber}>}
  */
-async function getGasPrice() {
+export async function getGasPrice() {
     try {
         const response = await fetch(GAS_STATION_API);
         const data = await response.json();
@@ -608,4 +608,5 @@ export default {
     getLatestUsedNonce,
     checkPendingTransactions,
     speedUpTransaction,
+    getGasPrice,
 };

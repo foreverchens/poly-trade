@@ -3,6 +3,7 @@
 
 import 'dotenv/config';
 import { ethers } from "ethers";
+import { getGasPrice } from "./ether-client.js";
 
 // ========== 环境变量 ==========
 const RPC_URL = process.env.RPC_URL || "https://polygon-rpc.com";
@@ -67,6 +68,10 @@ async function main() {
     const usdcDecimals = await usdc.decimals().catch(() => 6);
     console.log(`USDC decimals = ${usdcDecimals}`);
 
+    // 获取推荐的 gas 价格
+    const gasPrice = await getGasPrice();
+    console.log(`使用 Gas 价格 - MaxFee: ${ethers.utils.formatUnits(gasPrice.maxFeePerGas, "gwei")} Gwei, MaxPriorityFee: ${ethers.utils.formatUnits(gasPrice.maxPriorityFeePerGas, "gwei")} Gwei`);
+
     for (const t of TARGETS) {
         console.log(`\n=== 处理目标：${t.name} (${t.addr}) ===`);
 
@@ -77,8 +82,12 @@ async function main() {
         // v5 使用 BigNumber 比较：allowance < MaxUint256 / 2
         if (curAllowance.lt(ethers.constants.MaxUint256.div(2))) {
             console.log("发送 USDC approve(MaxUint256) 交易...");
-            // 发送授权
-            const tx = await usdc.approve(t.addr, ethers.constants.MaxUint256);
+            // 发送授权，添加 gas 参数
+            const tx = await usdc.approve(t.addr, ethers.constants.MaxUint256, {
+                maxFeePerGas: gasPrice.maxFeePerGas,
+                maxPriorityFeePerGas: gasPrice.maxPriorityFeePerGas,
+                type: 2  // EIP-1559 transaction
+            });
             console.log(`提交 tx: ${tx.hash}`);
             const rcpt = await tx.wait();
             console.log(`USDC approve 成功，区块: ${rcpt.blockNumber}`);
@@ -92,7 +101,12 @@ async function main() {
 
         if (!approved) {
             console.log("发送 setApprovalForAll(true) 交易...");
-            const tx2 = await ctf.setApprovalForAll(t.addr, true);
+            // 添加 gas 参数
+            const tx2 = await ctf.setApprovalForAll(t.addr, true, {
+                maxFeePerGas: gasPrice.maxFeePerGas,
+                maxPriorityFeePerGas: gasPrice.maxPriorityFeePerGas,
+                type: 2  // EIP-1559 transaction
+            });
             console.log(`提交 tx: ${tx2.hash}`);
             const rcpt2 = await tx2.wait();
             console.log(`setApprovalForAll 成功，区块: ${rcpt2.blockNumber}`);

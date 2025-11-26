@@ -140,7 +140,7 @@ export async function get1HourAmp(symbol) {
         return 1;
     }
     const kline = klines.data[0];
-    return Math.abs(kline[1] - kline[4]) / kline[1];
+    return Number((Math.abs(kline[1] - kline[4]) / kline[1]).toFixed(5));
 }
 
 /**

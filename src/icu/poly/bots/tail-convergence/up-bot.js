@@ -115,6 +115,11 @@ class TailConvergenceStrategy {
         // 0 30~50分钟且流动性充足、待机
         // 1 50~60分钟或者流动性枯竭、监控
         this.loopState = 0;
+        // 预防插针、检查持续性
+        this.highCnt = 0;
+
+        // 是否正在观察行情
+        this.watching = false;
     }
 
     /**
@@ -207,6 +212,10 @@ class TailConvergenceStrategy {
         this.tickIntervalMs = this.tickIntervalSeconds * 1000;
         // 重置循环状态
         this.loopState = 0;
+        // 重置预防插针、检查持续性
+        this.highCnt = 0;
+        // 是否正在观察行情
+        this.watching = false;
         logger.info(`[扫尾盘策略] 小时循环已结束\n`);
     }
 
@@ -221,13 +230,19 @@ class TailConvergenceStrategy {
             this.stopHourlyLoop();
             return;
         }
-        if (this.initialEntryDone && (this.extraEntryDone || !this.allowExtraEntryAtCeiling)) {
+        if (
+            this.initialEntryDone &&
+            (this.extraEntryDone || !this.allowExtraEntryAtCeiling) &&
+            !this.watching
+        ) {
             // 初始建仓 且 额外买入、则提前结束小时循环
             logger.info(
                 `[扫尾盘策略] 所有预期建仓均已完成(额外买入=${this.allowExtraEntryAtCeiling}), 提前结束小时循环`,
             );
-            this.stopHourlyLoop();
-            return;
+            // 任务完成 重置tick间隔支持输出日志观察行情、等待自动结束循环
+            this.watching = true;
+            // 重置 tick 间隔为初始配置值
+            this.tickIntervalMs = this.tickIntervalSeconds * 1000;
         }
         try {
             await this.tick();
@@ -246,6 +261,17 @@ class TailConvergenceStrategy {
         this.targetSlug = this.cache.getTargetSlug();
         const signal = await this.processSlug(this.targetSlug);
         if (!signal) {
+            return;
+        }
+        if (this.watching) {
+            this.tickIntervalMs = this.tickIntervalSeconds * 1000;
+            logger.info(
+                `[${signal.marketSlug}] watching mode, skip signal handling
+                     | Outcome: ${signal.chosen.outcome.toUpperCase()}@${signal.chosen.price}
+                     | yesPrice: ${signal.yesPrice}, noPrice: ${signal.noPrice}
+                     | liquiditySignal: ${signal.liquiditySignal}
+                     | zVal: ${signal.zVal}, secondsToEnd: ${signal.secondsToEnd}, amp: ${signal.amp}`,
+            );
             return;
         }
         await this.handleSignal(signal);
@@ -298,6 +324,12 @@ class TailConvergenceStrategy {
                 logger.info(`[${market.slug}] yesPrice=${yesPrice} noPrice=${noPrice} pending... `);
                 return null;
             }
+            if (topPrice >= this.triggerPriceGt && this.highCnt < 3) {
+                // 防止插针误触发、检查持续性
+                logger.info(`[${market.slug}] 预防插针、检查持续性、计数器=${this.highCnt}`);
+                this.highCnt += 1;
+                return null;
+            }
             // 超过50分钟、或者高波动发生、价格触发、转换为监控模式、提高tick频率
             logger.info(
                 `[${market.slug}] 状态转换: 待机模式 -> 监控模式 (tick间隔: ${this.tickIntervalMs}ms -> 10000ms, 原因: ${dayjs().minute() >= 50 ? "时间超过50分" : "高波动发生"})`,
@@ -333,15 +365,11 @@ class TailConvergenceStrategy {
             // === 常规阶段：时间早且流动性好 ===
             // 严格遵守 Z-Score
             if (zVal < this.zMin) {
-                logger.info(
-                    `[${market.slug}] Z-Score=${zVal} < ${this.zMin},继续等待`,
-                );
+                logger.info(`[${market.slug}] Z-Score=${zVal} < ${this.zMin},继续等待`);
                 return null;
             }
             // Z-Score好 -> 继续执行 (isLiquiditySignal 保持 false，走正常风控)
-            logger.info(
-                `[${market.slug}] Z-Score=${zVal} >= ${this.zMin},继续执行`,
-            );
+            logger.info(`[${market.slug}] Z-Score=${zVal} >= ${this.zMin},继续执行`);
         } else {
             // === 尾部/关键性买入阶段 ===
             // 进入关键性买入阶段、加速 tick 频率
@@ -352,15 +380,11 @@ class TailConvergenceStrategy {
                 // 只要 Z-Score 达标就买
                 if (zVal < this.zMin) {
                     // 流动性好但统计信号不好 -> 放弃
-                    logger.info(
-                        `[${market.slug}] Z-Score=${zVal} < ${this.zMin},继续等待`,
-                    );
+                    logger.info(`[${market.slug}] Z-Score=${zVal} < ${this.zMin},继续等待`);
                     return null;
                 }
                 // 流动性好且Z-Score好 -> 继续执行 (isLiquiditySignal 保持 false，走正常风控)
-                logger.info(
-                    `[${market.slug}] Z-Score=${zVal} >= ${this.zMin},继续执行`,
-                );
+                logger.info(`[${market.slug}] Z-Score=${zVal} >= ${this.zMin},继续执行`);
             } else {
                 // === 场景：流动性枯竭 (无论早晚) ===
                 // 触发尾端流动性追踪信号
@@ -394,7 +418,9 @@ class TailConvergenceStrategy {
                       price: noPrice,
                       outcome: "DOWN",
                   };
-        logger.info(`[${market.slug}] 选择=${candidate.outcome.toUpperCase()}@${candidate.price.toFixed(3)}`);
+        logger.info(
+            `[${market.slug}] 选择=${candidate.outcome.toUpperCase()}@${candidate.price.toFixed(3)}`,
+        );
 
         // 返回交易信号
         return {
@@ -451,10 +477,10 @@ class TailConvergenceStrategy {
         }
 
         logger.info(
-            `[${marketSlug}-${signal.chosen.outcome.toUpperCase()}@额外买入] 风控检查通过: 价格=${price.toFixed(3)}>=0.99 或流动性已经不足(threshold=2000)`,
+            `[${marketSlug}-${signal.chosen.outcome.toUpperCase()}@额外买入] 风控检查通过: 价格${price}>=0.99 或流动性已经不足(chosenAsksLiq=${chosenAsksLiq} < 2000)`,
         );
 
-        return { allowed: true, reason: "价格>=0.99 或流动性已经不足(threshold=2000) 风控通过" };
+        return { allowed: true, reason: `价格>=0.99 或流动性已经不足(chosenAsksLiq=${chosenAsksLiq} < 2000)  风控通过` };
 
         /* ==================== 复杂风控逻辑（已注释） ====================
         // 5. 价格+时间+流动性联合风控
@@ -582,9 +608,7 @@ class TailConvergenceStrategy {
     async openPosition({ tokenId, price, sizeUsd, signal, isExtra }) {
         const sizeShares = Math.floor(sizeUsd / price);
         logger.info(
-            `[${signal.marketSlug} ${
-                this.test ? "测试" : "实盘"
-            }] 建仓 ->
+            `[${signal.marketSlug} ${this.test ? "测试" : "实盘"}] 建仓 ->
                 方向@${signal.chosen.outcome.toUpperCase()}
                 price@${price.toFixed(3)}
                 数量@${sizeShares}
@@ -607,15 +631,13 @@ class TailConvergenceStrategy {
                 `[${signal.marketSlug}-${signal.chosen.outcome.toUpperCase()}@${signal.chosen.price.toFixed(
                     3,
                 )} ] 建仓被拒绝:`,
-                entryOrder,
+                entryOrder.error,
             );
 
             return;
         }
         const orderId = entryOrder.orderID;
-        logger.info(
-            `[${signal.marketSlug}] ✅ 建仓成功,订单号=${orderId}`,
-        );
+        logger.info(`[${signal.marketSlug}] ✅ 建仓成功,订单号=${orderId}`);
 
         // 下单成功后、立即本地扣减余额
         this.cache.deductBalance(sizeUsd);

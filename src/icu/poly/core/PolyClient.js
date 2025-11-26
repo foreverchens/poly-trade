@@ -71,7 +71,7 @@ export class PolyClient {
         if (!this.clientPromise) {
             this.clientPromise = (async () => {
                 const baseClient = new ClobClient(this.host, this.chainId, this.signer);
-                const creds = await baseClient.deriveApiKey();
+                const creds = await baseClient.createOrDeriveApiKey();
                 return new ClobClient(
                     this.host,
                     this.chainId,

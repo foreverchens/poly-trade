@@ -28,6 +28,8 @@ class TailConvergenceStrategy {
         this.cache = new UpBotCache({
             slug: this.slugTemplate,
             maxMinutesToEnd: this.maxMinutesToEnd,
+            maxSizeUsdc: this.extraSizeUsdc + this.positionSizeUsdc,
+            client: this.client,
         });
 
         // 初始化止盈管理器
@@ -137,7 +139,6 @@ class TailConvergenceStrategy {
     logBootstrapSummary() {
         const earlyThreshold = threshold(600);
         const lateThreshold = threshold(0);
-        this.cache.getBalance(this.client, this.extraSizeUsdc);
         logger.info(
             `[扫尾盘策略-UpDown]
             建仓金额=${this.positionSizeUsdc}USDC
@@ -318,13 +319,16 @@ class TailConvergenceStrategy {
          *  如果中途发生流动性匮乏、则提前进入监控模式、提高tick频率
          */
         if (this.loopState === 0) {
-            // 30~50分钟、价格未触发、待机
-            if (dayjs().minute() < 50 && topPrice < this.triggerPriceGt) {
+            // 50分之前、价格未触发、zVal小于3、继续等待
+            if (dayjs().minute() < 50
+            && topPrice < this.triggerPriceGt
+            && zVal < 3) {
                 // 非高波动场合、价格未触发、继续等待
-                logger.info(`[${market.slug}] yesPrice=${yesPrice} noPrice=${noPrice} pending... `);
+                logger.info(`[${market.slug}] yesPrice=${yesPrice} noPrice=${noPrice} zVal=${zVal} pending... `);
                 return null;
             }
-            if (topPrice >= this.triggerPriceGt && this.highCnt < 3) {
+            // zVal>=3 或者 topPrice>=this.triggerPriceGt 发生其中一种、则认为高波动发生
+            if ((zVal >= 3 || topPrice >= this.triggerPriceGt) && this.highCnt < 2) {
                 // 防止插针误触发、检查持续性
                 logger.info(`[${market.slug}] 预防插针、检查持续性、计数器=${this.highCnt}`);
                 this.highCnt += 1;
@@ -356,8 +360,12 @@ class TailConvergenceStrategy {
         // 剩余时间小于300秒、进入尾部阶段
         const isLateStage = secondsToEnd < 300;
         // 使用默认阈值 (通常是1000) 检查基础流动性 检查卖方流动性是否充足
-        const asksLiq = await this.cache.getAsksLiq(this.client, topTokenId);
-        const isLiquiditySufficient = asksLiq >= 1000;
+        const asksLiq = await this.cache.getAsksLiq(topTokenId);
+        if(asksLiq < 1){
+            logger.error(`[${market.slug}] 卖方流动性为0,结束信号`);
+            return null;
+        }
+        const isLiquiditySufficient = asksLiq >= 2000;
 
         // 流动性信号标记
         let isLiquiditySignal = false;
@@ -389,7 +397,7 @@ class TailConvergenceStrategy {
                 // === 场景：流动性枯竭 (无论早晚) ===
                 // 触发尾端流动性追踪信号
                 logger.info(
-                    `[${market.slug}] 触发尾端流动性追踪信号 (Z-Score=${zVal}, endTime=${secondsToEnd}s)`,
+                    `[${market.slug}] 触发尾端流动性追踪信号 (Z-Score=${zVal},liquidity=${asksLiq}, endTime=${secondsToEnd}s)`,
                 );
                 // 触发尾端流动性追踪信号、设置流动性信号标记
                 isLiquiditySignal = true;
@@ -466,7 +474,11 @@ class TailConvergenceStrategy {
         // 4. 简化风控：只允许价格>=0.99时额外买入
         // 理由：价格到0.99本身就是强烈的收敛信号，不需要额外的时间和波动率检查
         // 若流动性尚且充足、等待匮乏机会
-        const chosenAsksLiq = await this.cache.getAsksLiq(this.client, signal.chosen.tokenId);
+        const chosenAsksLiq = await this.cache.getAsksLiq(signal.chosen.tokenId);
+        if(chosenAsksLiq < 1){
+            logger.error(`[${marketSlug}-${signal.chosen.outcome.toUpperCase()}@额外买入] 卖方流动性为0,结束信号`);
+            return { allowed: false, reason: "卖方流动性为0,结束信号" };
+        }
         if (price < 0.99 || chosenAsksLiq >= 2000) {
             // price >= 0.99
             // 流动性大于2000、就还能再等等
@@ -553,13 +565,17 @@ class TailConvergenceStrategy {
 
         // 首次建仓
         if (!this.initialEntryDone) {
-            await this.openPosition({
+            this.openPosition({
                 tokenId: signal.chosen.tokenId,
                 price: signal.chosen.price,
                 sizeUsd: this.positionSizeUsdc,
                 signal,
                 isExtra: false,
             });
+            // 如果初始建仓成功、继续进行额外买入逻辑
+        }
+        // 如果额外买入已经完成、则结束处理
+        if(this.extraEntryDone){
             return;
         }
 
@@ -573,7 +589,7 @@ class TailConvergenceStrategy {
         }
 
         // 预算检查
-        const sizeUsd = await this.cache.getBalance(this.client, this.extraSizeUsdc);
+        const sizeUsd = await this.cache.getBalance(this.extraSizeUsdc);
         if (sizeUsd <= 5) {
             logger.info(
                 `[${marketSlug}-${signal.chosen.outcome.toUpperCase()}@额外买入] 建仓预算不足，结束处理`,
@@ -586,7 +602,7 @@ class TailConvergenceStrategy {
             `[${marketSlug}-${signal.chosen.outcome.toUpperCase()}@额外买入] ` +
                 `${signal.chosen.outcome.toUpperCase()}-->price=${signal.chosen.price}@sizeUsd=${sizeUsd}`,
         );
-        await this.openPosition({
+        this.openPosition({
             tokenId: signal.chosen.tokenId,
             price: signal.chosen.price,
             sizeUsd,
@@ -640,7 +656,7 @@ class TailConvergenceStrategy {
         logger.info(`[${signal.marketSlug}] ✅ 建仓成功,订单号=${orderId}`);
 
         // 下单成功后、立即本地扣减余额
-        this.cache.deductBalance(sizeUsd);
+        await this.cache.deductBalance(sizeUsd);
 
         // 建仓后进入止盈队列、由止盈cron在事件结束后处理
         const takeProfitOrder = {

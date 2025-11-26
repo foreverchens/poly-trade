@@ -6,6 +6,8 @@ export class UpBotCache {
     constructor(config) {
         this.slugTemplate = config.slug;
         this.maxMinutesToEnd = config.maxMinutesToEnd;
+        this.maxSizeUsdc = config.maxSizeUsdc;
+        this.client = config.client;
 
         // 运行时数据存储
         this.store = {
@@ -71,10 +73,9 @@ export class UpBotCache {
     }
 
     /**
-     * 获取余额 (带TTL)
-     * @param {Object} client - PolyClient 实例
+     * 获取余额
      */
-    async getBalance(client, extraSizeUsdc = 100) {
+    async getBalance(extraSizeUsdc) {
         // 如果已有缓存值（大于0），直接返回
         if (this.store.balance > 0) {
             logger.info(`[UpBotCache] 余额缓存: ${this.store.balance} USDC`);
@@ -82,7 +83,7 @@ export class UpBotCache {
         }
 
         try {
-            let val = await resolvePositionSize(client);
+            let val = await resolvePositionSize(this.client);
             if (val < 1) {
                 logger.error(`[UpBotCache] 余额为0，可能是API异常或钱包确实无余额`);
                 return 0;
@@ -101,23 +102,28 @@ export class UpBotCache {
      * 本地扣减余额 (乐观更新)
      * @param {number} amount - 扣减金额
      */
-    deductBalance(amount) {
+    async deductBalance(amount) {
         // 向上取整
         amount = Math.ceil(amount);
-        if (this.store.balance > 0) {
-            const oldVal = this.store.balance;
-            this.store.balance =oldVal - amount;
-            logger.info(
-                `[UpBotCache] 本地扣减余额: ${oldVal} -> ${this.store.balance} (-${amount})`,
-            );
+        if (this.store.balance < 1) {
+            // 如果余额小于1，尝试获取余额
+            const balance = await this.getBalance(this.maxSizeUsdc);
+            if (balance < amount) {
+                logger.error(`[UpBotCache] 余额${balance}不足${amount}，无法扣减`);
+                return;
+            }
+            this.store.balance = Math.floor(balance);
         }
+        const oldVal = this.store.balance;
+        this.store.balance = oldVal - amount;
+        logger.info(`[UpBotCache] 本地扣减余额: ${oldVal} -> ${this.store.balance} (-${amount})`);
     }
 
     /**
      * 获取卖方流动性 历史3个样本求平均值
      */
-    async getAsksLiq(client, tokenId) {
-        const newVal = await getAsksLiq(client, tokenId);
+    async getAsksLiq(tokenId) {
+        const newVal = await getAsksLiq(this.client, tokenId);
         let queue = this.store.liquidity.get(tokenId) ?? [];
         queue.push(newVal);
         if (queue.length > 3) {
@@ -125,10 +131,6 @@ export class UpBotCache {
         }
         this.store.liquidity.set(tokenId, queue);
         const avg = queue.reduce((sum, val) => sum + val, 0) / queue.length;
-
-        logger.info(
-            `[UpBotCache] 流动性平均情况: 新值=${newVal}, 平均=${avg.toFixed(1)}`,
-        );
         return Number(avg.toFixed(1));
     }
 }

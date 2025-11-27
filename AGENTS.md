@@ -1,32 +1,19 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-- Runtime code lives under `src/icu/poly`: `core/` holds the Polymarket client, `view/` contains the static dashboard, and `web-server.js` exposes REST + static routes. Automated agents (`auto-maker-bot.js`, `endgame-bot.js`) reuse the same helpers.  
-- Tests mirror this layout in `test/icu/poly`, with one `*.test.js` per `PolyClient` method and shared fixtures in `test-helper.js`; colocate new code and tests to preserve the mapping.  
-- Keep HTML/CSS/JS assets in `src/icu/poly/view` so `express.static` can serve them without extra config.
+Runtime code sits in `src/icu/poly`: `core/` houses the Polymarket client helpers, `view/` exposes the static dashboard, and `web-server.js` wires REST endpoints with the asset bundle. Automated agents (`auto-maker-bot.js`, `endgame-bot.js`) reuse the same client utilities, so keep shared logic in `core/` to avoid drift. Tests mirror this map under `test/icu/poly`, with one `*.test.js` per `PolyClient` method and reusable fixtures in `test-helper.js`. Front-end HTML/CSS/JS must stay inside `src/icu/poly/view` so `express.static` picks them up without extra routing.
 
 ## Build, Test, and Development Commands
-- `npm install` – restore dependencies before running anything.  
-- `npm start` – boot `src/icu/poly/web-server.js`, which serves `/api/*` JSON plus the crypto-market UI.  
-- `npm test` – execute every `test/**/*.test.js` via the Node test runner.  
-- `npm run test:single -- "name" path/to/file.test.js` – narrow execution to a single spec or file while iterating.
+Run `npm install` once per checkout to hydrate dependencies. Use `npm start` to launch `src/icu/poly/web-server.js`, which serves `/api/*` JSON alongside the dashboard bundle. `npm test` executes every Node test via the built-in runner, while `npm run test:single -- "name" test/icu/poly/get-order-book.test.js` narrows focus for fast iteration. Capture logs in `logs/` when debugging agents; the scripts already write there.
 
 ## Coding Style & Naming Conventions
-- Native ES modules are required (`type: "module"`); stick with `.js` files that use `import`/`export`.  
-- Follow the prevailing four-space indent, trailing commas for multi-line literals, and descriptive constant prefixes (`DEFAULT_*`, `SUPPORTED_*`).  
-- Place env-sensitive logic (e.g., `PRIVATE_KEY` checks) near the top of each module and fail fast with explicit errors.  
-- Add HTTP routes using kebab-case paths (`/api/place-order`) and descriptive handler names.
+The repo is strictly ESM—stick with `.js` modules that use `import`/`export`. Apply four-space indentation, keep trailing commas on multi-line literals, and prefix constants descriptively (`DEFAULT_`, `SUPPORTED_`). Guard env-sensitive paths near the top of each module (e.g., `if (!process.env.PRIVATE_KEY) throw new Error(...)`). API routes use kebab-case paths (`/api/place-order`) and handler names that describe side effects.
 
 ## Testing Guidelines
-- Tests rely on the built-in Node runner with lightweight network stubs; extend `test-helper.js` for new fixtures instead of duplicating setup.  
-- Name specs after the method under test (`get-order-book.test.js`) and keep `test("does X")` blocks isolated—no shared mutable state.  
-- Cover edge cases such as null parameters, unsupported intervals, and HTTP error payloads so the REST layer stays predictable.
+Tests rely on the Node test runner plus lightweight network stubs. Name files after the method under test (`get-order-book.test.js`) and isolate each `test("does X")` block—no shared mutable state. Extend `test-helper.js` when a fixture or mock is needed, rather than duplicating setup in specs. Cover null params, unsupported intervals, and HTTP error payloads so the REST layer remains predictable, especially for bot consumers.
 
 ## Commit & Pull Request Guidelines
-- Recent history favors terse, lower-case subjects (e.g., `test`, `1`); follow the pattern with short imperative phrases (`add orderbook cache`) plus issue IDs when relevant.  
-- PRs should summarize scope, list touched endpoints, call out new env vars (e.g., `PRIVATE_KEY`), and include screenshots for UI changes.  
-- Always mention `.env` expectations in the PR body so reviewers can recreate the setup locally.
+History favors short, lowercase subjects (e.g., `add orderbook cache`); keep them imperative and reference issue IDs where applicable. PRs should summarize scope, enumerate touched endpoints or bots, list new env vars, and include screenshots for UI updates. Always mention `.env` expectations so reviewers can reproduce. Call out manual steps (e.g., seeding markets) in the PR body.
 
 ## Security & Configuration Tips
-- The bots and server require `PRIVATE_KEY` (plus any Polymarket host overrides) in your local `.env`; never commit secrets.  
-- If you redirect the client to alternate hosts, document the new URLs inside code comments and in the PR so other agents stay in sync.
+All agents and the web server require `PRIVATE_KEY` plus any host overrides defined in `.env`; never commit secrets. Document non-default hosts both in code comments and PR notes so other operators remain in sync. When redirecting traffic or enabling new bots, review `logs/` and add alerts or TODOs where unexpected failures could leak keys.

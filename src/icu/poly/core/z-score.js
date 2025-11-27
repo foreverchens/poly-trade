@@ -175,6 +175,7 @@ async function getS0Cached(symbol) {
  * @returns {Promise<number>} z 值（保留 1 位小数，如 4.2）
  */
 export async function getZ(symbol, tSec) {
+    symbol = symbol + "/USDT";
     if (!(tSec >= 0)) throw new Error("tSec 必须是非负秒数（当前小时剩余时间，单位秒）");
 
     // 1) 获取缓存或计算 σ1h 和 S0 (并行执行)

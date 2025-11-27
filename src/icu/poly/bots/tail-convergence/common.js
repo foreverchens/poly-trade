@@ -121,9 +121,8 @@ export function threshold(sec, k = 0.3, a = 0.92, b = 0.06) {
 
 export async function get1HourAmp(symbol) {
     // 调用binance 现货api获取ETH最近一根小时级别k线、
-    const cleanSymbol = symbol.replace("/", "");
     const klines = await axios.get(
-        `https://api.binance.com/api/v3/klines?symbol=${cleanSymbol}&interval=1h&limit=1`,
+        `https://api.binance.com/api/v3/klines?symbol=${symbol}USDT&interval=1h&limit=1`,
     );
     if (!klines?.data?.length) {
         return 1;

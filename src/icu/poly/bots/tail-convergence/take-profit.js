@@ -150,14 +150,15 @@ export class TakeProfitManager {
             const bestBidPrice = typeof bestBid === "number" && bestBid > 0 ? bestBid : 0;
             // 先检查价格是否有效
             if (bestBidPrice <= 0) {
+                logger.info(
+                    `[止盈] ${orderKey} 最优买价=${bestBidPrice} 小于等于0、跳过`,
+                );
                 return false;
             }
 
             // 再检查是否满足止盈价格要求
             if (bestBidPrice < this.takeProfitPrice) {
-                // logger.info(
-                //     `[止盈] ${orderKey} 最优买价=${bestBidPrice} 小于止盈价格=${this.takeProfitPrice}，跳过`,
-                // );
+                console.log(`[止盈] ${orderKey} 最优买价=${bestBidPrice} 小于止盈价格=${this.takeProfitPrice}、跳过`);
                 return false;
             }
 

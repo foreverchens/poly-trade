@@ -794,7 +794,7 @@
           </td>
           <td class="close-order" data-th="平仓">
             <input type="number" step="0.1" min="${MIN_ORDER_PRICE * PRICE_DISPLAY_MULTIPLIER}" max="${MAX_ORDER_PRICE * PRICE_DISPLAY_MULTIPLIER}" placeholder="价格（%）"
-                   id="${rowId}-price" value="${formatPriceInput(bestAsk)}" />
+                   id="${rowId}-price" value="${formatPriceInput(bestBid)}" />
             <input type="number" step="0.01" min="0.01" placeholder="数量"
                    id="${rowId}-size" value="${size > 0 ? size.toFixed(3) : ''}" max="${size}" />
             <button${Number.isFinite(bestBid) ? ` data-best-bid="${bestBid}"` : ''} onclick="handleCloseOrder('${tokenId}', '${rowId}', 'SELL')">平仓</button>

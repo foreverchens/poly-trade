@@ -8,7 +8,7 @@ export default [
         task: {
             name: "ETH_UpDown_Hourly",
             slug: "ethereum-up-or-down-november-${day}-${hour}${am_pm}-et",
-            symbol: "ETH/USDT",
+            symbol: "ETH",
             test: false,
         },
 
@@ -21,8 +21,8 @@ export default [
 
         // 建仓配置
         position: {
-            positionSizeUsdc: 10,
-            extraSizeUsdc: 100,
+            positionSizeUsdc: 30,
+            extraSizeUsdc: 120,
             allowExtraEntryAtCeiling: true,
         },
 
@@ -48,7 +48,7 @@ export default [
                  * 预感未来波动率将不断上升、可适当提高zMin阈值
                  * highVolatilityZThreshold同理
                  */
-                zMin: 2,                              // 最小 Z-Score 阈值
+                zMin: 2.5,                              // 最小 Z-Score 阈值
                 ampMin: 0.001,                        // 最小振幅
                 highVolatilityZThreshold: 3,          // 高波动 Z-Score 阈值
             },
@@ -69,7 +69,7 @@ export default [
         task: {
             name: "BTC_UpDown_Hourly",
             slug: "bitcoin-up-or-down-november-${day}-${hour}${am_pm}-et",
-            symbol: "BTC/USDT",
+            symbol: "BTC",
             test: false,
         },
 
@@ -82,7 +82,7 @@ export default [
 
         // 建仓配置
         position: {
-            positionSizeUsdc: 20,
+            positionSizeUsdc: 50,
             extraSizeUsdc: 200,
             allowExtraEntryAtCeiling: true,
         },
@@ -103,14 +103,14 @@ export default [
 
             // 统计风控
             statistics: {
-                zMin: 2,                              // 最小 Z-Score
+                zMin: 2.5,                              // 最小 Z-Score
                 ampMin: 0.001,                        // 最小振幅
                 highVolatilityZThreshold: 3,          // 高波动 Z-Score 阈值
             },
 
             // 流动性风控
             liquidity: {
-                sufficientThreshold: 2000,            // 流动性充足阈值
+                sufficientThreshold: 3000,            // 流动性充足阈值
             },
 
             // 插针防护

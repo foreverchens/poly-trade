@@ -15,7 +15,9 @@ class TailConvergenceStrategy {
     constructor(taskIndex = 0) {
         // 从导入的配置中获取指定任务
         if (taskIndex >= taskConfigs.length) {
-            throw new Error(`任务索引 ${taskIndex} 超出范围，配置文件只有 ${taskConfigs.length} 个任务`);
+            throw new Error(
+                `任务索引 ${taskIndex} 超出范围，配置文件只有 ${taskConfigs.length} 个任务`,
+            );
         }
 
         const taskConfig = taskConfigs[taskIndex];
@@ -120,7 +122,7 @@ class TailConvergenceStrategy {
             triggerPriceGt,
             allowExtraEntryAtCeiling = false,
             zMin,
-            symbol = "ETH/USDT",
+            symbol = "ETH",
             monitorModeMinuteThreshold = 50,
             highVolatilityZThreshold = 3,
             spikeProtectionCount = 2,
@@ -321,21 +323,25 @@ class TailConvergenceStrategy {
     async tick() {
         this.targetSlug = this.cache.getTargetSlug();
         const signal = await this.processSlug(this.targetSlug);
-        if (!signal) {
-            return;
-        }
         if (this.watching) {
+            // 如果正在观察行情、则重置tick间隔
             this.tickIntervalMs = this.tickIntervalSeconds * 1000;
-            logger.info(
-                `[${signal.marketSlug}] watching mode, skip signal handling
-                     | Outcome: ${signal.chosen.outcome.toUpperCase()}@${signal.chosen.price}
-                     | yesPrice: ${signal.yesPrice}, noPrice: ${signal.noPrice}
-                     | liquiditySignal: ${signal.liquiditySignal}
-                     | zVal: ${signal.zVal}, secondsToEnd: ${signal.secondsToEnd}, amp: ${signal.amp}`,
-            );
+            // 如果信号存在、则输出日志
+            if (signal) {
+                logger.info(
+                    `[${signal.marketSlug}] watching mode, skip signal handling
+                         | Outcome: ${signal.chosen.outcome.toUpperCase()}@${signal.chosen.price}
+                         | yesAsk: ${signal.yesAsk}, noAsk: ${signal.noAsk}
+                         | liquiditySignal: ${signal.liquiditySignal}
+                         | zVal: ${signal.zVal}, secondsToEnd: ${signal.secondsToEnd}, amp: ${signal.amp}`,
+                );
+            }
             return;
         }
-        await this.handleSignal(signal);
+        // 如果信号存在、则处理信号
+        if (signal) {
+            await this.handleSignal(signal);
+        }
     }
 
     /**
@@ -382,34 +388,35 @@ class TailConvergenceStrategy {
          */
         if (this.loopState === 0) {
             // 指定分钟之前、价格未触发、zVal小于高波动阈值、继续等待
-            if (dayjs().minute() < this.monitorModeMinuteThreshold
-            && topPrice < this.triggerPriceGt
-            && zVal < this.highVolatilityZThreshold) {
+            if (
+                dayjs().minute() < this.monitorModeMinuteThreshold &&
+                topPrice < this.triggerPriceGt &&
+                zVal < this.highVolatilityZThreshold
+            ) {
                 // 非高波动场合、价格未触发、继续等待
-                logger.info(`[${market.slug}] yesAsk=${yesAsk} noAsk=${noAsk} zVal=${zVal} pending... `);
+                logger.info(
+                    `[${this.symbol}-${this.currentLoopHour}时] yesAsk=${yesAsk} noAsk=${noAsk} zVal=${zVal} pending... `,
+                );
                 return null;
             }
             // zVal>=高波动阈值 或者 topPrice>=this.triggerPriceGt 发生其中一种、则认为高波动发生
-            if ((zVal >= this.highVolatilityZThreshold || topPrice >= this.triggerPriceGt) && this.highCnt < this.spikeProtectionCount) {
+            if (
+                (zVal >= this.highVolatilityZThreshold || topPrice >= this.triggerPriceGt) &&
+                this.highCnt < this.spikeProtectionCount
+            ) {
                 // 防止插针误触发、检查持续性
-                logger.info(`[${market.slug}] 预防插针、检查持续性、计数器=${this.highCnt}`);
+                logger.info(
+                    `[${this.symbol}-${this.currentLoopHour}时] 预防插针、检查持续性、计数器=${this.highCnt}`,
+                );
                 this.highCnt += 1;
                 return null;
             }
             // 超过指定分钟、或者高波动发生、价格触发、转换为监控模式、提高tick频率
             logger.info(
-                `[${market.slug}] 状态转换: 待机模式 -> 监控模式 (tick间隔: ${this.tickIntervalMs}ms -> 10000ms, 原因: ${dayjs().minute() >= this.monitorModeMinuteThreshold ? `时间超过${this.monitorModeMinuteThreshold}分` : "高波动发生"})`,
+                `[${this.symbol}-${this.currentLoopHour}时] 状态转换: 待机模式 -> 监控模式 (tick间隔: ${this.tickIntervalMs}ms -> 10000ms, 原因: ${dayjs().minute() >= this.monitorModeMinuteThreshold ? `时间超过${this.monitorModeMinuteThreshold}分` : "高波动发生"})`,
             );
             this.loopState = 1;
             this.tickIntervalMs = 1000 * 10;
-        }
-
-        // 先检查价格是否在触发价格范围内
-        const priceThreshold = threshold(secondsToEnd);
-        // 价格不能超出 triggerPriceGt (0.99) 和 priceThreshold 的范围
-        if (topPrice > this.triggerPriceGt || topPrice < priceThreshold) {
-            logger.info(`[${market.slug}] topPrice:${topPrice} not in range [${priceThreshold}, ${this.triggerPriceGt}]  continue waiting`);
-            return null;
         }
 
         /**
@@ -421,8 +428,8 @@ class TailConvergenceStrategy {
         const isLateStage = secondsToEnd < 300;
         // 使用默认阈值 (通常是1000) 检查基础流动性 检查卖方流动性是否充足
         const asksLiq = await this.cache.getAsksLiq(topTokenId);
-        if(asksLiq < 1){
-            logger.error(`[${market.slug}] 卖方流动性为0,结束信号`);
+        if (asksLiq < 1) {
+            logger.error(`[${this.symbol}-${this.currentLoopHour}时] 卖方流动性为0,结束信号`);
             return null;
         }
         const isLiquiditySufficient = asksLiq >= this.liquiditySufficientThreshold;
@@ -433,35 +440,53 @@ class TailConvergenceStrategy {
             // === 常规阶段：时间早且流动性好 ===
             // 严格遵守 Z-Score
             if (zVal < this.zMin) {
-                logger.info(`[${market.slug}] 普通信号、Z-Score:${zVal} < ${this.zMin}, 继续等待`);
+                logger.info(
+                    `[${this.symbol}-${this.currentLoopHour}时] 普通信号、Z-Score:${zVal} < ${this.zMin}, 继续等待`,
+                );
                 return null;
             }
             // Z-Score好 -> 继续执行 (isLiquiditySignal 保持 false，走正常风控)
-            logger.info(`[${market.slug}] 普通信号、Z-Score:${zVal} >= ${this.zMin}, 继续执行`);
+            logger.info(
+                `[${this.symbol}-${this.currentLoopHour}时] 普通信号、Z-Score:${zVal} >= ${this.zMin}, 继续执行`,
+            );
         } else {
             // === 尾部/关键性买入阶段 ===
-            // 进入关键性买入阶段、加速 tick 频率
-            this.tickIntervalMs = Math.max(1000, this.tickIntervalMs / 2);
-
             if (isLiquiditySufficient) {
                 // === 场景：晚期但流动性依然充足 ===
                 // 只要 Z-Score 达标就买
                 if (zVal < this.zMin) {
                     // 流动性好但统计信号不好 -> 放弃
-                    logger.info(`[${market.slug}] 普通信号、Z-Score:${zVal} < ${this.zMin}, 继续等待`);
+                    logger.info(
+                        `[${this.symbol}-${this.currentLoopHour}时] 普通信号、Z-Score:${zVal} < ${this.zMin}, 继续等待`,
+                    );
                     return null;
                 }
                 // 流动性好且Z-Score好 -> 继续执行 (isLiquiditySignal 保持 false，走正常风控)
-                logger.info(`[${market.slug}] 普通信号、Z-Score:${zVal} >= ${this.zMin}, 继续执行`);
+                logger.info(
+                    `[${this.symbol}-${this.currentLoopHour}时] 普通信号、Z-Score:${zVal} >= ${this.zMin}, 继续执行`,
+                );
             } else {
                 // === 场景：流动性枯竭 (无论早晚) ===
                 // 触发尾端流动性追踪信号
                 logger.info(
-                    `[${market.slug}] 流动性信号触发、Z-Score:${zVal}, 卖方流动性:${asksLiq}, 剩余时间:${secondsToEnd}s 继续执行`,
+                    `[${this.symbol}-${this.currentLoopHour}时] 流动性信号触发、Z-Score:${zVal}, 卖方流动性:${asksLiq}, 剩余时间:${secondsToEnd}s 继续执行`,
                 );
                 // 触发尾端流动性追踪信号、设置流动性信号标记
                 isLiquiditySignal = true;
             }
+            // 进入关键性买入阶段、加速 tick 频率
+            this.tickIntervalMs = Math.max(1000, this.tickIntervalMs / 2);
+            logger.info(`[${this.symbol}-${this.currentLoopHour}时] 进入关键性买入阶段、加速 tick 当前频率:${this.tickIntervalMs}ms`);
+        }
+
+        // 先检查价格是否在触发价格范围内
+        const priceThreshold = threshold(secondsToEnd);
+        // 价格不能超出 triggerPriceGt (0.99) 和 priceThreshold 的范围
+        if (topPrice > this.triggerPriceGt || topPrice < priceThreshold) {
+            logger.info(
+                `[${this.symbol}-${this.currentLoopHour}时] topPrice:[${topPrice}] not in range [${priceThreshold}, ${this.triggerPriceGt}]  continue waiting`,
+            );
+            return null;
         }
 
         // UpDown事件：波动率检查
@@ -469,7 +494,7 @@ class TailConvergenceStrategy {
         const amp = await get1HourAmp(this.symbol);
         if (!isLiquiditySignal && amp < this.ampMin) {
             logger.info(
-                `[${market.slug}] 普通信号、波动率:${amp.toFixed(4)} < ${this.ampMin}, 继续等待`,
+                `[${this.symbol}-${this.currentLoopHour}时] 普通信号、波动率:${amp.toFixed(4)} < ${this.ampMin}, 继续等待`,
             );
             return null;
         }
@@ -481,27 +506,28 @@ class TailConvergenceStrategy {
             yesAsk >= noAsk
                 ? {
                       tokenId: yesTokenId,
-                      price: canUseMaker && yesAsk - yesBid > 0.02
-                          ? Math.ceil((yesAsk + yesBid) / 2 * 100) / 100  // 价差较大且时间充裕、尝试做maker单
-                          : yesAsk,  // 价差较小或时间紧迫、直接taker单
+                      price:
+                          canUseMaker && yesAsk - yesBid > 0.02
+                              ? Math.ceil(((yesAsk + yesBid) / 2) * 100) / 100 // 价差较大且时间充裕、尝试做maker单
+                              : yesAsk, // 价差较小或时间紧迫、直接taker单
                       outcome: "UP",
                   }
                 : {
                       tokenId: noTokenId,
-                      price: canUseMaker && noAsk - noBid > 0.02
-                          ? Math.ceil((noAsk + noBid) / 2 * 100) / 100  // 价差较大且时间充裕、尝试做maker单
-                          : noAsk,  // 价差较小或时间紧迫、直接taker单
+                      price:
+                          canUseMaker && noAsk - noBid > 0.02
+                              ? Math.ceil(((noAsk + noBid) / 2) * 100) / 100 // 价差较大且时间充裕、尝试做maker单
+                              : noAsk, // 价差较小或时间紧迫、直接taker单
                       outcome: "DOWN",
                   };
 
         // 判断是否使用了maker价格（价格与ask不同说明是maker单）
-        const isMaker = candidate.outcome === "UP"
-            ? candidate.price !== yesAsk
-            : candidate.price !== noAsk;
+        const isMaker =
+            candidate.outcome === "UP" ? candidate.price !== yesAsk : candidate.price !== noAsk;
         const orderType = isMaker ? "MAKER" : "TAKER";
 
         logger.info(
-            `[${market.slug}] 选择=${candidate.outcome.toUpperCase()}@${candidate.price} [${orderType}] ${isLiquiditySignal ? "流动性信号触发" : "普通信号触发"}`,
+            `[${this.symbol}-${this.currentLoopHour}时] 选择=${candidate.outcome.toUpperCase()}@${candidate.price} [${orderType}] ${isLiquiditySignal ? "流动性信号触发" : "普通信号触发"}`,
         );
 
         // 返回交易信号
@@ -549,12 +575,14 @@ class TailConvergenceStrategy {
         // 理由：价格到0.99本身就是强烈的收敛信号，不需要额外的时间和波动率检查
         // 若流动性尚且充足、等待匮乏机会
         const chosenAsksLiq = await this.cache.getAsksLiq(signal.chosen.tokenId);
-        if(chosenAsksLiq < 1){
-            logger.error(`[${marketSlug}-${signal.chosen.outcome.toUpperCase()}@额外买入] 卖方流动性为0,结束信号`);
+        if (chosenAsksLiq < 1) {
+            logger.error(
+                `[${marketSlug}-${signal.chosen.outcome.toUpperCase()}@额外买入] 卖方流动性为0,结束信号`,
+            );
             return { allowed: false, reason: "卖方流动性为0,结束信号" };
         }
         if (price < this.triggerPriceGt || chosenAsksLiq >= this.liquiditySufficientThreshold) {
-            // price >= 0.99
+            // price < 0.99
             // 流动性大于阈值、就还能再等等
             return {
                 allowed: false,
@@ -566,68 +594,10 @@ class TailConvergenceStrategy {
             `[${marketSlug}-${signal.chosen.outcome.toUpperCase()}@额外买入] 风控检查通过: 价格${price}>=0.99 或流动性已经不足(chosenAsksLiq=${chosenAsksLiq} < ${this.liquiditySufficientThreshold})`,
         );
 
-        return { allowed: true, reason: `价格>=0.99 或流动性已经不足(chosenAsksLiq=${chosenAsksLiq} < ${this.liquiditySufficientThreshold})  风控通过` };
-
-        /* ==================== 复杂风控逻辑（已注释） ====================
-        // 5. 价格+时间+流动性联合风控
-        // 特殊处理：价格 < 0.97 时，风险较小，只检查时间，不检查波动率
-        if (price < 0.97) {
-            if (currentMinute < 55) {
-                return {
-                    allowed: false,
-                    reason: `低价位(${price}<0.97)需要时间>55分钟，当前${currentMinute}分钟`,
-                };
-            }
-            logger.info(
-                `[${marketSlug}-${signal.chosen.outcome.toUpperCase()}@额外买入] 低价位风控通过: ` +
-                    `价格=${price}<0.97, 时间=${currentMinute}min>55, 跳过波动率检查`,
-            );
-            return { allowed: true, reason: "低价位风控通过" };
-        }
-
-        // 6. 价格 >= 0.97：价格+时间+波动率联合风控
-        let requiredAmp;
-        let timeThreshold;
-
-        if (price >= 0.99) {
-            // 高价位：波动率要求最低，时间要求宽松
-            requiredAmp = 0.002;
-            timeThreshold = 50;
-        } else if (price >= 0.98) {
-            // 中高价位：适中波动率，时间要求适中
-            requiredAmp = 0.004;
-            timeThreshold = 55;
-        } else {
-            // 中低价位 [0.97, 0.98)：较高波动率，时间要求较严
-            requiredAmp = 0.008;
-            timeThreshold = 57;
-        }
-
-        // 时间检查
-        if (currentMinute < timeThreshold) {
-            return {
-                allowed: false,
-                reason: `价格${price}需要时间>${timeThreshold}分钟，当前${currentMinute}分钟`,
-            };
-        }
-
-        // 波动率检查
-        const amp = await get1HourAmp(this.symbol);
-        if (amp < requiredAmp) {
-            return {
-                allowed: false,
-                reason: `波动率${amp}小于要求${requiredAmp}`,
-            };
-        }
-
-        logger.info(
-            `[${marketSlug}-${signal.chosen.outcome.toUpperCase()}@额外买入] 风控检查通过: ` +
-                `价格=${price}, 时间=${currentMinute}min(>${timeThreshold}), ` +
-                `波动率=${amp}(>${requiredAmp})`,
-        );
-
-        return { allowed: true, reason: "风控检查通过" };
-        ==================== 复杂风控逻辑（已注释） ==================== */
+        return {
+            allowed: true,
+            reason: `价格>=0.99 或流动性已经不足(chosenAsksLiq=${chosenAsksLiq} < ${this.liquiditySufficientThreshold})  风控通过`,
+        };
     }
 
     /**
@@ -649,7 +619,7 @@ class TailConvergenceStrategy {
             // 如果初始建仓成功、继续进行额外买入逻辑
         }
         // 如果额外买入已经完成、则结束处理
-        if(this.extraEntryDone){
+        if (this.extraEntryDone) {
             return;
         }
 

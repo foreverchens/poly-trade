@@ -36,11 +36,25 @@ import dayjs from "dayjs";
 import cron from "node-cron";
 import { PolyClient, PolySide } from "../../core/PolyClient.js";
 import {
-    loadStateFile,
     resolveSlugList,
     fetchMarkets,
     fetchBestAsk,
 } from "./common.js";
+
+/**
+ * Load state file for yes-bot (includes config and orders)
+ */
+function loadStateFile(stateFilePath) {
+    try {
+        const data = JSON.parse(readFileSync(stateFilePath, "utf8"));
+        return {
+            config: data.config || {},
+            orders: data.orders || {},
+        };
+    } catch (err) {
+        throw new Error(`Failed to load state file ${stateFilePath}: ${err.message}`);
+    }
+}
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);

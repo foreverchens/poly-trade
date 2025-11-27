@@ -1,4 +1,3 @@
-import { readFileSync } from "fs";
 import axios from "axios";
 import { getPolyClient } from "../../core/poly-client-manage.js";
 import logger from "../../core/Logger.js";
@@ -46,17 +45,6 @@ export function resolveSlugList(slugOrList, referenceDate = new Date()) {
     });
 
     return Array.isArray(slugOrList) ? results : results[0];
-}
-
-export function loadStateFile(stateFilePath) {
-    try {
-        const data = JSON.parse(readFileSync(stateFilePath, "utf8"));
-        return {
-            config: data.config || {},
-        };
-    } catch (err) {
-        throw new Error(`Failed to load state file ${stateFilePath}: ${err.message}`);
-    }
 }
 
 export async function fetchMarkets(slug, maxMinutesToEnd, shouldFilterTime = true) {

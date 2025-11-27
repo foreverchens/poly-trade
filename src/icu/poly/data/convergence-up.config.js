@@ -16,7 +16,7 @@ export default [
         schedule: {
             cronExpression: "0 30-35 * * * *",
             cronTimeZone: "America/New_York",
-            tickIntervalSeconds: 60,
+            tickIntervalSeconds: 30,
         },
 
         // 建仓配置

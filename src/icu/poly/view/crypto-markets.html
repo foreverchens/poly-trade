@@ -243,7 +243,7 @@
         { key: "yesBestBid", label: "YES最优买价" },
         { key: "noBestAsk", label: "NO最优卖价" },
         { key: "noBestBid", label: "NO最优买价" },
-        { key: "volumeNum", label: "24h 交易量" },
+        { key: "volume", label: "交易量" },
         { key: "liquidityNum", label: "流动性", compact: true },
     ];
     const compactNumberKeys = new Set(fields.filter(f => f.compact).map(f => f.key));
@@ -301,7 +301,7 @@
         "outcomePrices",
         "createdAt",
         "questionID",
-        "volumeNum",
+        "volume",
         "liquidityNum",
         "endDateIso",
         "startDateIso",
@@ -625,7 +625,7 @@
         if (key && PRICE_FIELD_KEYS.has(key)) {
             return formatPrice(displayValue);
         }
-        if (key === "volumeNum") {
+        if (key === "volume") {
             const num = typeof displayValue === "number" ? displayValue : Number(displayValue);
             if (Number.isFinite(num)) {
                 return (num / 1000).toFixed(1) + "K";

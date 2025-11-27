@@ -5,7 +5,7 @@ import { TailConvergenceStrategy as UpDownStrategy } from "./bots/tail-convergen
 // 使用方式: node tail-bot-start-up.js [taskIndex]
 // 例如: node tail-bot-start-up.js 0  (运行第1个任务)
 //      node tail-bot-start-up.js 1  (运行第2个任务)
-const taskIndex = parseInt(process.argv[2] || "0", 10);
+const taskIndex = parseInt(process.argv[2] || "1", 10);
 
 const upDownStrategy = new UpDownStrategy(taskIndex);
 

@@ -4,7 +4,7 @@ import cron from "node-cron";
 import { PolySide } from "../../core/PolyClient.js";
 import { getPolyClient } from "../../core/poly-client-manage.js";
 import { getZ } from "../../core/z-score.js";
-import { fetchBestAsk, threshold, get1HourAmp } from "./common.js";
+import { fetchBestPrice, threshold, get1HourAmp } from "./common.js";
 import { TakeProfitManager } from "./take-profit.js";
 import { UpBotCache } from "./up-bot-cache.js";
 import { saveOrder } from "../../db/repository.js";
@@ -364,12 +364,14 @@ class TailConvergenceStrategy {
 
         const [yesTokenId, noTokenId] = JSON.parse(market.clobTokenIds);
 
-        const [yesPrice, noPrice] = await Promise.all([
-            fetchBestAsk(this.client, yesTokenId),
-            fetchBestAsk(this.client, noTokenId),
+        const [yesPrices, noPrices] = await Promise.all([
+            fetchBestPrice(this.client, yesTokenId),
+            fetchBestPrice(this.client, noTokenId),
         ]);
-        const topPrice = Math.max(yesPrice, noPrice);
-        const topTokenId = yesPrice >= noPrice ? yesTokenId : noTokenId;
+        const [yesBid, yesAsk] = yesPrices;
+        const [noBid, noAsk] = noPrices;
+        const topPrice = Math.max(yesAsk, noAsk);
+        const topTokenId = yesAsk >= noAsk ? yesTokenId : noTokenId;
 
         /**
          *  在小时高波动场合、波动后概率往往已经接近95左右、后续会不断收敛到100%、
@@ -384,7 +386,7 @@ class TailConvergenceStrategy {
             && topPrice < this.triggerPriceGt
             && zVal < this.highVolatilityZThreshold) {
                 // 非高波动场合、价格未触发、继续等待
-                logger.info(`[${market.slug}] yesPrice=${yesPrice} noPrice=${noPrice} zVal=${zVal} pending... `);
+                logger.info(`[${market.slug}] yesAsk=${yesAsk} noAsk=${noAsk} zVal=${zVal} pending... `);
                 return null;
             }
             // zVal>=高波动阈值 或者 topPrice>=this.triggerPriceGt 发生其中一种、则认为高波动发生
@@ -406,7 +408,7 @@ class TailConvergenceStrategy {
         const priceThreshold = threshold(secondsToEnd);
         // 价格不能超出 triggerPriceGt (0.99) 和 priceThreshold 的范围
         if (topPrice > this.triggerPriceGt || topPrice < priceThreshold) {
-            logger.info(`[${market.slug}] topPrice:${topPrice} not in range [${priceThreshold}, ${this.triggerPriceGt}] , continue waiting`);
+            logger.info(`[${market.slug}] topPrice:${topPrice} not in range [${priceThreshold}, ${this.triggerPriceGt}]  continue waiting`);
             return null;
         }
 
@@ -472,20 +474,34 @@ class TailConvergenceStrategy {
             return null;
         }
 
+        // 如果top方向的askPrice - bidPrice > 0.02、则设置挂单价格为 top方向的askPrice+bidPrice/2、向上取整、保留2位小数
+        // 但如果剩余时间不足120秒（58分之后）、则不做maker单、直接用ask价格
+        const canUseMaker = secondsToEnd >= 120;
         const candidate =
-            yesPrice >= noPrice
+            yesAsk >= noAsk
                 ? {
                       tokenId: yesTokenId,
-                      price: yesPrice,
+                      price: canUseMaker && yesAsk - yesBid > 0.02
+                          ? Math.ceil((yesAsk + yesBid) / 2 * 100) / 100  // 价差较大且时间充裕、尝试做maker单
+                          : yesAsk,  // 价差较小或时间紧迫、直接taker单
                       outcome: "UP",
                   }
                 : {
                       tokenId: noTokenId,
-                      price: noPrice,
+                      price: canUseMaker && noAsk - noBid > 0.02
+                          ? Math.ceil((noAsk + noBid) / 2 * 100) / 100  // 价差较大且时间充裕、尝试做maker单
+                          : noAsk,  // 价差较小或时间紧迫、直接taker单
                       outcome: "DOWN",
                   };
+
+        // 判断是否使用了maker价格（价格与ask不同说明是maker单）
+        const isMaker = candidate.outcome === "UP"
+            ? candidate.price !== yesAsk
+            : candidate.price !== noAsk;
+        const orderType = isMaker ? "MAKER" : "TAKER";
+
         logger.info(
-            `[${market.slug}] 选择=${candidate.outcome.toUpperCase()}@${candidate.price} ${isLiquiditySignal ? "流动性信号触发" : "普通信号触发"}`,
+            `[${market.slug}] 选择=${candidate.outcome.toUpperCase()}@${candidate.price} [${orderType}] ${isLiquiditySignal ? "流动性信号触发" : "普通信号触发"}`,
         );
 
         // 返回交易信号
@@ -493,8 +509,8 @@ class TailConvergenceStrategy {
             eventSlug: this.test ? `${eventSlug}-test` : eventSlug,
             marketSlug: market.slug,
             chosen: candidate,
-            yesPrice,
-            noPrice,
+            yesAsk,
+            noAsk,
             liquiditySignal: isLiquiditySignal,
             zVal,
             secondsToEnd,
@@ -623,7 +639,7 @@ class TailConvergenceStrategy {
 
         // 首次建仓
         if (!this.initialEntryDone) {
-            this.openPosition({
+            await this.openPosition({
                 tokenId: signal.chosen.tokenId,
                 price: signal.chosen.price,
                 sizeUsd: this.positionSizeUsdc,
@@ -652,7 +668,8 @@ class TailConvergenceStrategy {
         logger.info(
             `[${marketSlug}]额外买入 --> ${signal.chosen.outcome.toUpperCase()}@${signal.chosen.price} ${sizeUsd}USDC`,
         );
-        this.openPosition({
+        // 必须等待额外买入完成、再进行下一轮tick
+        await this.openPosition({
             tokenId: signal.chosen.tokenId,
             price: signal.chosen.price,
             sizeUsd,

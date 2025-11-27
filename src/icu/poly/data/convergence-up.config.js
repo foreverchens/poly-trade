@@ -21,8 +21,8 @@ export default [
 
         // 建仓配置
         position: {
-            positionSizeUsdc: 50,
-            extraSizeUsdc: 250,
+            positionSizeUsdc: 10,
+            extraSizeUsdc: 100,
             allowExtraEntryAtCeiling: true,
         },
 
@@ -82,8 +82,8 @@ export default [
 
         // 建仓配置
         position: {
-            positionSizeUsdc: 50,
-            extraSizeUsdc: 250,
+            positionSizeUsdc: 20,
+            extraSizeUsdc: 200,
             allowExtraEntryAtCeiling: true,
         },
 

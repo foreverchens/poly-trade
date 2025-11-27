@@ -75,10 +75,11 @@ export async function fetchMarkets(slug, maxMinutesToEnd, shouldFilterTime = tru
     return markets;
 }
 
-export async function fetchBestAsk(client, tokenId) {
+export async function fetchBestPrice(client, tokenId) {
     const [bestBid, bestAsk] = await client.getBestPrice(tokenId);
-    return bestAsk;
+    return [bestBid, bestAsk];
 }
+
 
 /**
  * a + b * (t/600)^k

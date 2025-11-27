@@ -33,9 +33,9 @@ const SIGMA_TTL = 5 * 60 * 1000; // σ 缓存有效期 5 分钟
 const CONFIG = {
     limit: 240,         // 回溯 240 根 5m K 线
     dist: "normal",     // 分布假设
-    lambda: 0.95,       // EWMA 系数
+    lambda: 0.98,       // EWMA 系数 数值越小短期越敏感
     winsorLow: 0.0,
-    winsorHigh: 0.99,
+    winsorHigh: 0.995,  // 保留更多极端值
     sigmaMin: 0.003,    // 0.3%/h
     sigmaMax: 0.06,     // 6%/h
 };

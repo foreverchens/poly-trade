@@ -156,7 +156,7 @@ async function runBacktest(symbol = "ETH/USDT", days = 8) {
     //         console.log(r);
     //     }
     // });
-    console.table(sortedResults.slice(sortedResults.length - 10));
+    // console.table(sortedResults.slice(sortedResults.length - 10));
 
     zBuckets.forEach((bucket) => {
         const subset = sortedResults.filter((r) => {

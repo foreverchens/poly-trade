@@ -42,7 +42,13 @@ export default [
 
             // 统计风控
             statistics: {
-                zMin: 2,                              // 最小 Z-Score
+                /**
+                 * 最小偏离度阈值，用于判断未来波动率趋势、有隐含波动率更好
+                 * 预感未来波动率将不断下降、可适当降低zMin阈值
+                 * 预感未来波动率将不断上升、可适当提高zMin阈值
+                 * highVolatilityZThreshold同理
+                 */
+                zMin: 2,                              // 最小 Z-Score 阈值
                 ampMin: 0.001,                        // 最小振幅
                 highVolatilityZThreshold: 3,          // 高波动 Z-Score 阈值
             },

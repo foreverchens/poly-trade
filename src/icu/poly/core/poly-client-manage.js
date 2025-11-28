@@ -47,7 +47,7 @@ async function initializeAddress(privateKey) {
  * 获取当前 PolyClient 实例
  * @returns {PolyClient}
  */
-export function getPolyClient(mock = false) {
+export function getPolyClient() {
     if (!currentPolyClient) {
         const mnemonic = process.env.poly_mnemonic;
         if (!mnemonic) {
@@ -56,7 +56,7 @@ export function getPolyClient(mock = false) {
 
         const account = generateAccountFromMnemonic(mnemonic, currentIndex);
         console.log(`[PolyClient] 使用账户 #${currentIndex}: ${account.address}`);
-        currentPolyClient = new PolyClient(account.privateKey, mock);
+        currentPolyClient = new PolyClient(account.privateKey);
     }
 
     return currentPolyClient;
@@ -111,7 +111,27 @@ export async function rebuildPolyClient() {
     }
 
     // 3. 转移剩余 POL
+    // 以上自动化
     console.log("\n[步骤 3/4] 转移剩余 POL...");
+    // 4. 转移 USDC
+    console.log("\n[步骤 4/4] 转移 USDC...");
+    try {
+        const oldClientInstance = new PolyClient(oldPrivateKey);
+        const usdcBalance = await oldClientInstance.getUsdcEBalance();
+        const usdcBalanceNum = parseFloat(usdcBalance);
+
+        if (usdcBalanceNum > 0.1) {
+            // 预留 0.05 USDC
+            const amountToTransfer = (usdcBalanceNum - 0.05).toFixed(6);
+            await transferUSDC(oldPrivateKey, newAccount.address, amountToTransfer);
+            console.log(`  ✓ USDC 转移成功: ${amountToTransfer}`);
+        } else {
+            console.log(`  - USDC 余额太少，跳过`);
+        }
+    } catch (error) {
+        console.error(`[USDC 转移失败]: ${error.message}`);
+    }
+    // 5. 转移剩余 POL
     try {
         const provider = new ethers.providers.JsonRpcProvider(RPC_URL, CHAIN_ID);
         const polBalance = await provider.getBalance(oldAddress);
@@ -131,25 +151,6 @@ export async function rebuildPolyClient() {
         console.error(`[POL 转移失败]: ${error.message}`);
     }
 
-    // 4. 转移 USDC
-    console.log("\n[步骤 4/4] 转移 USDC...");
-    try {
-        const oldClientInstance = new PolyClient(oldPrivateKey);
-        const usdcBalance = await oldClientInstance.getUsdcEBalance();
-        const usdcBalanceNum = parseFloat(usdcBalance);
-
-        if (usdcBalanceNum > 0.1) {
-            // 预留 0.05 USDC
-            const amountToTransfer = (usdcBalanceNum - 0.05).toFixed(6);
-            await transferUSDC(oldPrivateKey, newAccount.address, amountToTransfer);
-            console.log(`  ✓ USDC 转移成功: ${amountToTransfer}`);
-        } else {
-            console.log(`  - USDC 余额太少，跳过`);
-        }
-    } catch (error) {
-        console.error(`[USDC 转移失败]: ${error.message}`);
-    }
-
     // 5. 创建新的 PolyClient 实例
     currentPolyClient = new PolyClient(newAccount.privateKey);
 
@@ -160,4 +161,10 @@ export async function rebuildPolyClient() {
 
     return currentPolyClient;
 }
+
+// 初始化PolyClient
+getPolyClient();
+
+// getPolyClient()
+// rebuildPolyClient();
 

@@ -69,7 +69,7 @@ export class PolyClient {
 
     async getClient() {
         if (!this.clientPromise) {
-            this.clientPromise = (async () => {
+            this.clientPromise = await (async () => {
                 const baseClient = new ClobClient(this.host, this.chainId, this.signer);
                 const creds = await baseClient.createOrDeriveApiKey();
                 return new ClobClient(
@@ -812,7 +812,6 @@ export class PolyClient {
         const provider = new JsonRpcProvider(DEFAULT_RPC_URL, this.chainId);
         const ctfContract = new ethers.Contract(CTF_ADDRESS, ERC1155_ABI, provider);
         const address = this.funderAddress || this.signer.address;
-
         try {
             const balance = await ctfContract.balanceOf(address, tokenId);
             // ERC1155 通常使用 18 位小数 (ethers v5)

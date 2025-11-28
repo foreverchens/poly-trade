@@ -2,7 +2,7 @@ import "dotenv/config";
 import dayjs from "dayjs";
 import cron from "node-cron";
 import { PolySide } from "../../core/PolyClient.js";
-import { getPolyClient } from "../../core/poly-client-manage.js";
+import { getPolyClient, rebuildPolyClient } from "../../core/poly-client-manage.js";
 import { getZ } from "../../core/z-score.js";
 import { fetchBestPrice, threshold, get1HourAmp } from "./common.js";
 import { TakeProfitManager } from "./take-profit.js";
@@ -26,7 +26,7 @@ class TailConvergenceStrategy {
         this.taskIndex = taskIndex;
         this.taskName = config.name || `Task_${taskIndex}`;
         this.test = config.test ?? true;
-        this.client = getPolyClient(this.test);
+        this.client = getPolyClient();
 
         logger.info(
             `[扫尾盘策略] 加载任务配置: 索引=${taskIndex}, 名称=${this.taskName}, 测试模式=${this.test ? "开启" : "关闭"}`,
@@ -40,11 +40,10 @@ class TailConvergenceStrategy {
             slug: this.slugTemplate,
             maxMinutesToEnd: this.maxMinutesToEnd,
             maxSizeUsdc: this.extraSizeUsdc + this.positionSizeUsdc,
-            client: this.client,
         });
 
         // 初始化止盈管理器
-        this.tpManager = new TakeProfitManager(this.client, {
+        this.tpManager = new TakeProfitManager({
             cronTimeZone: this.cronTimeZone,
             takeProfitPrice: this.takeProfitPrice,
         });
@@ -476,7 +475,9 @@ class TailConvergenceStrategy {
             }
             // 进入关键性买入阶段、加速 tick 频率
             this.tickIntervalMs = Math.max(1000, this.tickIntervalMs / 2);
-            logger.info(`[${this.symbol}-${this.currentLoopHour}时] 进入关键性买入阶段、加速 tick 当前频率:${this.tickIntervalMs}ms`);
+            logger.info(
+                `[${this.symbol}-${this.currentLoopHour}时] 进入关键性买入阶段、加速 tick 当前频率:${this.tickIntervalMs}ms`,
+            );
         }
 
         // 先检查价格是否在触发价格范围内
@@ -681,13 +682,26 @@ class TailConvergenceStrategy {
             });
         if (!entryOrder?.success) {
             logger.info(
-                `[${signal.marketSlug}-${signal.chosen.outcome.toUpperCase()}@${signal.chosen.price.toFixed(
-                    3,
-                )} ] 建仓被拒绝:`,
-                entryOrder.error,
+                `[${signal.marketSlug}-${signal.chosen.outcome.toUpperCase()}@${signal.chosen.price}] 建仓被拒绝:${entryOrder.error}`,
             );
-
-            return;
+            const errorMsg =
+                typeof entryOrder.error === "string"
+                    ? entryOrder.error
+                    : entryOrder.error?.message || "";
+            if (errorMsg.includes("address in closed only mode")) {
+                logger.error(
+                    `[${signal.marketSlug}-${signal.chosen.outcome.toUpperCase()}@${signal.chosen.price.toFixed(
+                        3,
+                    )} ] 建仓被拒绝: address in closed only mode`,
+                );
+                // 重建PolyClient实例
+                await rebuildPolyClient();
+                // 重建后的PolyClient实例
+                this.client = getPolyClient();
+                // 重建后重新建仓
+                await this.openPosition({ tokenId, price, sizeUsd, signal, isExtra });
+                return;
+            }
         }
         const orderId = entryOrder.orderID;
         logger.info(`[${signal.marketSlug}] ✅ 建仓成功,订单号=${orderId}`);

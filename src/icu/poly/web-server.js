@@ -33,7 +33,6 @@ const viewDir = path.join(__dirname, "view");
 
 const app = express();
 app.use(express.json());
-const polyClient = getPolyClient();
 const SUPPORTED_TAGS = new Set([21, 235, 39]);
 const DEFAULT_TAG_ID = 235;
 const CLIENT_ERROR_PATTERNS = [/market is required/i, /Invalid interval/i];
@@ -49,7 +48,7 @@ app.get("/api/crypto-markets", async (req, res) => {
     try {
         const requestedTag = Number.parseInt(req.query.tag, 10);
         const tagId = SUPPORTED_TAGS.has(requestedTag) ? requestedTag : DEFAULT_TAG_ID;
-        const markets = await polyClient.listCryptoMarketSortedByEndDate(tagId);
+        const markets = await getPolyClient().listCryptoMarketSortedByEndDate(tagId);
         res.json(markets);
     } catch (err) {
         console.error("Failed to fetch crypto markets:", err.message);
@@ -64,7 +63,7 @@ app.get("/api/crypto-markets", async (req, res) => {
 app.get("/api/price-history", async (req, res) => {
     try {
         const {market, interval} = req.query;
-        const payload = await polyClient.getPricesHistory(market, interval);
+        const payload = await getPolyClient().getPricesHistory(market, interval);
         res.json(payload);
     } catch (err) {
         console.error("Failed to fetch price history:", err.message);
@@ -95,7 +94,7 @@ app.get("/api/btc-history", async (req, res) => {
 app.get("/api/orderbook/:tokenId", async (req, res) => {
     try {
         const {tokenId} = req.params;
-        const orderBook = await polyClient.getOrderBook(tokenId);
+        const orderBook = await getPolyClient().getOrderBook(tokenId);
         res.json(orderBook);
     } catch (err) {
         console.error("Failed to fetch order book:", err.message);
@@ -118,7 +117,7 @@ app.get("/api/trades", async (req, res) => {
             return res.status(400).json({error: "invalid_address", message: "address must be a valid EVM address"});
         }
 
-        const trades = await polyClient.listMyTrades({makerAddress: normalized});
+        const trades = await getPolyClient().listMyTrades({makerAddress: normalized});
         res.json(trades);
     } catch (err) {
         console.error("Failed to fetch trades:", err.message);
@@ -132,7 +131,7 @@ app.get("/api/trades", async (req, res) => {
 app.get("/api/open-orders", async (req, res) => {
     try {
         const {market, assetId} = req.query;
-        const orders = await polyClient.listOpenOrders({
+        const orders = await getPolyClient().listOpenOrders({
             market: market || undefined,
             assetId: assetId || undefined,
         });
@@ -181,7 +180,7 @@ function parseTradeTimestamp(value) {
 app.get("/api/best-prices/:tokenId", async (req, res) => {
     try {
         const {tokenId} = req.params;
-        const orderBook = await polyClient.getOrderBook(tokenId);
+        const orderBook = await getPolyClient().getOrderBook(tokenId);
 
         // 提取最优买价和最优卖价
         // 注意：bids数组按价格从低到高排序，最优买价（最高价）在数组末尾
@@ -216,7 +215,7 @@ app.post("/api/place-order", async (req, res) => {
                 message: "price, size, side, and tokenId are required",
             });
         }
-        const result = await polyClient.placeOrder(price, size, side, tokenId);
+        const result = await getPolyClient().placeOrder(price, size, side, tokenId);
         res.json(result);
     } catch (err) {
         console.error("Failed to place order:", err.message);
@@ -236,13 +235,26 @@ app.post("/api/cancel-order", async (req, res) => {
                 message: "orderId is required",
             });
         }
-        const result = await polyClient.cancelOrder(orderId);
+        const result = await getPolyClient().cancelOrder(orderId);
         res.json(result);
     } catch (err) {
         console.error("Failed to cancel order:", err.message);
         res.status(err.response?.status || 500).json({
             error: "failed_to_cancel_order",
             message: err.response?.data || err.message,
+        });
+    }
+});
+
+app.get("/api/current-address", async (req, res) => {
+    try {
+        const address = getPolyClient().signer.address;
+        res.json({address});
+    } catch (err) {
+        console.error("Failed to get current address:", err.message);
+        res.status(500).json({
+            error: "failed_to_get_address",
+            message: err.message,
         });
     }
 });
@@ -357,7 +369,7 @@ function dedupeCandles(points) {
 async function enrichOrdersWithMarketMeta(orders) {
     for (let order of orders) {
         let conditionId = order.market;
-        order.market = (await polyClient.getMarketByConditionId(conditionId))[0].slug;
+        order.market = (await getPolyClient().getMarketByConditionId(conditionId))[0].slug;
     }
     return orders;
 }

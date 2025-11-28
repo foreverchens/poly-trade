@@ -1,13 +1,13 @@
 import dayjs from "dayjs";
 import { resolveSlugList, fetchMarkets, getAsksLiq, resolvePositionSize } from "./common.js";
 import logger from "../../core/Logger.js";
+import { getPolyClient } from "../../core/poly-client-manage.js";
 
 export class UpBotCache {
     constructor(config) {
         this.slugTemplate = config.slug;
         this.maxMinutesToEnd = config.maxMinutesToEnd;
         this.maxSizeUsdc = config.maxSizeUsdc;
-        this.client = config.client;
 
         // 运行时数据存储
         this.store = {
@@ -83,7 +83,7 @@ export class UpBotCache {
         }
 
         try {
-            let val = await resolvePositionSize(this.client);
+            let val = await resolvePositionSize(getPolyClient());
             if (val < 1) {
                 logger.error(`[UpBotCache] 余额为0，可能是API异常或钱包确实无余额`);
                 return 0;
@@ -123,7 +123,7 @@ export class UpBotCache {
      * 获取卖方流动性 历史3个样本求平均值
      */
     async getAsksLiq(tokenId) {
-        const newVal = await getAsksLiq(this.client, tokenId);
+        const newVal = await getAsksLiq(getPolyClient(), tokenId);
         let queue = this.store.liquidity.get(tokenId) ?? [];
         queue.push(newVal);
         if (queue.length > 3) {

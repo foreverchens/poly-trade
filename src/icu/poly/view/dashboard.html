@@ -460,7 +460,7 @@
 
         <div class="bar">
             <input id="addr" spellcheck="false" placeholder="输入地址（0x...）"
-                value="0x6212BbEe8f3089896920c2B08d742e5eF3CfA3e9" />
+                value="" />
             <button id="refresh">刷新</button>
             <span id="status" class="muted"></span>
         </div>
@@ -687,6 +687,16 @@
                 throw new Error(text || `HTTP ${res.status}`);
             }
             return res.json();
+        }
+
+        async function fetchCurrentAddress() {
+            const res = await fetch('/api/current-address');
+            if (!res.ok) {
+                const text = await res.text();
+                throw new Error(text || `HTTP ${res.status}`);
+            }
+            const data = await res.json();
+            return data.address;
         }
 
         async function renderPositions(rows) {
@@ -1356,7 +1366,19 @@
             tradeRefreshBtn.addEventListener('click', () => refreshTradesSection($('addr').value.trim()));
         }
         window.handleCloseOrder = handleCloseOrder;
-        load();
+
+        // 初始化：加载当前地址
+        (async () => {
+            try {
+                const address = await fetchCurrentAddress();
+                if (address) {
+                    $('addr').value = address;
+                }
+            } catch (err) {
+                console.error('Failed to fetch current address:', err);
+            }
+            load();
+        })();
     </script>
 </body>
 

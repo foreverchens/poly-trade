@@ -21,12 +21,12 @@
  *
  */
 
-
 import { PolyClient } from "./PolyClient.js";
 import { generateAccountFromMnemonic } from "./gen-key.js";
 import { transferPOL, transferUSDC } from "./ether-client.js";
 import { ethers } from "ethers";
 import addrInitV5 from "./addr-init-v5.js";
+import AsyncLock from "async-lock";
 
 // ========== 配置 ==========
 const RPC_URL = process.env.RPC_URL || "https://polygon-rpc.com";
@@ -36,6 +36,7 @@ const CHAIN_ID = 137;
 let currentPolyClient = null;
 let currentIndex = parseInt(process.env.poly_mnemonic_idx || "0", 10);
 
+const lock = new AsyncLock();
 /**
  * 初始化新地址的授权（使用 addr-init-v5.js）
  */
@@ -48,26 +49,24 @@ async function initializeAddress(privateKey) {
  * @returns {PolyClient}
  */
 export function getPolyClient() {
-    if (!currentPolyClient) {
-        const mnemonic = process.env.poly_mnemonic;
-        if (!mnemonic) {
-            throw new Error("poly_mnemonic not found in environment variables");
-        }
-
-        const account = generateAccountFromMnemonic(mnemonic, currentIndex);
-        console.log(`[PolyClient] 使用账户 #${currentIndex}: ${account.address}`);
-        currentPolyClient = new PolyClient(account.privateKey);
+    if (currentPolyClient) {
+        return currentPolyClient;
     }
-
+    const mnemonic = process.env.poly_mnemonic;
+    if (!mnemonic) {
+        throw new Error("poly_mnemonic not found in environment variables");
+    }
+    const account = generateAccountFromMnemonic(mnemonic, currentIndex);
+    console.log(`[PolyClient] 使用账户 #${currentIndex}: ${account.address}`);
+    currentPolyClient = new PolyClient(account.privateKey);
     return currentPolyClient;
 }
-
 /**
  * todo 并发问题、需要加锁
  * 重建 PolyClient 实例（切换到下一个账号）
  * @returns {Promise<PolyClient>}
  */
-export async function rebuildPolyClient() {
+async function rebuildPolyClient() {
     const mnemonic = process.env.poly_mnemonic;
     if (!mnemonic) {
         throw new Error("poly_mnemonic not found in environment variables");
@@ -91,7 +90,6 @@ export async function rebuildPolyClient() {
         console.log("\n[警告] 旧钱包不存在，无法进行账号切换");
         throw new Error("旧钱包不存在，终止切换");
     }
-
     // 1. 从旧钱包划转 1 POL 到新地址（用于初始化 gas 费）
     console.log("\n[步骤 1/4] 划转 1 POL 到新地址...");
     try {
@@ -101,7 +99,6 @@ export async function rebuildPolyClient() {
         console.error(`[POL 划转失败]: ${error.message}`);
         throw new Error("无法划转 POL 到新地址，终止切换");
     }
-
     // 2. 初始化新地址授权
     console.log("\n[步骤 2/4] 初始化新地址授权...");
     try {
@@ -110,20 +107,15 @@ export async function rebuildPolyClient() {
         console.error(`[授权失败]: ${error.message}`);
         throw new Error("新地址初始化失败，终止切换");
     }
-
-    // 3. 转移剩余 POL
-    // 以上自动化
-    console.log("\n[步骤 3/4] 转移剩余 POL...");
-    // 4. 转移 USDC
-    console.log("\n[步骤 4/4] 转移 USDC...");
+    // 3. 转移 USDC
+    console.log("\n[步骤 3/4] 转移 USDC...");
     try {
         const oldClientInstance = new PolyClient(oldPrivateKey);
         const usdcBalance = await oldClientInstance.getUsdcEBalance();
         const usdcBalanceNum = parseFloat(usdcBalance);
 
         if (usdcBalanceNum > 0.1) {
-            // 预留 0.05 USDC
-            const amountToTransfer = (usdcBalanceNum - 0.05).toFixed(6);
+            const amountToTransfer = usdcBalanceNum.toFixed(6);
             await transferUSDC(oldPrivateKey, newAccount.address, amountToTransfer);
             console.log(`  ✓ USDC 转移成功: ${amountToTransfer}`);
         } else {
@@ -132,7 +124,7 @@ export async function rebuildPolyClient() {
     } catch (error) {
         console.error(`[USDC 转移失败]: ${error.message}`);
     }
-    // 5. 转移剩余 POL
+    console.log("\n[步骤 4/4] 转移剩余 POL...");
     try {
         const provider = new ethers.providers.JsonRpcProvider(RPC_URL, CHAIN_ID);
         const polBalance = await provider.getBalance(oldAddress);
@@ -140,9 +132,7 @@ export async function rebuildPolyClient() {
 
         if (parseFloat(polBalanceFormatted) > 0.01) {
             // 预留 0.005 POL 用于可能的其他操作
-            const amountToTransfer = (
-                parseFloat(polBalanceFormatted) - 0.005
-            ).toFixed(6);
+            const amountToTransfer = (parseFloat(polBalanceFormatted) - 0.005).toFixed(6);
             await transferPOL(oldPrivateKey, newAccount.address, amountToTransfer);
             console.log(`  ✓ POL 转移成功: ${amountToTransfer}`);
         } else {
@@ -151,21 +141,45 @@ export async function rebuildPolyClient() {
     } catch (error) {
         console.error(`[POL 转移失败]: ${error.message}`);
     }
-
     // 5. 创建新的 PolyClient 实例
     currentPolyClient = new PolyClient(newAccount.privateKey);
-
     console.log("\n========== 切换完成 ==========\n");
-
     // 更新内存中的环境变量
     process.env.poly_mnemonic_idx = currentIndex.toString();
-
     return currentPolyClient;
 }
 
+/**
+ * 并发安全的重建PolyClient实例
+ * 当多个线程 同时调用rebuildPolyClientSync时
+ * 需要保障只有一个线程真正执行重建操作、其他线程同步等待、最终所有线程都能拿到重建后的PolyClient实例、
+ * 如果重建失败、直接结束进程
+ */
+export async function rebuildPolyClientSync() {
+    // 记录触发重建时的地址，用于判断是否已被其他调用重建过
+    const failedAddress = currentPolyClient?.funderAddress;
+
+    return await lock.acquire("rebuild", async () => {
+        try {
+            // 如果地址已经改变，说明已经被其他并发调用重建过了，直接返回新实例
+            if (currentPolyClient?.funderAddress !== failedAddress) {
+                console.log("[并发重建] 账号已被其他调用重建，直接返回新实例");
+                return currentPolyClient;
+            }
+
+            // 执行真正的重建操作
+            console.log("[并发重建] 开始执行账号重建...");
+            const result = await rebuildPolyClient();
+            console.log("[并发重建] 账号重建完成");
+            return result;
+        } catch (error) {
+            console.error("[致命错误] PolyClient 重建失败:", error.message);
+            console.error(error.stack);
+            process.exit(1);
+        }
+    });
+}
 // 初始化PolyClient
 getPolyClient();
 
-// getPolyClient()
-// rebuildPolyClient();
-
+// rebuildPolyClientSync();

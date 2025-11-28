@@ -2,7 +2,7 @@ import "dotenv/config";
 import dayjs from "dayjs";
 import cron from "node-cron";
 import { PolySide } from "../../core/PolyClient.js";
-import { getPolyClient, rebuildPolyClient } from "../../core/poly-client-manage.js";
+import { getPolyClient, rebuildPolyClientSync } from "../../core/poly-client-manage.js";
 import { getZ } from "../../core/z-score.js";
 import { fetchBestPrice, threshold, get1HourAmp } from "./common.js";
 import { TakeProfitManager } from "./take-profit.js";
@@ -30,7 +30,6 @@ class TailConvergenceStrategy {
         this.taskIndex = taskIndex;
         this.taskName = config.name || `Task_${taskIndex}`;
         this.test = config.test ?? true;
-        this.client = getPolyClient();
 
         logger.info(
             `[扫尾盘策略] 加载任务配置: 索引=${taskIndex}, 名称=${this.taskName}, 测试模式=${this.test ? "开启" : "关闭"}`,
@@ -349,8 +348,8 @@ class TailConvergenceStrategy {
         const [yesTokenId, noTokenId] = JSON.parse(market.clobTokenIds);
 
         const [yesPrices, noPrices] = await Promise.all([
-            fetchBestPrice(this.client, yesTokenId),
-            fetchBestPrice(this.client, noTokenId),
+            fetchBestPrice(yesTokenId),
+            fetchBestPrice(noTokenId),
         ]);
         const [yesBid, yesAsk] = yesPrices;
         const [noBid, noAsk] = noPrices;
@@ -489,7 +488,7 @@ class TailConvergenceStrategy {
         const orderType = isMaker ? "MAKER" : "TAKER";
 
         logger.info(
-            `[${this.symbol}-${this.currentLoopHour}时] 选择=${candidate.outcome.toUpperCase()}@${candidate.price} [${orderType}] ${isLiquiditySignal ? "流动性信号触发" : "普通信号触发"}`,
+            `[${this.symbol}-${this.currentLoopHour}时] 选择=${candidate.outcome.toUpperCase()}@${candidate.price} [${orderType}] ${isLiquiditySignal ? "流动性信号触发" : "常规信号触发"}`,
         );
 
         // 返回交易信号
@@ -626,7 +625,7 @@ class TailConvergenceStrategy {
                 sizeUsd->${sizeUsd}
                 tokenId->${tokenId}`,
         );
-        const entryOrder = await this.client
+        const entryOrder = await getPolyClient()
             .placeOrder(price, sizeShares, PolySide.BUY, tokenId)
             .catch((err) => {
                 logger.error(
@@ -648,12 +647,7 @@ class TailConvergenceStrategy {
                     `[${this.symbol}-${this.currentLoopHour}时] 建仓被拒绝: address in closed only mode`,
                 );
                 // 重建PolyClient实例
-                this.client = await rebuildPolyClient();
-                if (!this.client) {
-                    logger.error(
-                        `[${this.symbol}-${this.currentLoopHour}时] 重建PolyClient实例失败`,
-                    );
-                }
+                await rebuildPolyClientSync();
                 // 重建后重新建仓
                 await this.openPosition({ tokenId, price, sizeUsd, signal, isExtra });
                 return;

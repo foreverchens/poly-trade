@@ -7,7 +7,6 @@ import { getPolyClient } from "../../core/poly-client-manage.js";
 
 export class TakeProfitManager {
     constructor(config) {
-        this.client = getPolyClient();  // 使用全局PolyClient实例
         this.cronTimeZone = config.cronTimeZone;
         this.takeProfitPrice = config.takeProfitPrice;
 

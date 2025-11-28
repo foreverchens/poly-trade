@@ -83,7 +83,7 @@ export class UpBotCache {
         }
 
         try {
-            let val = await resolvePositionSize(getPolyClient());
+            let val = await resolvePositionSize();
             if (val < 1) {
                 logger.error(`[UpBotCache] 余额为0，可能是API异常或钱包确实无余额`);
                 return 0;
@@ -123,7 +123,7 @@ export class UpBotCache {
      * 获取卖方流动性 历史3个样本求平均值
      */
     async getAsksLiq(tokenId) {
-        const newVal = await getAsksLiq(getPolyClient(), tokenId);
+        const newVal = await getAsksLiq(tokenId);
         let queue = this.store.liquidity.get(tokenId) ?? [];
         queue.push(newVal);
         if (queue.length > 3) {

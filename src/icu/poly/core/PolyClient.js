@@ -63,26 +63,32 @@ export class PolyClient {
         // 使用 ethers v5 的 Wallet 给 ClobClient（@polymarket/clob-client 需要 v5 API）
         this.signer = new EthersV5Wallet(this.privateKey);
         this.funderAddress = this.signer.address;
-        this.clientPromise = null;
+        this.client = null;
         this.mock = mock;
+
+        // 初始化 client
+        this.getClient().catch((err) => {
+            console.error("[PolyClient] 初始化失败", err);
+            process.exit(1);
+        });
     }
 
+
     async getClient() {
-        if (!this.clientPromise) {
-            this.clientPromise = await (async () => {
-                const baseClient = new ClobClient(this.host, this.chainId, this.signer);
-                const creds = await baseClient.createOrDeriveApiKey();
-                return new ClobClient(
-                    this.host,
-                    this.chainId,
-                    this.signer,
-                    creds,
-                    this.signatureType,
-                    this.funderAddress,
-                );
-            })();
+        if (this.client) {
+            return this.client;
         }
-        return this.clientPromise;
+        const baseClient = new ClobClient(this.host, this.chainId, this.signer);
+        const creds = await baseClient.createOrDeriveApiKey();
+        this.client = new ClobClient(
+            this.host,
+            this.chainId,
+            this.signer,
+            creds,
+            this.signatureType,
+            this.funderAddress,
+        );
+        return this.client;
     }
 
     /*================市场API===================*/

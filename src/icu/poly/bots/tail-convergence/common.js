@@ -3,7 +3,6 @@ import { getPolyClient } from "../../core/poly-client-manage.js";
 import logger from "../../core/Logger.js";
 
 const EASTERN_TZ = "America/New_York";
-const polyClient = getPolyClient();
 
 export const TAKE_PROFIT_ORDER_STATUS = {
     PENDING: "待提交",
@@ -48,7 +47,7 @@ export function resolveSlugList(slugOrList, referenceDate = new Date()) {
 }
 
 export async function fetchMarkets(slug, maxMinutesToEnd, shouldFilterTime = true) {
-    const event = await polyClient.getEventBySlug(slug);
+    const event = await getPolyClient().getEventBySlug(slug);
     if (!event) {
         logger.info(`[${slug}] 事件获取失败`);
         return [];
@@ -75,8 +74,8 @@ export async function fetchMarkets(slug, maxMinutesToEnd, shouldFilterTime = tru
     return markets;
 }
 
-export async function fetchBestPrice(client, tokenId) {
-    const [bestBid, bestAsk] = await client.getBestPrice(tokenId);
+export async function fetchBestPrice(tokenId) {
+    const [bestBid, bestAsk] = await getPolyClient().getBestPrice(tokenId);
     return [bestBid, bestAsk];
 }
 
@@ -134,9 +133,9 @@ export async function get1HourAmp(symbol) {
 /**
  * 获取卖方流动性总量
  */
-export async function getAsksLiq(client, tokenId) {
+export async function getAsksLiq(tokenId) {
     try {
-        const orderBook = await client.getOrderBook(tokenId);
+        const orderBook = await getPolyClient().getOrderBook(tokenId);
         if (!orderBook?.asks?.length) {
             return 0;
         }
@@ -155,9 +154,9 @@ export async function getAsksLiq(client, tokenId) {
     }
 }
 
-export async function resolvePositionSize(client) {
+export async function resolvePositionSize() {
     try {
-        const balanceRaw = await client.getUsdcEBalance();
+        const balanceRaw = await getPolyClient().getUsdcEBalance();
         const balance = Math.floor(Number(balanceRaw));
         if (Number.isFinite(balance) && balance > 0) {
             return balance;

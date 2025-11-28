@@ -11,6 +11,10 @@ import { saveOrder } from "../../db/repository.js";
 import logger from "../../core/Logger.js";
 import taskConfigs from "../../data/convergence-up.config.js";
 
+// 基于流动性计算下次tick 时间间隔
+const delay = (liq, t=100) => {const m=liq/t;return m<=2?1000:m>=10?10000:1000+9000*Math.log(1+4*((m-2)/8))/Math.log(5)};
+
+
 class TailConvergenceStrategy {
     constructor(taskIndex = 0) {
         // 从导入的配置中获取指定任务
@@ -177,9 +181,6 @@ class TailConvergenceStrategy {
         this.loopState = 0;
         // 预防插针、检查持续性
         this.highCnt = 0;
-
-        // 是否正在观察行情
-        this.watching = false;
     }
 
     /**
@@ -276,8 +277,6 @@ class TailConvergenceStrategy {
         this.loopState = 0;
         // 重置预防插针、检查持续性
         this.highCnt = 0;
-        // 是否正在观察行情
-        this.watching = false;
         logger.info(`[扫尾盘策略] 小时循环已结束\n`);
     }
 
@@ -292,19 +291,13 @@ class TailConvergenceStrategy {
             this.stopHourlyLoop();
             return;
         }
-        if (
-            this.initialEntryDone &&
-            (this.extraEntryDone || !this.allowExtraEntryAtCeiling) &&
-            !this.watching
-        ) {
+        if (this.initialEntryDone && (this.extraEntryDone || !this.allowExtraEntryAtCeiling)) {
             // 初始建仓 且 额外买入、则提前结束小时循环
             logger.info(
                 `[扫尾盘策略] 所有预期建仓均已完成(额外买入=${this.allowExtraEntryAtCeiling}), 提前结束小时循环`,
             );
-            // 任务完成 重置tick间隔支持输出日志观察行情、等待自动结束循环
-            this.watching = true;
-            // 重置 tick 间隔为初始配置值
-            this.tickIntervalMs = this.tickIntervalSeconds * 1000;
+            this.stopHourlyLoop();
+            return;
         }
         try {
             await this.tick();
@@ -322,21 +315,7 @@ class TailConvergenceStrategy {
     async tick() {
         this.targetSlug = this.cache.getTargetSlug();
         const signal = await this.processSlug(this.targetSlug);
-        if (this.watching) {
-            // 如果正在观察行情、则重置tick间隔
-            this.tickIntervalMs = this.tickIntervalSeconds * 1000;
-            // 如果信号存在、则输出日志
-            if (signal) {
-                logger.info(
-                    `[${signal.marketSlug}] watching mode, skip signal handling
-                         | Outcome: ${signal.chosen.outcome.toUpperCase()}@${signal.chosen.price}
-                         | yesAsk: ${signal.yesAsk}, noAsk: ${signal.noAsk}
-                         | liquiditySignal: ${signal.liquiditySignal}
-                         | zVal: ${signal.zVal}, secondsToEnd: ${signal.secondsToEnd}, amp: ${signal.amp}`,
-                );
-            }
-            return;
-        }
+
         // 如果信号存在、则处理信号
         if (signal) {
             await this.handleSignal(signal);
@@ -379,40 +358,45 @@ class TailConvergenceStrategy {
         const topTokenId = yesAsk >= noAsk ? yesTokenId : noTokenId;
 
         /**
-         *  在小时高波动场合、波动后概率往往已经接近95左右、后续会不断收敛到100%、
-         *  在收敛过程中、如果趋势不变、流动性会更早的进入枯竭状态、此时可能都没有抵达50分钟
-         *  所以、如果在30分到50分之间、发生流动性匮乏、则可以提前进入监控状态
-         *  主任务新增30到50分的触发逻辑、修改为 30分开始触发、每5分钟一次、
-         *  如果中途发生流动性匮乏、则提前进入监控模式、提高tick频率
+         *  正常情况下、时间超过50分钟、会进入监控模式、提高tick频率
+         *  在以下场合时、则提前进入监控模式、提高tick频率
+         *  1. 高波动发生、价格不低于最高触发价格、或者zVal不低于高波动阈值、并且插针保护计数器已经超过阈值
          */
         if (this.loopState === 0) {
+            // 时间是否低于监控模式分钟阈值
+            const isBeforeMonitorThreshold = dayjs().minute() < this.monitorModeMinuteThreshold;
+            // 价格是否低于最高触发价格
+            const isPriceNotTriggered = topPrice < this.triggerPriceGt;
+            // zVal是否低于高波动阈值
+            const isZValBelowHighVolatility = zVal < this.highVolatilityZThreshold;
+            // 高波动发生
+            const isHighVolatilityOccurred = !isZValBelowHighVolatility || !isPriceNotTriggered;
+            // 插针保护计数器是否小于阈值
+            const isSpikeProtectionActive = this.highCnt < this.spikeProtectionCount;
+
             // 指定分钟之前、价格未触发、zVal小于高波动阈值、继续等待
-            if (
-                dayjs().minute() < this.monitorModeMinuteThreshold &&
-                topPrice < this.triggerPriceGt &&
-                zVal < this.highVolatilityZThreshold
-            ) {
+            if (isBeforeMonitorThreshold && isPriceNotTriggered && isZValBelowHighVolatility) {
                 // 非高波动场合、价格未触发、继续等待
                 logger.info(
                     `[${this.symbol}-${this.currentLoopHour}时] yesAsk=${yesAsk} noAsk=${noAsk} zVal=${zVal} pending... `,
                 );
                 return null;
             }
-            // zVal>=高波动阈值 或者 topPrice>=this.triggerPriceGt 发生其中一种、则认为高波动发生
-            if (
-                (zVal >= this.highVolatilityZThreshold || topPrice >= this.triggerPriceGt) &&
-                this.highCnt < this.spikeProtectionCount
-            ) {
+            // 高波动发生且插针保护计数器小于阈值、则防止插针误触发、检查持续性
+            if (isHighVolatilityOccurred && isSpikeProtectionActive) {
                 // 防止插针误触发、检查持续性
+                this.highCnt += 1;
                 logger.info(
                     `[${this.symbol}-${this.currentLoopHour}时] 预防插针、检查持续性、计数器=${this.highCnt}`,
                 );
-                this.highCnt += 1;
                 return null;
             }
-            // 超过指定分钟、或者高波动发生、价格触发、转换为监控模式、提高tick频率
+            // 超过指定分钟、或者高波动发生、且持续超过插针保护计数器阈值、价格触发、转换为监控模式、提高tick频率
+            const transitionReason = !isBeforeMonitorThreshold
+                ? `时间超过${this.monitorModeMinuteThreshold}分`
+                : "高波动发生";
             logger.info(
-                `[${this.symbol}-${this.currentLoopHour}时] 状态转换: 待机模式 -> 监控模式 (tick间隔: ${this.tickIntervalMs}ms -> 10000ms, 原因: ${dayjs().minute() >= this.monitorModeMinuteThreshold ? `时间超过${this.monitorModeMinuteThreshold}分` : "高波动发生"})`,
+                `[${this.symbol}-${this.currentLoopHour}时] 状态转换: 待机模式 -> 监控模式 (tick间隔: ${this.tickIntervalMs}ms -> 10000ms, 原因: ${transitionReason})`,
             );
             this.loopState = 1;
             this.tickIntervalMs = 1000 * 10;
@@ -420,64 +404,41 @@ class TailConvergenceStrategy {
 
         /**
          * 逻辑分支优化：
-         * 分支A (常规): 时间早 且 流动性充沛 -> 严格校验 Z-Score
-         * 分支B (尾部): 时间晚 或 流动性下降 -> 加速扫描，检查 枯竭信号 或 捡漏
+         * 分支A (常规): 非尾部行情、且流动性充足、校验Z-Score、满足即为常规信号
+         * 分支B (尾部): 尾部行情、流动性下降 -> 加速扫描、校验流动性是否充足、不足则触发流动性信号
          */
-        // 剩余时间小于300秒、进入尾部阶段
-        const isLateStage = secondsToEnd < 300;
         // 使用默认阈值 (通常是1000) 检查基础流动性 检查卖方流动性是否充足
         const asksLiq = await this.cache.getAsksLiq(topTokenId);
         if (asksLiq < 1) {
             logger.error(`[${this.symbol}-${this.currentLoopHour}时] 卖方流动性为0,结束信号`);
             return null;
         }
-        const isLiquiditySufficient = asksLiq >= this.liquiditySufficientThreshold;
+        // 基于卖方流动性更新下次tick 时间间隔
+        this.tickIntervalMs = delay(asksLiq, this.liquiditySufficientThreshold);
 
+        // 检查卖方流动性是否充足
+        const isLiquiditySufficient = asksLiq >= this.liquiditySufficientThreshold;
         // 流动性信号标记
         let isLiquiditySignal = false;
-        if (!isLateStage && isLiquiditySufficient) {
-            // === 常规阶段：时间早且流动性好 ===
-            // 严格遵守 Z-Score
+        if (isLiquiditySufficient) {
+            // 流动性充足、校验Z-Score是否达标
             if (zVal < this.zMin) {
                 logger.info(
-                    `[${this.symbol}-${this.currentLoopHour}时] 普通信号、Z-Score:${zVal} < ${this.zMin}, 继续等待`,
+                    `[${this.symbol}-${this.currentLoopHour}时] 常规信号、Z-Score:${zVal} < ${this.zMin}, 继续等待`,
                 );
                 return null;
             }
-            // Z-Score好 -> 继续执行 (isLiquiditySignal 保持 false，走正常风控)
+            // Z-Score达标、继续执行 (isLiquiditySignal 保持 false，走正常风控)
             logger.info(
-                `[${this.symbol}-${this.currentLoopHour}时] 普通信号、Z-Score:${zVal} >= ${this.zMin}, 继续执行`,
+                `[${this.symbol}-${this.currentLoopHour}时] 常规信号、Z-Score:${zVal} >= ${this.zMin}, 继续执行`,
             );
         } else {
-            // === 尾部/关键性买入阶段 ===
-            if (isLiquiditySufficient) {
-                // === 场景：晚期但流动性依然充足 ===
-                // 只要 Z-Score 达标就买
-                if (zVal < this.zMin) {
-                    // 流动性好但统计信号不好 -> 放弃
-                    logger.info(
-                        `[${this.symbol}-${this.currentLoopHour}时] 普通信号、Z-Score:${zVal} < ${this.zMin}, 继续等待`,
-                    );
-                    return null;
-                }
-                // 流动性好且Z-Score好 -> 继续执行 (isLiquiditySignal 保持 false，走正常风控)
-                logger.info(
-                    `[${this.symbol}-${this.currentLoopHour}时] 普通信号、Z-Score:${zVal} >= ${this.zMin}, 继续执行`,
-                );
-            } else {
-                // === 场景：流动性枯竭 (无论早晚) ===
-                // 触发尾端流动性追踪信号
-                logger.info(
-                    `[${this.symbol}-${this.currentLoopHour}时] 流动性信号触发、Z-Score:${zVal}, 卖方流动性:${asksLiq}, 剩余时间:${secondsToEnd}s 继续执行`,
-                );
-                // 触发尾端流动性追踪信号、设置流动性信号标记
-                isLiquiditySignal = true;
-            }
-            // 进入关键性买入阶段、加速 tick 频率
-            this.tickIntervalMs = Math.max(1000, this.tickIntervalMs / 2);
+            // 流动性不足、触发流动性信号
             logger.info(
-                `[${this.symbol}-${this.currentLoopHour}时] 进入关键性买入阶段、加速 tick 当前频率:${this.tickIntervalMs}ms`,
+                `[${this.symbol}-${this.currentLoopHour}时] 流动性信号触发、Z-Score:${zVal}, 卖方流动性:${asksLiq}, 剩余时间:${secondsToEnd}s 继续执行`,
             );
+            // 触发流动性信号、设置流动性信号标记
+            isLiquiditySignal = true;
         }
 
         // 先检查价格是否在触发价格范围内
@@ -495,7 +456,7 @@ class TailConvergenceStrategy {
         const amp = await get1HourAmp(this.symbol);
         if (!isLiquiditySignal && amp < this.ampMin) {
             logger.info(
-                `[${this.symbol}-${this.currentLoopHour}时] 普通信号、波动率:${amp.toFixed(4)} < ${this.ampMin}, 继续等待`,
+                `[${this.symbol}-${this.currentLoopHour}时] 常规信号、波动率:${amp.toFixed(4)} < ${this.ampMin}, 继续等待`,
             );
             return null;
         }
@@ -533,6 +494,7 @@ class TailConvergenceStrategy {
 
         // 返回交易信号
         return {
+            orderKey: `${this.symbol}-${this.currentLoopHour}时`,
             eventSlug: this.test ? `${eventSlug}-test` : eventSlug,
             marketSlug: market.slug,
             chosen: candidate,
@@ -551,7 +513,6 @@ class TailConvergenceStrategy {
      * @returns {Promise<{allowed: boolean, reason: string}>}
      */
     async checkExtraEntry(signal) {
-        const marketSlug = signal.marketSlug;
         const price = Number(signal.chosen.price);
 
         // 1. 配置开关检查
@@ -567,7 +528,7 @@ class TailConvergenceStrategy {
         // 3. 流动性信号：直接通过所有检查
         if (signal.liquiditySignal) {
             logger.info(
-                `[${marketSlug}-${signal.chosen.outcome.toUpperCase()}@额外买入] 流动性信号触发，跳过常规风控检查`,
+                `[${this.symbol}-${this.currentLoopHour}时] 流动性信号触发，跳过常规风控检查`,
             );
             return { allowed: true, reason: "流动性信号触发" };
         }
@@ -577,9 +538,7 @@ class TailConvergenceStrategy {
         // 若流动性尚且充足、等待匮乏机会
         const chosenAsksLiq = await this.cache.getAsksLiq(signal.chosen.tokenId);
         if (chosenAsksLiq < 1) {
-            logger.error(
-                `[${marketSlug}-${signal.chosen.outcome.toUpperCase()}@额外买入] 卖方流动性为0,结束信号`,
-            );
+            logger.error(`[${this.symbol}-${this.currentLoopHour}时] 卖方流动性为0,结束信号`);
             return { allowed: false, reason: "卖方流动性为0,结束信号" };
         }
         if (price < this.triggerPriceGt || chosenAsksLiq >= this.liquiditySufficientThreshold) {
@@ -592,7 +551,7 @@ class TailConvergenceStrategy {
         }
 
         logger.info(
-            `[${marketSlug}-${signal.chosen.outcome.toUpperCase()}@额外买入] 风控检查通过: 价格${price}>=0.99 或流动性已经不足(chosenAsksLiq=${chosenAsksLiq} < ${this.liquiditySufficientThreshold})`,
+            `[${this.symbol}-${this.currentLoopHour}时] 风控检查通过: 价格${price}>=0.99 或流动性已经不足(chosenAsksLiq=${chosenAsksLiq} < ${this.liquiditySufficientThreshold})`,
         );
 
         return {
@@ -606,8 +565,6 @@ class TailConvergenceStrategy {
      * @param {Object} signal
      */
     async handleSignal(signal) {
-        const marketSlug = signal.marketSlug;
-
         // 首次建仓
         if (!this.initialEntryDone) {
             await this.openPosition({
@@ -628,7 +585,7 @@ class TailConvergenceStrategy {
         const extraEntryCheck = await this.checkExtraEntry(signal);
         if (!extraEntryCheck.allowed) {
             logger.info(
-                `[${marketSlug}]额外买入:${signal.chosen.outcome.toUpperCase()}@${signal.chosen.price} ${extraEntryCheck.reason}，结束处理`,
+                `[${this.symbol}-${this.currentLoopHour}时] 额外买入:${signal.chosen.outcome.toUpperCase()}@${signal.chosen.price} ${extraEntryCheck.reason}，结束处理`,
             );
             return;
         }
@@ -637,7 +594,7 @@ class TailConvergenceStrategy {
         const sizeUsd = this.extraSizeUsdc;
         // 执行额外买入
         logger.info(
-            `[${marketSlug}]额外买入 --> ${signal.chosen.outcome.toUpperCase()}@${signal.chosen.price} ${sizeUsd}USDC`,
+            `[${this.symbol}-${this.currentLoopHour}时] 额外买入 --> ${signal.chosen.outcome.toUpperCase()}@${signal.chosen.price} ${sizeUsd}USDC`,
         );
         // 必须等待额外买入完成、再进行下一轮tick
         await this.openPosition({
@@ -662,27 +619,25 @@ class TailConvergenceStrategy {
     async openPosition({ tokenId, price, sizeUsd, signal, isExtra }) {
         const sizeShares = Math.floor(sizeUsd / price);
         logger.info(
-            `[${signal.marketSlug} ${this.test ? "测试" : "实盘"}] 建仓 ->
-                方向@${signal.chosen.outcome.toUpperCase()}
-                price@${price}
-                数量@${sizeShares}
-                sizeUsd@${sizeUsd}
-                tokenId@${tokenId}`,
+            `[${this.symbol}-${this.currentLoopHour}时] 建仓 ->
+                方向->${signal.chosen.outcome.toUpperCase()}
+                price->${price}
+                数量->${sizeShares}
+                sizeUsd->${sizeUsd}
+                tokenId->${tokenId}`,
         );
         const entryOrder = await this.client
             .placeOrder(price, sizeShares, PolySide.BUY, tokenId)
             .catch((err) => {
                 logger.error(
-                    `[${signal.marketSlug}-${signal.chosen.outcome.toUpperCase()}@${signal.chosen.price.toFixed(
-                        3,
-                    )} ] 建仓订单失败`,
+                    `[${this.symbol}-${this.currentLoopHour}时] 建仓订单失败`,
                     err?.message ?? err,
                 );
                 return null;
             });
         if (!entryOrder?.success) {
             logger.info(
-                `[${signal.marketSlug}-${signal.chosen.outcome.toUpperCase()}@${signal.chosen.price}] 建仓被拒绝:${entryOrder.error}`,
+                `[${this.symbol}-${this.currentLoopHour}时] 建仓被拒绝:${entryOrder.error}`,
             );
             const errorMsg =
                 typeof entryOrder.error === "string"
@@ -690,24 +645,26 @@ class TailConvergenceStrategy {
                     : entryOrder.error?.message || "";
             if (errorMsg.includes("address in closed only mode")) {
                 logger.error(
-                    `[${signal.marketSlug}-${signal.chosen.outcome.toUpperCase()}@${signal.chosen.price.toFixed(
-                        3,
-                    )} ] 建仓被拒绝: address in closed only mode`,
+                    `[${this.symbol}-${this.currentLoopHour}时] 建仓被拒绝: address in closed only mode`,
                 );
                 // 重建PolyClient实例
-                await rebuildPolyClient();
-                // 重建后的PolyClient实例
-                this.client = getPolyClient();
+                this.client = await rebuildPolyClient();
+                if (!this.client) {
+                    logger.error(
+                        `[${this.symbol}-${this.currentLoopHour}时] 重建PolyClient实例失败`,
+                    );
+                }
                 // 重建后重新建仓
                 await this.openPosition({ tokenId, price, sizeUsd, signal, isExtra });
                 return;
             }
         }
         const orderId = entryOrder.orderID;
-        logger.info(`[${signal.marketSlug}] ✅ 建仓成功,订单号=${orderId}`);
+        logger.info(`[${this.symbol}-${this.currentLoopHour}时] ✅ 建仓成功,订单号=${orderId}`);
 
         // 建仓后进入止盈队列、由止盈cron在事件结束后处理
         const takeProfitOrder = {
+            orderKey: signal.orderKey,
             tokenId: tokenId,
             size: Number(sizeShares),
             signal,

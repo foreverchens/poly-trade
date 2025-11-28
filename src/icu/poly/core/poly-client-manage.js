@@ -63,6 +63,7 @@ export function getPolyClient() {
 }
 
 /**
+ * todo 并发问题、需要加锁
  * 重建 PolyClient 实例（切换到下一个账号）
  * @returns {Promise<PolyClient>}
  */

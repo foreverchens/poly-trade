@@ -79,7 +79,7 @@ export class TakeProfitManager {
                 // 跳过已有错误的订单，避免重复执行
                 continue;
             }
-            const orderKey = takeProfitOrder.signal.marketSlug;
+            const orderKey = takeProfitOrder.orderKey;
             try {
                 // 查询建仓订单状态
                 const order = await getPolyClient().getOrder(takeProfitOrder.entryOrderId);
@@ -144,7 +144,7 @@ export class TakeProfitManager {
      * 执行止盈：使用最优bid价格直接成交
      */
     async executeTakeProfit(takeProfitOrder, size) {
-        const orderKey = takeProfitOrder.signal.marketSlug;
+        const orderKey = takeProfitOrder.orderKey;
         try {
             // 获取最优bid价格
             const [bestBid, bestAsk] = await getPolyClient().getBestPrice(takeProfitOrder.tokenId);
@@ -159,7 +159,7 @@ export class TakeProfitManager {
 
             // 再检查是否满足止盈价格要求
             if (bestBidPrice < this.takeProfitPrice) {
-                console.log(`[止盈] ${orderKey} 最优买价=${bestBidPrice} 小于止盈价格=${this.takeProfitPrice}、跳过`);
+                logger.info(`[止盈] ${orderKey} 最优买价=${bestBidPrice} 小于止盈价格=${this.takeProfitPrice}、跳过`);
                 return false;
             }
 

@@ -1,5 +1,7 @@
 // This is your Prisma schema file,
 // learn more about it in the docs: https://pris.ly/d/prisma-schema
+// npx prisma db push && npx prisma generate  推送修改并执行
+// npx prisma studio 打开web页面并校验
 
 generator client {
   provider = "prisma-client-js"
@@ -39,3 +41,51 @@ model Order {
   @@index([marketSlug])
   @@index([parentOrderId])
 }
+
+
+// ====================
+// 主表：hour_overview
+// ====================
+model hour_overview {
+  symbol          String   // 锚定的资产
+  event_slug      String   // 涨跌事件模板的 slug
+  market_slug     String   @id
+  market_end_time String?  // 市场结算时间（UTC+8）
+  day             Int      // 自然日（UTC+8），格式YYYYMMDD，例如20251129
+  hour            Int      // 小时（UTC+8）0–23
+  open_price      String   // 锚定资产现货开盘价
+  close_price     String   // 锚定资产现货收盘价
+  z_55            Int?     // z×10、仅一位小数、扩大10倍存储
+  z_60            Int?     // z×10
+  amp_55          Int?     // 百分数×100
+  amp_60          Int?     // 百分数×100
+  vol             Int?     // 结束时交易量、取附表最后一根数据
+  create_time     DateTime @default(now())  // 入库时间
+
+  @@index([day, hour], name: "idx_hour_overview_day_hour")
+}
+
+
+
+// =========================
+// 附表：hour_minute_samples
+// =========================
+model hour_minute_samples {
+  market_slug      String  // 对应主表的market_slug（唯一定位该小时）
+  minute_idx       Int     // 1-60
+  assert_price     String  // 锚定资产的USDT价格
+  up_price         Int     // 概率×1000
+  down_price       Int     // 概率×1000
+  top_side         String  // 'UP' / 'DOWN'
+  top_price        Int     // 概率×1000
+  top_price_spread Int?    // 概率×1000
+  top_z            Int?    // z×10
+  top_vol          Int?    // 体量取整
+  liq_sum          Int?    // 体量取整
+
+  @@id([market_slug, minute_idx])
+  @@index([market_slug], name: "idx_samples_market")
+}
+
+
+

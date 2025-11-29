@@ -423,13 +423,13 @@ class TailConvergenceStrategy {
             // 流动性充足、校验Z-Score是否达标
             if (zVal < this.zMin) {
                 logger.info(
-                    `[${this.symbol}-${this.currentLoopHour}时] 常规信号、Z-Score:${zVal} < ${this.zMin}, 继续等待`,
+                    `[${this.symbol}-${this.currentLoopHour}时] 常规信号、asksLiq:${asksLiq}、Z-Score:${zVal} < ${this.zMin}, 继续等待`,
                 );
                 return null;
             }
             // Z-Score达标、继续执行 (isLiquiditySignal 保持 false，走正常风控)
             logger.info(
-                `[${this.symbol}-${this.currentLoopHour}时] 常规信号、Z-Score:${zVal} >= ${this.zMin}, 继续执行`,
+                `[${this.symbol}-${this.currentLoopHour}时] 常规信号、asksLiq:${asksLiq}、Z-Score:${zVal} >= ${this.zMin}, 继续执行`,
             );
         } else {
             // 流动性不足、触发流动性信号
@@ -461,14 +461,14 @@ class TailConvergenceStrategy {
         }
 
         // 如果top方向的askPrice - bidPrice > 0.02、则设置挂单价格为 top方向的askPrice+bidPrice/2、向上取整、保留2位小数
-        // 但如果剩余时间不足120秒（58分之后）、则不做maker单、直接用ask价格
-        const canUseMaker = secondsToEnd >= 120;
+        // 但如果剩余时间不足300秒（5分之后）、则不做maker单、直接用ask价格 且不是流动性信号
+        const canUseMaker = secondsToEnd >= 300;
         const candidate =
             yesAsk >= noAsk
                 ? {
                       tokenId: yesTokenId,
                       price:
-                          canUseMaker && yesAsk - yesBid > 0.02
+                          canUseMaker && yesAsk - yesBid > 0.02 && !isLiquiditySignal
                               ? Math.ceil(((yesAsk + yesBid) / 2) * 100) / 100 // 价差较大且时间充裕、尝试做maker单
                               : yesAsk, // 价差较小或时间紧迫、直接taker单
                       outcome: "UP",
@@ -476,7 +476,7 @@ class TailConvergenceStrategy {
                 : {
                       tokenId: noTokenId,
                       price:
-                          canUseMaker && noAsk - noBid > 0.02
+                          canUseMaker && noAsk - noBid > 0.02 && !isLiquiditySignal
                               ? Math.ceil(((noAsk + noBid) / 2) * 100) / 100 // 价差较大且时间充裕、尝试做maker单
                               : noAsk, // 价差较小或时间紧迫、直接taker单
                       outcome: "DOWN",

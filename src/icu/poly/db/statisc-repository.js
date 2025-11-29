@@ -157,3 +157,48 @@ export async function queryHourOverviewsByTimeRange(day, hourStart, hourEnd) {
         return [];
     }
 }
+
+/**
+ * Delete hour_overview/hour_minute_samples records older than the provided UTC+8 day/hour
+ * @param {number} thresholdDay - YYYYMMDD
+ * @param {number} thresholdHour - 0-23
+ * @returns {Promise<{overviews: number, samples: number}>}
+ */
+export async function deleteHourDataBefore(thresholdDay, thresholdHour) {
+    try {
+        const oldOverviews = await prisma.hour_overview.findMany({
+            where: {
+                OR: [
+                    { day: { lt: thresholdDay } },
+                    {
+                        day: thresholdDay,
+                        hour: { lt: thresholdHour },
+                    },
+                ],
+            },
+            select: { market_slug: true },
+        });
+
+        if (!oldOverviews.length) {
+            return { overviews: 0, samples: 0 };
+        }
+
+        const marketSlugs = oldOverviews.map(item => item.market_slug);
+
+        const deleteSamplesResult = await prisma.hour_minute_samples.deleteMany({
+            where: { market_slug: { in: marketSlugs } },
+        });
+
+        const deleteOverviewResult = await prisma.hour_overview.deleteMany({
+            where: { market_slug: { in: marketSlugs } },
+        });
+
+        return {
+            overviews: deleteOverviewResult.count,
+            samples: deleteSamplesResult.count,
+        };
+    } catch (error) {
+        console.error('Failed to delete old hour data:', error);
+        return { overviews: 0, samples: 0 };
+    }
+}

@@ -61,16 +61,12 @@ async function fetchAssetPrice(symbol) {
  * @param {number} topPrice - Top price (0-1)
  * @returns {number|null} - Liquidity sum or null
  */
-function calculateLiquiditySum(asks, topPrice) {
-    if (topPrice < 0.90) {
-        return null;
-    }
-
+function calculateLiquiditySum(asks) {
     let sum = 0;
     for (const ask of asks) {
         const price = Number(ask.price);
         const size = Number(ask.size);
-        if (price >= 0.90 && price <= 0.99) {
+        if (price <= 0.99) {
             sum += size;
         }
     }
@@ -199,9 +195,7 @@ export async function recordMinuteSample(marketSlug, symbol, upTokenId, downToke
         const topVol = getTopVolume(topOrderbook, topSide);
 
         // Calculate liquidity sum (when top_price >= 0.90)
-        const liqSum = topPrice >= 0.90 || dayjs().minute() > 50
-            ? calculateLiquiditySum(topOrderbook.asks, topPrice)
-            : null;
+        const liqSum = calculateLiquiditySum(topOrderbook.asks);
 
         const data = {
             market_slug: marketSlug,

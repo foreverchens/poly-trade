@@ -747,13 +747,22 @@
 
             // 基于非小额仓位计算盈亏（非小额仓位已经有订单簿数据）
             let totalValue = 0, totalPnl = 0, totalCost = 0;
+            // 统一使用最优买价作为标记价格，缺失时退回当前价
+            const getMarkPrice = (row) => {
+                if (Number.isFinite(row.bestBid)) {
+                    return Number(row.bestBid);
+                }
+                const fallback = Number(row.curPrice ?? 0);
+                return Number.isFinite(fallback) ? fallback : 0;
+            };
+
             nonSmallRowsForCalc.forEach(r => {
                 const size = Number(r.size ?? 0);
                 const avg = Number(r.avgPrice ?? 0);
-                const cur = r.bestAsk !== null ? r.bestAsk : Number(r.curPrice ?? 0);
-                const holdValue = size * cur;
+                const markPrice = getMarkPrice(r);
+                const holdValue = size * markPrice;
                 const costValue = size * avg;
-                const cashPnl = isFinite(r.cashPnl) ? Number(r.cashPnl) : (holdValue - costValue);
+                const cashPnl = holdValue - costValue;
                 totalValue += holdValue;
                 totalPnl += cashPnl;
                 totalCost += costValue;
@@ -769,11 +778,11 @@
                 const tokenId = r.tokenId;
                 const bestBid = r.bestBid;
                 const bestAsk = r.bestAsk;
-                const cur = bestAsk !== null ? bestAsk : Number(r.curPrice ?? 0);
-                const holdValue = size * cur;
+                const markPrice = getMarkPrice(r);
+                const holdValue = size * markPrice;
                 const costValue = size * avg;
-                const cashPnl = isFinite(r.cashPnl) ? Number(r.cashPnl) : (holdValue - costValue);
-                const percentPnl = isFinite(r.percentPnl) ? Number(r.percentPnl) : (costValue ? (cashPnl / costValue) : 0);
+                const cashPnl = holdValue - costValue;
+                const percentPnl = costValue ? (cashPnl / costValue) : 0;
 
                 // 注意：盈亏计算已在 nonSmallRows 中完成，这里只用于显示单行数据
 
@@ -800,7 +809,7 @@
           <td class="right" data-th="持有价值">${fmtMoney(holdValue)}</td>
           <td class="right" data-th="当前盈亏">
             <span class="${cashPnl >= 0 ? 'green' : 'red'}">${(cashPnl >= 0 ? '+' : '') + fmtMoney(cashPnl)}</span>
-            <span class="${percentPnl >= 0 ? 'green' : 'red'}"> (${(percentPnl >= 0 ? '+' : '') + (percentPnl * 1).toFixed(2)}%)</span>
+            <span class="${percentPnl >= 0 ? 'green' : 'red'}"> (${(percentPnl >= 0 ? '+' : '') + (percentPnl * 100).toFixed(2)}%)</span>
           </td>
           <td class="close-order" data-th="平仓">
             <input type="number" step="0.1" min="${MIN_ORDER_PRICE * PRICE_DISPLAY_MULTIPLIER}" max="${MAX_ORDER_PRICE * PRICE_DISPLAY_MULTIPLIER}" placeholder="价格（%）"

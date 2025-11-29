@@ -34,7 +34,7 @@ const viewDir = path.join(__dirname, "view");
 
 const app = express();
 app.use(express.json());
-const SUPPORTED_TAGS = new Set([21, 235, 39]);
+const SUPPORTED_TAGS = new Set([21, 235, 39,101267,818]);
 const DEFAULT_TAG_ID = 235;
 const CLIENT_ERROR_PATTERNS = [/market is required/i, /Invalid interval/i];
 const PAGE_ROUTES = [

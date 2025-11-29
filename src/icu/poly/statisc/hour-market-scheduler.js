@@ -10,8 +10,8 @@ import { getHourOverview, deleteHourDataBefore } from '../db/statisc-repository.
 
 // 配置
 const CONFIG = {
-    symbol: 'ETH',
-    eventSlugTemplate: 'ethereum-up-or-down-november-${day}-${hour}${am_pm}-et',
+    symbol: 'BTC',
+    eventSlugTemplate: 'bitcoin-up-or-down-november-${day}-${hour}${am_pm}-et',
     scheduleIntervalMs: 1000, // 每秒调度一次，便于精确到 :30
     sampleSecond: 30, // 每分钟第30秒采样
 };
@@ -201,7 +201,7 @@ async function recordPreviousMinute(minuteIdx) {
             return;
         }
 
-        logger.info(`[小时数据调度] 录入第 ${minuteIdx} 分钟数据...`);
+        console.log(`[小时数据调度] 录入第 ${minuteIdx} 分钟数据...`);
 
         await recordMinuteSample(
             state.currentMarketSlug,
@@ -213,7 +213,7 @@ async function recordPreviousMinute(minuteIdx) {
 
         state.lastRecordedMinute = minuteIdx;
 
-        logger.info(`[小时数据调度] ✓ 第 ${minuteIdx} 分钟数据已录入`);
+        console.log(`[小时数据调度] ✓ 第 ${minuteIdx} 分钟数据已录入`);
     } catch (error) {
         logger.error(`[小时数据调度] 录入第 ${minuteIdx} 分钟数据失败:`, error);
     }

@@ -9,7 +9,7 @@ export default [
             name: "ETH_UpDown_Hourly",
             slug: "ethereum-up-or-down-november-${day}-${hour}${am_pm}-et",
             symbol: "ETH",
-            active: false,
+            active: true,
             test: false,
         },
 
@@ -50,7 +50,7 @@ export default [
                  * highVolatilityZThreshold同理
                  */
                 zMin: 2.5,                              // 最小 Z-Score 阈值
-                ampMin: 0.001,                        // 最小振幅
+                ampMin: 0.002,                        // 最小振幅
                 highVolatilityZThreshold: 3,          // 高波动 Z-Score 阈值
             },
 
@@ -94,7 +94,7 @@ export default [
             },
             statistics: {
                 zMin: 2.5,
-                ampMin: 0.001,
+                ampMin: 0.002,
                 highVolatilityZThreshold: 3,
             },
             liquidity: {
@@ -134,7 +134,47 @@ export default [
             },
             statistics: {
                 zMin: 2.5,
-                ampMin: 0.001,
+                ampMin: 0.002,
+                highVolatilityZThreshold: 3,
+            },
+            liquidity: {
+                sufficientThreshold: 1000,
+            },
+            spikeProtection: {
+                count: 2,
+            },
+        },
+    },
+    {
+        task: {
+            name: "SOL_UpDown_Hourly",
+            slug: "solana-up-or-down-november-${day}-${hour}${am_pm}-et",
+            symbol: "SOL",
+            active: true,
+            test: false,
+        },
+        schedule: {
+            cronExpression: "0 30-35 * * * *",
+            cronTimeZone: "America/New_York",
+            tickIntervalSeconds: 30,
+        },
+        position: {
+            positionSizeUsdc: 20,
+            extraSizeUsdc: 80,
+            allowExtraEntryAtCeiling: true,
+        },
+        riskControl: {
+            price: {
+                triggerPriceGt: 0.99,
+                takeProfitPrice: 0.998,
+            },
+            time: {
+                maxMinutesToEnd: 10,
+                monitorModeMinuteThreshold: 50,
+            },
+            statistics: {
+                zMin: 2.5,
+                ampMin: 0.002,
                 highVolatilityZThreshold: 3,
             },
             liquidity: {

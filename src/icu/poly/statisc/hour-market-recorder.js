@@ -221,7 +221,7 @@ export async function recordMinuteSample(marketSlug, symbol, upTokenId, downToke
         };
 
         await createMinuteSample(data);
-        logger.info(`[小时数据录入] 已录入市场 ${marketSlug} 第 ${minuteIdx} 分钟数据`);
+        console.log(`[小时数据录入] 已录入市场 ${marketSlug} 第 ${minuteIdx} 分钟数据`);
     } catch (error) {
         logger.error(`[小时数据录入] 录入市场 ${marketSlug} 分钟数据失败:`, error);
     }

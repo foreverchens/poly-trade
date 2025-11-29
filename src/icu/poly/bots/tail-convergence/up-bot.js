@@ -11,8 +11,14 @@ import { saveOrder } from "../../db/repository.js";
 import logger from "../../core/Logger.js";
 
 // 基于流动性计算下次tick 时间间隔
-const delay = (liq, t=100) => {const m=liq/t;return m<=2?1000:m>=10?10000:1000+9000*Math.log(1+4*((m-2)/8))/Math.log(5)};
-
+const delay = (liq, t = 100) => {
+    const m = liq / t;
+    return m <= 2
+        ? 1000
+        : m >= 10
+          ? 10000
+          : 1000 + (9000 * Math.log(1 + 4 * ((m - 2) / 8))) / Math.log(5);
+};
 
 class TailConvergenceStrategy {
     constructor(taskConfig) {
@@ -170,7 +176,7 @@ class TailConvergenceStrategy {
         // 1 50~60分钟或者流动性枯竭、监控
         this.loopState = 0;
         // 预防插针、检查持续性
-        this.highCnt = 0;
+        this.highCnt = 1;
     }
 
     /**
@@ -266,7 +272,7 @@ class TailConvergenceStrategy {
         // 重置循环状态
         this.loopState = 0;
         // 重置预防插针、检查持续性
-        this.highCnt = 0;
+        this.highCnt = 1;
         logger.info(`[扫尾盘策略] 小时循环已结束\n`);
     }
 
@@ -344,6 +350,12 @@ class TailConvergenceStrategy {
         ]);
         const [yesBid, yesAsk] = yesPrices;
         const [noBid, noAsk] = noPrices;
+        if (yesAsk === 0 || noAsk === 0) {
+            logger.info(
+                `[${this.symbol}-${this.currentLoopHour}时] yesAsk=${yesAsk} noAsk=${noAsk} 卖方流动性为0, 结束信号`,
+            );
+            return null;
+        }
         const topPrice = Math.max(yesAsk, noAsk);
         const topTokenId = yesAsk >= noAsk ? yesTokenId : noTokenId;
 
@@ -356,7 +368,7 @@ class TailConvergenceStrategy {
             // 时间是否低于监控模式分钟阈值
             const isBeforeMonitorThreshold = dayjs().minute() < this.monitorModeMinuteThreshold;
             // 价格是否低于最高触发价格
-            const isPriceNotTriggered = topPrice < this.triggerPriceGt;
+            const isPriceNotTriggered = topPrice != 1 && topPrice < this.triggerPriceGt;
             // zVal是否低于高波动阈值
             const isZValBelowHighVolatility = zVal < this.highVolatilityZThreshold;
             // 高波动发生
@@ -367,9 +379,11 @@ class TailConvergenceStrategy {
             // 指定分钟之前、价格未触发、zVal小于高波动阈值、继续等待
             if (isBeforeMonitorThreshold && isPriceNotTriggered && isZValBelowHighVolatility) {
                 // 非高波动场合、价格未触发、继续等待
-                logger.info(
-                    `[${this.symbol}-${this.currentLoopHour}时] yesAsk=${yesAsk} noAsk=${noAsk} zVal=${zVal} pending... `,
-                );
+                if (topPrice > 0.9) {
+                    logger.info(
+                        `[${this.symbol}-${this.currentLoopHour}时] yesAsk=${yesAsk} noAsk=${noAsk} zVal=${zVal} pending... `,
+                    );
+                }
                 return null;
             }
             // 高波动发生且插针保护计数器小于阈值、则防止插针误触发、检查持续性
@@ -413,9 +427,11 @@ class TailConvergenceStrategy {
         if (isLiquiditySufficient) {
             // 流动性充足、校验Z-Score是否达标
             if (zVal < this.zMin) {
-                logger.info(
-                    `[${this.symbol}-${this.currentLoopHour}时] 常规信号、asksLiq:${asksLiq}、Z-Score:${zVal} < ${this.zMin}, 继续等待`,
-                );
+                if (topPrice > 0.9) {
+                    logger.info(
+                        `[${this.symbol}-${this.currentLoopHour}时] 常规信号、asksLiq:${asksLiq}、Z-Score:${zVal} < ${this.zMin}, 继续等待`,
+                    );
+                }
                 return null;
             }
             // Z-Score达标、继续执行 (isLiquiditySignal 保持 false，走正常风控)
@@ -435,9 +451,11 @@ class TailConvergenceStrategy {
         const priceThreshold = threshold(secondsToEnd);
         // 价格不能超出 triggerPriceGt (0.99) 和 priceThreshold 的范围
         if (topPrice > this.triggerPriceGt || topPrice < priceThreshold) {
-            logger.info(
-                `[${this.symbol}-${this.currentLoopHour}时] topPrice:[${topPrice}] not in range [${priceThreshold}, ${this.triggerPriceGt}]  continue waiting`,
-            );
+            if (topPrice > 0.9) {
+                logger.info(
+                    `[${this.symbol}-${this.currentLoopHour}时] topPrice:[${topPrice}] not in range [${priceThreshold}, ${this.triggerPriceGt}]  continue waiting`,
+                );
+            }
             return null;
         }
 
@@ -450,7 +468,7 @@ class TailConvergenceStrategy {
             );
             return null;
         }
-        if(isLiquiditySignal && zVal < 0.5) {
+        if (isLiquiditySignal && zVal < 0.5) {
             // 即使流动性信号、zVal小于0.5、也继续等待
             logger.info(
                 `[${this.symbol}-${this.currentLoopHour}时] 流动性信号、zVal:${zVal} < 0.5, 继续等待`,
@@ -648,8 +666,8 @@ class TailConvergenceStrategy {
                 await rebuildPolyClientSync();
                 // 重建后重新建仓
                 await this.openPosition({ tokenId, price, sizeUsd, signal, isExtra });
-                return;
             }
+            return null;
         }
         const orderId = entryOrder.orderID;
         logger.info(`[${this.symbol}-${this.currentLoopHour}时] ✅ 建仓成功,订单号=${orderId}`);

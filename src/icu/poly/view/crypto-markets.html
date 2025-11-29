@@ -239,10 +239,14 @@
         { key: "question", label: "问题", className: "col-question" },
         { key: "outcomes", label: "结果" },
         { key: "endDate", label: "结束时间", className: "col-time" },
+        { key: "topPrice", label: "TOP价格" },
         { key: "yesBestAsk", label: "YES最优卖价" },
         { key: "yesBestBid", label: "YES最优买价" },
+        { key: "yesSpread", label: "YES价差" },
         { key: "noBestAsk", label: "NO最优卖价" },
         { key: "noBestBid", label: "NO最优买价" },
+        { key: "noSpread", label: "NO价差" },
+        { key: "topPrice", label: "TOP价格" },
         { key: "volume", label: "交易量" },
         { key: "liquidityNum", label: "流动性", compact: true },
     ];
@@ -251,13 +255,16 @@
     const PRICE_MULTIPLIER = 100;
     const PRICE_DISPLAY_MULTIPLIER = 100;
     const PRICE_DISPLAY_DECIMALS = 1;
-    const PRICE_FIELD_KEYS = new Set(["yesBestAsk", "yesBestBid", "noBestAsk", "noBestBid"]);
+    const PRICE_FIELD_KEYS = new Set(["yesBestAsk", "yesBestBid", "yesSpread", "noBestAsk", "noBestBid", "noSpread", "topPrice"]);
+    const TOP_PRICE_THRESHOLD = 0.99;
     const TAG_OPTIONS = [
         { id: 21, label: "Crypto" },
         { id: 235, label: "Bitcoin" },
         { id: 39, label: "Ethereum" },
+        { id: 818,label: "Solana"},
+        { id: 101267,label: "XRP"}
     ];
-    const DEFAULT_TAG_ID = 39;
+    const DEFAULT_TAG_ID = 21;
     let outcomeMode = "updown";
     let currentData = [];
     let currentTagId = DEFAULT_TAG_ID;
@@ -523,6 +530,23 @@
         return list.filter(item => !shouldExcludeMarket(item));
     }
 
+    function isTopPriceTooHigh(value) {
+        const numeric = typeof value === "number" ? value : Number(value);
+        return Number.isFinite(numeric) && numeric > TOP_PRICE_THRESHOLD;
+    }
+
+    function filterMarketsByTopPrice(list) {
+        return list.filter(item => !isTopPriceTooHigh(item.topPrice));
+    }
+
+    function sortMarketsByTopPrice(list) {
+        return [...list].sort((a, b) => {
+            const topA = Number.isFinite(a?.topPrice) ? a.topPrice : Number.NEGATIVE_INFINITY;
+            const topB = Number.isFinite(b?.topPrice) ? b.topPrice : Number.NEGATIVE_INFINITY;
+            return topB - topA;
+        });
+    }
+
     function buildEventGroupLabel(timestamp, count = 1) {
         const baseLabel = `结束：${formatDateToCST(timestamp)}`;
         if (!count || count <= 1) return baseLabel;
@@ -740,6 +764,23 @@
         }));
     }
 
+    function calculateSpread(bestAsk, bestBid) {
+        const ask = typeof bestAsk === "number" ? bestAsk : Number(bestAsk);
+        const bid = typeof bestBid === "number" ? bestBid : Number(bestBid);
+        if (!Number.isFinite(ask) || !Number.isFinite(bid)) return 0;
+        if (ask <= 0 || bid <= 0) return 0;
+        const spread = ask - bid;
+        return spread > 0 ? spread : 0;
+    }
+
+    function calculateTopPrice(quotes) {
+        const normalized = quotes
+            .map(value => (typeof value === "number" ? value : Number(value)))
+            .filter(value => Number.isFinite(value) && value > 0);
+        if (!normalized.length) return null;
+        return Math.max(...normalized);
+    }
+
     function enrichMarketStats(list) {
         return list.map(item => {
             const tokens = getTokenIds(item);
@@ -749,12 +790,18 @@
             const noAsk = resolveBestAskForToken(noTokenId, extractOutcomePrice(item, 1));
             const yesBid = resolveBestBidForToken(yesTokenId);
             const noBid = resolveBestBidForToken(noTokenId);
+            const yesSpread = calculateSpread(yesAsk, yesBid);
+            const noSpread = calculateSpread(noAsk, noBid);
+            const topPrice = calculateTopPrice([yesAsk, yesBid, noAsk, noBid]);
             return {
                 ...item,
                 yesBestAsk: yesAsk,
                 yesBestBid: yesBid,
                 noBestAsk: noAsk,
                 noBestBid: noBid,
+                yesSpread,
+                noSpread,
+                topPrice,
             };
         });
     }
@@ -2372,12 +2419,14 @@ function handleTokenSelectionChange(tokenId, checked) {
         const byGroup = filterByEventGroup(outcomeFiltered);
         const sorted = sortMarkets(byGroup);
         const enriched = enrichMarketStats(sorted);
-        render(enriched);
-        updateStatus(sorted.length);
-        lastRenderedMarkets = sorted;
-        ensureOrderBooksForMarkets(sorted);
+        const visible = filterMarketsByTopPrice(enriched);
+        const ordered = sortMarketsByTopPrice(visible);
+        render(ordered);
+        updateStatus(ordered.length);
+        lastRenderedMarkets = ordered;
+        ensureOrderBooksForMarkets(ordered);
         if (!skipChart) {
-            refreshYesTokenChart(sorted);
+            refreshYesTokenChart(ordered);
         }
     }
 

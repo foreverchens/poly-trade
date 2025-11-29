@@ -159,7 +159,7 @@ export async function rebuildPolyClientSync() {
     // 记录触发重建时的地址，用于判断是否已被其他调用重建过
     const failedAddress = currentPolyClient?.funderAddress;
 
-    return await lock.acquire("rebuild", async () => {
+    return lock.acquire("rebuild", async () => {
         try {
             // 如果地址已经改变，说明已经被其他并发调用重建过了，直接返回新实例
             if (currentPolyClient?.funderAddress !== failedAddress) {

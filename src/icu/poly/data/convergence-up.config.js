@@ -55,7 +55,7 @@ export default [
 
             // 流动性风控
             liquidity: {
-                sufficientThreshold: 1500,            // 流动性充足阈值
+                sufficientThreshold: 1000,            // 流动性充足阈值
             },
 
             // 插针防护

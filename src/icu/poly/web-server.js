@@ -4,6 +4,7 @@ import {fileURLToPath} from "url";
 import axios from "axios";
 import { getPolyClient } from "./core/poly-client-manage.js";
 import {listOrders, deleteOrder, updateOrder} from "./db/repository.js";
+import {getMinuteSamples} from "./db/statisc-repository.js";
 
 const PORT = process.env.PORT || 3001;
 const BTC_PRICE_SOURCE = process.env.BTC_PRICE_SOURCE || "https://api.binance.com/api/v3/klines";
@@ -40,6 +41,7 @@ const PAGE_ROUTES = [
     {label: "Crypto Markets", path: "/"},
     {label: "dashboard", path: "/dashboard"},
     {label: "Bot Orders", path: "/bot-orders"},
+    {label: "Hour Samples", path: "/hour-minute-samples"},
 ];
 const TRADE_LOOKBACK_DAYS = 3;
 const MAX_TRADE_ITEMS = 10;
@@ -100,6 +102,31 @@ app.get("/api/orderbook/:tokenId", async (req, res) => {
         console.error("Failed to fetch order book:", err.message);
         res.status(err.response?.status || 500).json({
             error: "failed_to_fetch_orderbook",
+            message: err.response?.data || err.message,
+        });
+    }
+});
+
+app.get("/api/hour-minute-samples", async (req, res) => {
+    const marketSlug = typeof req.query.market_slug === "string" ? req.query.market_slug.trim() : "";
+    if (!marketSlug) {
+        return res.status(400).json({
+            error: "missing_market_slug",
+            message: "market_slug is required",
+        });
+    }
+
+    try {
+        const samples = await getMinuteSamples(marketSlug);
+        res.json({
+            market_slug: marketSlug,
+            count: samples.length,
+            samples,
+        });
+    } catch (err) {
+        console.error("Failed to fetch hour minute samples:", err.message);
+        res.status(err.response?.status || 500).json({
+            error: "failed_to_fetch_hour_minute_samples",
             message: err.response?.data || err.message,
         });
     }
@@ -427,6 +454,10 @@ app.get("/dashboard", (_req, res) => {
 
 app.get("/bot-orders", (_req, res) => {
     res.sendFile(path.join(viewDir, "bot-orders.html"));
+});
+
+app.get("/hour-minute-samples", (_req, res) => {
+    res.sendFile(path.join(viewDir, "hour-minute-samples.html"));
 });
 
 app.listen(PORT, () => {

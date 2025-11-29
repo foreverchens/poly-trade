@@ -1,6 +1,7 @@
 import axios from 'axios';
-import { getPolyClient } from '../core/poly-client-manage.js';
-import { getZ } from '../core/z-score.js';
+import dayjs from "dayjs";
+import {getPolyClient} from '../core/poly-client-manage.js';
+import {getZ} from '../core/z-score.js';
 import logger from '../core/Logger.js';
 import {
     initHourOverview,
@@ -8,7 +9,7 @@ import {
     getHourOverview,
     createMinuteSample,
     getMinuteSamples,
-} from '../db/statistics-repository.js';
+} from '../db/statisc-repository.js';
 
 const UTC8_OFFSET = 8 * 60 * 60 * 1000;
 
@@ -24,17 +25,17 @@ function getUtc8DayHour(timestamp) {
     const date = String(utc8Time.getUTCDate()).padStart(2, '0');
     const day = parseInt(`${year}${month}${date}`, 10);
     const hour = utc8Time.getUTCHours();
-    return { day, hour };
+    return {day, hour};
 }
 
 /**
- * Get current minute index (1-60) for the current hour in UTC+8
- * @returns {number} 1-60
+ * 获取UTC+8当前分钟数（0-59）
+ * @returns {number} 0-59
  */
-function getCurrentMinuteIndex() {
+export function getCurrentMinute() {
     const now = Date.now();
     const utc8Time = new Date(now + UTC8_OFFSET);
-    return utc8Time.getUTCMinutes() + 1; // 1-based index
+    return utc8Time.getUTCMinutes(); // 0-59
 }
 
 /**
@@ -98,21 +99,22 @@ function getTopVolume(orderbook, topSide) {
 }
 
 /**
- * Initialize main table record when hour market opens
- * @param {Object} market - Market object from PolyMarket API
- * @param {string} symbol - Asset symbol (e.g., 'ETH')
- * @param {string} eventSlug - Event slug
+ * 初始化小时市场主表记录
+ * @param {Object} market - 从PolyMarket API获取的市场对象
+ * @param {string} symbol - 资产符号 (例如: 'ETH')
+ * @param {string} eventSlug - 事件slug
  */
 export async function initializeHourMarket(market, symbol, eventSlug) {
     try {
         const marketSlug = market.marketSlug || market.slug;
         const endDate = new Date(market.endDate);
-        const { day, hour } = getUtc8DayHour(endDate.getTime());
+        const {day, hour} = getUtc8DayHour(endDate.getTime());
 
-        // Fetch opening price
+        // 获取开盘价
         const openPrice = await fetchAssetPrice(symbol);
+        logger.info(`[小时数据录入] 获取 ${symbol} 开盘价: ${openPrice}`);
 
-        // Format market end time as UTC+8 string
+        // 格式化市场结束时间为UTC+8字符串
         const utc8EndDate = new Date(endDate.getTime() + UTC8_OFFSET);
         const marketEndTime = utc8EndDate.toISOString().slice(0, 19).replace('T', ' ');
 
@@ -124,27 +126,27 @@ export async function initializeHourMarket(market, symbol, eventSlug) {
             day,
             hour,
             open_price: openPrice,
-            close_price: '', // Will be filled later
+            close_price: '', // 稍后填充
         };
 
         await initHourOverview(data);
-        logger.info(`[HourRecorder] Initialized market ${marketSlug} for ${symbol} ${day} ${hour}:00`);
+        logger.info(`[小时数据录入] ✓ 已初始化市场 ${marketSlug} (${symbol} ${day} ${hour}:00)`);
     } catch (error) {
-        logger.error('[HourRecorder] Failed to initialize hour market:', error);
+        logger.error('[小时数据录入] ✗ 初始化小时市场失败:', error);
         throw error;
     }
 }
 
 /**
- * Record minute sample data
+ * 录入分钟采样数据
  * @param {string} marketSlug
- * @param {string} symbol - Asset symbol
+ * @param {string} symbol - 资产符号
  * @param {string} upTokenId - UP token ID
  * @param {string} downTokenId - DOWN token ID
+ * @param {number} minuteIdx - 分钟索引 (0-59)
  */
-export async function recordMinuteSample(marketSlug, symbol, upTokenId, downTokenId) {
+export async function recordMinuteSample(marketSlug, symbol, upTokenId, downTokenId, minuteIdx) {
     try {
-        const minuteIdx = getCurrentMinuteIndex();
 
         // Fetch asset price from Binance
         const assertPrice = await fetchAssetPrice(symbol);
@@ -158,14 +160,15 @@ export async function recordMinuteSample(marketSlug, symbol, upTokenId, downToke
         ]);
 
         if (!upOrderbook || !downOrderbook) {
-            logger.warn(`[HourRecorder] Missing orderbook for ${marketSlug} at minute ${minuteIdx}`);
+            logger.warn(`[小时数据录入] 市场 ${marketSlug} 第 ${minuteIdx} 分钟缺少订单簿数据`);
             return;
         }
 
         // Extract best ask prices (概率价)
-        const [, upPrice] = await client.getBestPrice(upTokenId);
-        const [, downPrice] = await client.getBestPrice(downTokenId);
-
+        let [, upPrice] = await client.getBestPrice(upTokenId);
+        let [, downPrice] = await client.getBestPrice(downTokenId);
+        upPrice = upPrice === 0 ? 1 : upPrice;
+        downPrice = downPrice === 0 ? 1 : downPrice;
         // Determine top side
         const topSide = upPrice > downPrice ? 'UP' : 'DOWN';
         const topPrice = Math.max(upPrice, downPrice);
@@ -188,7 +191,7 @@ export async function recordMinuteSample(marketSlug, symbol, upTokenId, downToke
                 const z = await getZ(symbol, remainingSec);
                 topZ = Math.round(z * 10); // Store as z×10
             } catch (error) {
-                logger.warn(`[HourRecorder] Failed to calculate z-score: ${error.message}`);
+                logger.warn(`[小时数据录入] 计算z-score失败: ${error.message}`);
             }
         }
 
@@ -196,7 +199,7 @@ export async function recordMinuteSample(marketSlug, symbol, upTokenId, downToke
         const topVol = getTopVolume(topOrderbook, topSide);
 
         // Calculate liquidity sum (when top_price >= 0.90)
-        const liqSum = topPrice >= 0.90
+        const liqSum = topPrice >= 0.90 || dayjs().minute() > 50
             ? calculateLiquiditySum(topOrderbook.asks, topPrice)
             : null;
 
@@ -215,14 +218,14 @@ export async function recordMinuteSample(marketSlug, symbol, upTokenId, downToke
         };
 
         await createMinuteSample(data);
-        logger.info(`[HourRecorder] Recorded minute ${minuteIdx} for ${marketSlug}`);
+        logger.info(`[小时数据录入] 已录入市场 ${marketSlug} 第 ${minuteIdx} 分钟数据`);
     } catch (error) {
-        logger.error(`[HourRecorder] Failed to record minute sample for ${marketSlug}:`, error);
+        logger.error(`[小时数据录入] 录入市场 ${marketSlug} 分钟数据失败:`, error);
     }
 }
 
 /**
- * Finalize hour overview after market ends
+ * 完成小时市场数据录入（市场结束后）
  * @param {string} marketSlug
  * @param {string} symbol
  */
@@ -230,28 +233,31 @@ export async function finalizeHourMarket(marketSlug, symbol) {
     try {
         const overview = await getHourOverview(marketSlug);
         if (!overview) {
-            logger.warn(`[HourRecorder] No overview found for ${marketSlug}`);
+            logger.warn(`[小时数据录入] 未找到市场 ${marketSlug} 的主表记录`);
             return;
         }
 
-        // Fetch closing price from Binance
-        const closePrice = await fetchAssetPrice(symbol);
+        logger.info(`[小时数据录入] 开始完成市场 ${marketSlug} 的数据录入...`);
 
-        // Get minute samples
+        // 获取收盘价
+        const closePrice = await fetchAssetPrice(symbol);
+        logger.info(`[小时数据录入] 获取 ${symbol} 收盘价: ${closePrice}`);
+
+        // 获取分钟采样数据
         const samples = await getMinuteSamples(marketSlug);
         if (!samples || samples.length === 0) {
-            logger.warn(`[HourRecorder] No minute samples found for ${marketSlug}`);
+            logger.warn(`[小时数据录入] 市场 ${marketSlug} 没有分钟采样数据`);
             return;
         }
 
-        // Get z-scores at minute 55 and 60
+        // 获取第55和60分钟的z值
         const sample55 = samples.find(s => s.minute_idx === 55);
-        const sample60 = samples.find(s => s.minute_idx === 60);
+        const sample59 = samples.find(s => s.minute_idx === 59);
 
         const z55 = sample55?.top_z || null;
-        const z60 = sample60?.top_z || null;
+        const z60 = sample59?.top_z || null;
 
-        // Calculate amplitudes
+        // 计算涨跌幅
         const openPrice = Number(overview.open_price);
         let amp55 = null;
         let amp60 = null;
@@ -261,12 +267,12 @@ export async function finalizeHourMarket(marketSlug, symbol) {
             amp55 = Math.round(((price55 - openPrice) / openPrice) * 10000); // ×100 for percentage
         }
 
-        if (sample60 && openPrice > 0) {
-            const price60 = Number(sample60.assert_price);
+        if (sample59 && openPrice > 0) {
+            const price60 = Number(sample59.assert_price);
             amp60 = Math.round(((price60 - openPrice) / openPrice) * 10000);
         }
 
-        // Get volume from last sample
+        // 获取最后一个采样的交易量
         const lastSample = samples[samples.length - 1];
         const vol = lastSample?.top_vol || null;
 
@@ -280,8 +286,8 @@ export async function finalizeHourMarket(marketSlug, symbol) {
         };
 
         await updateHourOverview(marketSlug, updateData);
-        logger.info(`[HourRecorder] Finalized market ${marketSlug}`);
+        logger.info(`[小时数据录入] ✓ 已完成市场 ${marketSlug} 数据录入 (共 ${samples.length} 条分钟数据)`);
     } catch (error) {
-        logger.error(`[HourRecorder] Failed to finalize hour market ${marketSlug}:`, error);
+        logger.error(`[小时数据录入] ✗ 完成市场 ${marketSlug} 数据录入失败:`, error);
     }
 }

@@ -459,6 +459,13 @@ class TailConvergenceStrategy {
             );
             return null;
         }
+        if(isLiquiditySignal && zVal < 0.5) {
+            // 即使流动性信号、zVal小于0.5、也继续等待
+            logger.info(
+                `[${this.symbol}-${this.currentLoopHour}时] 流动性信号、zVal:${zVal} < 0.5, 继续等待`,
+            );
+            return null;
+        }
 
         // 如果top方向的askPrice - bidPrice > 0.02、则设置挂单价格为 top方向的askPrice+bidPrice/2、向上取整、保留2位小数
         // 但如果剩余时间不足300秒（5分之后）、则不做maker单、直接用ask价格 且不是流动性信号

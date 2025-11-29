@@ -9,6 +9,7 @@ export default [
             name: "ETH_UpDown_Hourly",
             slug: "ethereum-up-or-down-november-${day}-${hour}${am_pm}-et",
             symbol: "ETH",
+            active: false,
             test: false,
         },
 
@@ -69,6 +70,7 @@ export default [
             name: "BTC_UpDown_Hourly",
             slug: "bitcoin-up-or-down-november-${day}-${hour}${am_pm}-et",
             symbol: "BTC",
+            active: true,
             test: false,
         },
         schedule: {
@@ -97,6 +99,46 @@ export default [
             },
             liquidity: {
                 sufficientThreshold: 3000,
+            },
+            spikeProtection: {
+                count: 2,
+            },
+        },
+    },
+    {
+        task: {
+            name: "XRP_UpDown_Hourly",
+            slug: "xrp-up-or-down-november-${day}-${hour}${am_pm}-et",
+            symbol: "XRP",
+            active: true,
+            test: false,
+        },
+        schedule: {
+            cronExpression: "0 30-35 * * * *",
+            cronTimeZone: "America/New_York",
+            tickIntervalSeconds: 30,
+        },
+        position: {
+            positionSizeUsdc: 20,
+            extraSizeUsdc: 80,
+            allowExtraEntryAtCeiling: true,
+        },
+        riskControl: {
+            price: {
+                triggerPriceGt: 0.99,
+                takeProfitPrice: 0.998,
+            },
+            time: {
+                maxMinutesToEnd: 10,
+                monitorModeMinuteThreshold: 50,
+            },
+            statistics: {
+                zMin: 2.5,
+                ampMin: 0.001,
+                highVolatilityZThreshold: 3,
+            },
+            liquidity: {
+                sufficientThreshold: 1000,
             },
             spikeProtection: {
                 count: 2,

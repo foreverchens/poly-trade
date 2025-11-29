@@ -9,30 +9,21 @@ import { TakeProfitManager } from "./take-profit.js";
 import { UpBotCache } from "./up-bot-cache.js";
 import { saveOrder } from "../../db/repository.js";
 import logger from "../../core/Logger.js";
-import taskConfigs from "../../data/convergence-up.config.js";
 
 // 基于流动性计算下次tick 时间间隔
 const delay = (liq, t=100) => {const m=liq/t;return m<=2?1000:m>=10?10000:1000+9000*Math.log(1+4*((m-2)/8))/Math.log(5)};
 
 
 class TailConvergenceStrategy {
-    constructor(taskIndex = 0) {
+    constructor(taskConfig) {
         // 从导入的配置中获取指定任务
-        if (taskIndex >= taskConfigs.length) {
-            throw new Error(
-                `任务索引 ${taskIndex} 超出范围，配置文件只有 ${taskConfigs.length} 个任务`,
-            );
-        }
-
-        const taskConfig = taskConfigs[taskIndex];
         const config = this.flattenConfig(taskConfig);
 
-        this.taskIndex = taskIndex;
-        this.taskName = config.name || `Task_${taskIndex}`;
-        this.test = config.test ?? true;
+        this.taskName = config.name;
+        this.test = config.test;
 
         logger.info(
-            `[扫尾盘策略] 加载任务配置: 索引=${taskIndex}, 名称=${this.taskName}, 测试模式=${this.test ? "开启" : "关闭"}`,
+            `[扫尾盘策略] 加载任务配置: 名称=${this.taskName}, 测试模式=${this.test ? "开启" : "关闭"}`,
         );
 
         this.initializeConfig(config);

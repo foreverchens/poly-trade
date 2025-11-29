@@ -261,7 +261,7 @@
     let outcomeMode = "updown";
     let currentData = [];
     let currentTagId = DEFAULT_TAG_ID;
-    let currentEventTicker = null;
+    let currentEventGroupKey = null;
     let lastRenderedMarkets = [];
     let chartInterval = "1d";
     let lastChartDatasets = [];
@@ -491,51 +491,106 @@
         return trimmed.length ? trimmed : null;
     }
 
-    function buildEventOptions(list) {
-        const map = new Map();
+    const EXCLUDED_INTERVAL_PATTERN = /(?:^|[-_\s])(4h|15m)(?:[-_\s]|$)/i;
+
+    function getEventEndTimestamp(item) {
+        const event = Array.isArray(item?.events) ? item.events[0] : null;
+        const endValue = event?.endDate || item?.endDate;
+        const timestamp = normalizeSortDate(endValue);
+        return Number.isFinite(timestamp) ? timestamp : null;
+    }
+
+    function isExcludedIntervalIdentifier(value) {
+        if (typeof value !== "string") return false;
+        const normalized = value.trim().toLowerCase();
+        if (!normalized) return false;
+        return EXCLUDED_INTERVAL_PATTERN.test(normalized);
+    }
+
+    function shouldExcludeMarket(item) {
+        const event = Array.isArray(item?.events) ? item.events[0] : null;
+        const slugSources = [
+            typeof event?.slug === "string" ? event.slug : null,
+            typeof item?.slug === "string" ? item.slug : null,
+        ];
+        if (slugSources.some(isExcludedIntervalIdentifier)) return true;
+        const ticker = extractEventTicker(item);
+        if (isExcludedIntervalIdentifier(ticker)) return true;
+        return false;
+    }
+
+    function filterExcludedMarkets(list) {
+        return list.filter(item => !shouldExcludeMarket(item));
+    }
+
+    function buildEventGroupLabel(timestamp, count = 1) {
+        const baseLabel = `结束：${formatDateToCST(timestamp)}`;
+        if (!count || count <= 1) return baseLabel;
+        return `${baseLabel} · ${count} 事件`;
+    }
+
+    function pickNearestEventGroupKey(options) {
+        if (!Array.isArray(options) || !options.length) return null;
+        const now = Date.now();
+        const upcoming = options.find(option => option.timestamp >= now);
+        if (upcoming) return upcoming.key;
+        return options[options.length - 1].key;
+    }
+
+    function buildEventGroupOptions(list) {
+        const eventMap = new Map();
         list.forEach(item => {
+            if (shouldExcludeMarket(item)) return;
             const ticker = extractEventTicker(item);
-            if (!ticker || map.has(ticker)) return;
-            if (ticker.includes("15m") || ticker.includes("4h")) return;
-            const event = Array.isArray(item.events) ? item.events[0] : null;
-            map.set(ticker, {
-                ticker,
-                label: event?.title || event?.slug || ticker,
-                endDate: event?.endDate || null,
-            });
+            if (!ticker || eventMap.has(ticker)) return;
+            if (isExcludedIntervalIdentifier(ticker)) return;
+            const timestamp = getEventEndTimestamp(item);
+            if (timestamp === null) return;
+            eventMap.set(ticker, {ticker, timestamp});
         });
-        return [...map.values()].sort((a, b) => {
-            const endA = normalizeSortDate(a.endDate);
-            const endB = normalizeSortDate(b.endDate);
-            if (endA !== endB) return endA - endB;
-            return a.ticker.localeCompare(b.ticker);
+        const groupMap = new Map();
+        eventMap.forEach(({ticker, timestamp}) => {
+            const key = String(timestamp);
+            if (!groupMap.has(key)) {
+                groupMap.set(key, {
+                    key,
+                    timestamp,
+                    tickers: new Set(),
+                });
+            }
+            groupMap.get(key).tickers.add(ticker);
         });
+        return [...groupMap.values()].map(group => ({
+            key: group.key,
+            timestamp: group.timestamp,
+            count: group.tickers.size,
+            label: buildEventGroupLabel(group.timestamp, group.tickers.size),
+        })).sort((a, b) => a.timestamp - b.timestamp);
     }
 
     function updateEventFilterOptions(list) {
         if (!eventSelect) return;
-        const options = buildEventOptions(list);
+        const options = buildEventGroupOptions(list);
         eventSelect.innerHTML = "";
         if (!options.length) {
             const opt = document.createElement("option");
             opt.value = "";
-            opt.textContent = "暂无事件";
+            opt.textContent = "暂无结束组";
             eventSelect.appendChild(opt);
             eventSelect.disabled = true;
-            currentEventTicker = null;
+            currentEventGroupKey = null;
             return;
         }
         options.forEach(info => {
             const opt = document.createElement("option");
-            opt.value = info.ticker;
-            const labelText = info.label === info.ticker ? info.ticker : `${info.ticker} · ${info.label}`;
-            opt.textContent = labelText;
+            opt.value = info.key;
+            opt.textContent = info.label;
             eventSelect.appendChild(opt);
         });
-        if (!currentEventTicker || !options.some(opt => opt.ticker === currentEventTicker)) {
-            currentEventTicker = options[0].ticker;
+        if (!currentEventGroupKey || !options.some(opt => opt.key === currentEventGroupKey)) {
+            currentEventGroupKey = pickNearestEventGroupKey(options);
         }
-        eventSelect.value = currentEventTicker;
+        eventSelect.value = currentEventGroupKey;
         eventSelect.disabled = options.length <= 1;
     }
 
@@ -551,9 +606,13 @@
         return null;
     }
 
-    function filterByEvent(list) {
-        if (!currentEventTicker) return list;
-        return list.filter(item => extractEventTicker(item) === currentEventTicker);
+    function filterByEventGroup(list) {
+        if (!currentEventGroupKey) return list;
+        return list.filter(item => {
+            const timestamp = getEventEndTimestamp(item);
+            if (timestamp === null) return false;
+            return String(timestamp) === currentEventGroupKey;
+        });
     }
 
     function filterByOutcomeMode(list) {
@@ -1962,7 +2021,7 @@ function handleTokenSelectionChange(tokenId, checked) {
     if (eventSelect) {
         const opt = document.createElement("option");
         opt.value = "";
-        opt.textContent = "加载事件…";
+        opt.textContent = "加载结束组…";
         opt.disabled = true;
         opt.selected = true;
         eventSelect.appendChild(opt);
@@ -2280,28 +2339,38 @@ function handleTokenSelectionChange(tokenId, checked) {
         }, 4000);
     }
 
+    function getCurrentEventGroupLabel() {
+        if (!currentEventGroupKey) return null;
+        const timestamp = Number(currentEventGroupKey);
+        if (!Number.isFinite(timestamp)) return null;
+        return formatDateToCST(timestamp);
+    }
+
     function updateStatus(visibleCount) {
         if (!statusEl) return;
-        if (!currentData.length) {
+        const loadedCount = filterExcludedMarkets(currentData).length;
+        if (!loadedCount) {
             const label = getTagLabel(currentTagId);
             statusEl.textContent = label ? `暂无 ${label} 数据` : "暂无数据";
             return;
         }
         const label = getTagLabel(currentTagId);
         const parts = [
-            `已载入 ${currentData.length} 条`,
+            `已载入 ${loadedCount} 条`,
             `显示 ${visibleCount} 条`,
         ];
         if (label) parts.push(`标签：${label}`);
-        if (currentEventTicker) parts.push(`事件：${currentEventTicker}`);
+        const eventGroupLabel = getCurrentEventGroupLabel();
+        if (eventGroupLabel) parts.push(`结束时间：${eventGroupLabel}`);
         statusEl.textContent = parts.join("，");
     }
 
     function refreshView({skipChart = false} = {}) {
-        const outcomeFiltered = filterByOutcomeMode(currentData);
+        const sanitized = filterExcludedMarkets(currentData);
+        const outcomeFiltered = filterByOutcomeMode(sanitized);
         updateEventFilterOptions(outcomeFiltered);
-        const byEvent = filterByEvent(outcomeFiltered);
-        const sorted = sortMarkets(byEvent);
+        const byGroup = filterByEventGroup(outcomeFiltered);
+        const sorted = sortMarkets(byGroup);
         const enriched = enrichMarketStats(sorted);
         render(enriched);
         updateStatus(sorted.length);
@@ -2380,7 +2449,7 @@ function handleTokenSelectionChange(tokenId, checked) {
     }
     if (eventSelect) {
         eventSelect.addEventListener("change", (evt) => {
-            currentEventTicker = evt.target.value || null;
+            currentEventGroupKey = evt.target.value || null;
             refreshView();
         });
     }

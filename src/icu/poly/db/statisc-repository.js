@@ -78,6 +78,7 @@ export async function createMinuteSample(data) {
                 market_slug: data.market_slug,
                 minute_idx: data.minute_idx,
                 assert_price: data.assert_price,
+                assert_amp: data.assert_amp,
                 up_price: data.up_price,
                 down_price: data.down_price,
                 top_side: data.top_side,

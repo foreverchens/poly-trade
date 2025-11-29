@@ -74,6 +74,7 @@ model hour_minute_samples {
   market_slug      String  // 对应主表的market_slug（唯一定位该小时）
   minute_idx       Int     // 1-60
   assert_price     String  // 锚定资产的USDT价格
+  assert_amp       Int   @default(0)   // 资产相对于开盘价涨跌幅 百分数×100
   up_price         Int     // 概率×1000
   down_price       Int     // 概率×1000
   top_side         String  // 'UP' / 'DOWN'

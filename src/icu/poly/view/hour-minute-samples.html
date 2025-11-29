@@ -358,6 +358,7 @@
                 <tr>
                     <th>minute</th>
                     <th>assert_price</th>
+                    <th>assert_amp(%)</th>
                     <th>up_price(%)</th>
                     <th>down_price(%)</th>
                     <th>top_price(%)</th>
@@ -405,6 +406,7 @@
 
     const METRICS = [
         {key: "assert_price", label: "锚定资产价格 (USDT)", precision: 4, transform: asNumber},
+        {key: "assert_amp", label: "锚定资产涨跌幅 (%)", precision: 2, transform: value => scaleBy(value, 100)},
         {key: "up_price", label: "UP 概率 (%)", precision: 2, transform: value => scaleProbability(value)},
         {key: "down_price", label: "DOWN 概率 (%)", precision: 2, transform: value => scaleProbability(value)},
         {key: "top_price", label: "Top 价格 (%)", precision: 2, transform: value => scaleProbability(value)},
@@ -413,6 +415,7 @@
         {key: "top_vol", label: "Top Vol", precision: 0, transform: asNumber},
         {key: "liq_sum", label: "Liq Sum", precision: 0, transform: asNumber},
     ];
+    const CHART_EXCLUDED_KEYS = new Set(["top_vol"]);
 
     queryForm.addEventListener("submit", handleSubmit);
 
@@ -494,11 +497,12 @@
         summaryMeta.textContent = `market_slug：${slug} · 最新 minute：${latest.minute_idx}`;
         const summaryItems = [
             {label: "Top Side", value: latest.top_side || "—"},
-            {label: "Top 价格(%)", value: formatValue(latest, METRICS[3])},
-            {label: "Top 价差(%)", value: formatValue(latest, METRICS[4])},
-            {label: "Top Z", value: formatValue(latest, METRICS[5])},
-            {label: "Top Vol", value: formatValue(latest, METRICS[6])},
-            {label: "Liq Sum", value: formatValue(latest, METRICS[7])},
+            {label: "涨跌幅(%)", value: formatValue(latest, getMetric("assert_amp"))},
+            {label: "Top 价格(%)", value: formatValue(latest, getMetric("top_price"))},
+            {label: "Top 价差(%)", value: formatValue(latest, getMetric("top_price_spread"))},
+            {label: "Top Z", value: formatValue(latest, getMetric("top_z"))},
+            {label: "Top Vol", value: formatValue(latest, getMetric("top_vol"))},
+            {label: "Liq Sum", value: formatValue(latest, getMetric("liq_sum"))},
             {label: "样本数", value: `${samples.length}`},
         ];
         summaryGrid.innerHTML = summaryItems.map(item => `
@@ -517,7 +521,8 @@
         if (!hasSamples) {
             return;
         }
-        METRICS.forEach((metric, index) => {
+        const chartMetrics = METRICS.filter(metric => !CHART_EXCLUDED_KEYS.has(metric.key));
+        chartMetrics.forEach((metric, index) => {
             const points = samples
                 .map(sample => {
                     const y = metric.transform(sample[metric.key]);
@@ -560,16 +565,10 @@
         }
         tableMeta.textContent = `共 ${samples.length} 条，每条代表 1 分钟`;
         const rows = samples.map(sample => {
+            const metricValues = METRICS.map(metric => formatValue(sample, metric));
             const cells = [
                 sample.minute_idx,
-                formatValue(sample, METRICS[0]),
-                formatValue(sample, METRICS[1]),
-                formatValue(sample, METRICS[2]),
-                formatValue(sample, METRICS[3]),
-                formatValue(sample, METRICS[4]),
-                formatValue(sample, METRICS[5]),
-                formatValue(sample, METRICS[6]),
-                formatValue(sample, METRICS[7]),
+                ...metricValues,
                 sample.top_side || "—",
             ];
             return `<tr>${cells.map(cell => `<td>${cell ?? "—"}</td>`).join("")}</tr>`;
@@ -659,6 +658,7 @@
     }
 
     function formatValue(sample, metric) {
+        if (!metric) return "—";
         const value = metric.transform(sample[metric.key]);
         return Number.isFinite(value) ? formatNumber(value, metric.precision) : "—";
     }
@@ -669,6 +669,10 @@
             maximumFractionDigits: precision,
         });
         return formatter.format(value);
+    }
+
+    function getMetric(key) {
+        return METRICS.find(metric => metric.key === key) || null;
     }
 
     function asNumber(value) {

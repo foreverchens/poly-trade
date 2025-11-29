@@ -146,6 +146,7 @@ export async function recordMinuteSample(marketSlug, symbol, upTokenId, downToke
 
         // Fetch asset price from Binance
         const assertPrice = await fetchAssetPrice(symbol);
+        const numericAssertPrice = Number(assertPrice);
 
         const client = getPolyClient();
 
@@ -180,6 +181,13 @@ export async function recordMinuteSample(marketSlug, symbol, upTokenId, downToke
         // Remaining time: calculate based on market end time
         const overview = await getHourOverview(marketSlug);
         let topZ = null;
+        let assertAmp = 0;
+
+        const openPrice = Number(overview?.open_price || 0);
+        if (openPrice > 0 && Number.isFinite(numericAssertPrice)) {
+            assertAmp = Math.round(((numericAssertPrice - openPrice) / openPrice) * 10000);
+        }
+
         if (overview?.market_end_time) {
             try {
                 const endTime = new Date(overview.market_end_time.replace(' ', 'T') + '+08:00');
@@ -201,6 +209,7 @@ export async function recordMinuteSample(marketSlug, symbol, upTokenId, downToke
             market_slug: marketSlug,
             minute_idx: minuteIdx,
             assert_price: assertPrice,
+            assert_amp: assertAmp,
             up_price: Math.round(upPrice * 1000), // Store as ×1000
             down_price: Math.round(downPrice * 1000),
             top_side: topSide,

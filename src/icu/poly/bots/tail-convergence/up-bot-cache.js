@@ -1,4 +1,5 @@
 import dayjs from "dayjs";
+import cron from "node-cron";
 import { resolveSlugList, fetchMarkets, getAsksLiq, resolvePositionSize } from "./common.js";
 import logger from "../../core/Logger.js";
 import { getPolyClient } from "../../core/poly-client-manage.js";
@@ -8,7 +9,7 @@ export class UpBotCache {
         this.slugTemplate = config.slug;
         this.maxMinutesToEnd = config.maxMinutesToEnd;
         this.maxSizeUsdc = config.maxSizeUsdc;
-
+        this.cronExpression = config.cronExpression || "* 30-59 * * * *";
         // 运行时数据存储
         this.store = {
             hour: null,
@@ -17,6 +18,26 @@ export class UpBotCache {
             balance: 0,
             liquidity: new Map(), // tokenId -> [val1, val2, val3, ...]
         };
+
+        this.tokenIds = null; // [upTokenId, downTokenId] 当前市场tokenIds
+        this.orderBookCache = new Map(); // tokenId -> { asks, bestBidPrice, bestAskPrice, updatedAt }
+
+        // 订单簿轮询任务
+        this.orderBookCronTask = cron.schedule(this.cronExpression, async () => {
+            this.getTargetSlug();
+            const market = await this.getMarket();
+            this._resolveTokenIds(market);
+            if (!this.tokenIds) {
+                return;
+            }
+            // 立即执行一次，确保缓存迅速可用
+            for (const tokenId of this.tokenIds) {
+                await this._fetchAndCacheOrderBook(tokenId);
+            }
+        });
+
+        // 命中次数队列、用于计算命中率、 [getAsksLiq走缓存, getAsksLiq走查询,getBestPrice走缓存,getBestPrice走查询] 4个位置分别记录命中次数
+        this.hitArr = new Array(4).fill(1);
     }
 
     /**
@@ -31,6 +52,17 @@ export class UpBotCache {
             this.store.market = null;
             this.store.balance = 0;
             this.store.liquidity.clear();
+
+            // 重置tokenIds和订单簿缓存
+            this.tokenIds = null;
+            this.orderBookCache.clear();
+
+            // 打印命中率
+            logger.info(`[UpBotCache] 缓存命中率:
+                getAsksLiq函数缓存命中率为 ${this.hitArr[0]}/(${this.hitArr[0]} + ${this.hitArr[1]}) = ${((this.hitArr[0] / (this.hitArr[0] + this.hitArr[1])) * 100).toFixed(2)}%,
+                getBestPrice函数缓存命中率为 ${this.hitArr[2]}/(${this.hitArr[2]} + ${this.hitArr[3]}) = ${((this.hitArr[2] / (this.hitArr[2] + this.hitArr[3])) * 100).toFixed(2)}%`);
+            // 重置命中次数队列
+            this.hitArr.fill(1);
         }
     }
 
@@ -70,6 +102,52 @@ export class UpBotCache {
         }
         // 市场对象较大，仅在首次获取时打印，后续不打印命中日志，以免刷屏
         return this.store.market;
+    }
+
+    _resolveTokenIds(market) {
+        if (this.tokenIds) {
+            return this.tokenIds;
+        }
+        try {
+            const tokenIds = JSON.parse(market.clobTokenIds || "[]");
+            if (!Array.isArray(tokenIds) || tokenIds.length < 2) {
+                return null;
+            }
+            let upTokenId = tokenIds[0];
+            let downTokenId = tokenIds[1];
+            this.tokenIds = [upTokenId, downTokenId];
+            return this.tokenIds;
+        } catch (err) {
+            logger.error("[UpBotCache] 解析clobTokenIds失败", err?.message ?? err);
+            return null;
+        }
+    }
+
+    async _fetchAndCacheOrderBook(tokenId) {
+        if (!tokenId) {
+            return null;
+        }
+        const orderBook = await getPolyClient().getOrderBook(tokenId);
+        if (!orderBook) {
+            return null;
+        }
+        const asksSnapshot = orderBook.asks || [];
+        const bestBidPrice =
+            orderBook.bids && orderBook.bids.length
+                ? orderBook.bids[orderBook.bids.length - 1]?.price
+                : 0;
+        const bestAskPrice =
+            orderBook.asks && orderBook.asks.length
+                ? orderBook.asks[orderBook.asks.length - 1]?.price
+                : 0;
+        const rlt = {
+            asks: asksSnapshot,
+            bestBidPrice: bestBidPrice,
+            bestAskPrice: bestAskPrice,
+            updatedAt: Date.now(),
+        };
+        this.orderBookCache.set(tokenId, rlt);
+        return rlt;
     }
 
     /**
@@ -123,14 +201,54 @@ export class UpBotCache {
      * 获取卖方流动性 历史3个样本求平均值
      */
     async getAsksLiq(tokenId) {
-        const newVal = await getAsksLiq(tokenId);
+        let asks = [];
+        const cachedOrderBook = this.orderBookCache.get(tokenId);
+        if (cachedOrderBook?.updatedAt && cachedOrderBook?.updatedAt > Date.now() - 1000) {
+            // 从缓存中获取
+            asks = cachedOrderBook.asks;
+            this.hitArr[0]++;
+        } else {
+            // 直接查询并缓存
+            const rlt = await this._fetchAndCacheOrderBook(tokenId);
+            if (rlt) {
+                asks = rlt.asks;
+            }
+            this.hitArr[1]++;
+        }
+        // 计算流动性
+        const newVal = asks.reduce((sum, ask) => {
+            if (Number(ask.price) > 0.99) {
+                return sum;
+            }
+            return sum + Number(ask.size|| 0);
+        }, 0);
+
+        // 更新流动性队列
         let queue = this.store.liquidity.get(tokenId) ?? [];
         queue.push(newVal);
         if (queue.length > 3) {
             queue.shift();
         }
         this.store.liquidity.set(tokenId, queue);
+        // 求平均值
         const avg = queue.reduce((sum, val) => sum + val, 0) / queue.length;
         return Number(avg.toFixed(1));
+    }
+
+    async getBestPrice(tokenId) {
+        const cachedOrderBook = this.orderBookCache.get(tokenId);
+        if (cachedOrderBook?.updatedAt && cachedOrderBook?.updatedAt > Date.now() - 1000) {
+            this.hitArr[2]++;
+            return [
+                Number(cachedOrderBook.bestBidPrice) ?? 0,
+                Number(cachedOrderBook.bestAskPrice) ?? 0,
+            ];
+        }
+        this.hitArr[3]++;
+        const rlt = await this._fetchAndCacheOrderBook(tokenId);
+        if (rlt) {
+            return [Number(rlt.bestBidPrice) ?? 0, Number(rlt.bestAskPrice) ?? 0];
+        }
+        return [0, 0];
     }
 }

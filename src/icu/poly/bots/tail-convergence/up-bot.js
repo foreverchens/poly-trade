@@ -40,6 +40,7 @@ class TailConvergenceStrategy {
             slug: this.slugTemplate,
             maxMinutesToEnd: this.maxMinutesToEnd,
             maxSizeUsdc: this.extraSizeUsdc + this.positionSizeUsdc,
+            cronExpression: "* 30-59 * * * *",
         });
 
         // 初始化止盈管理器
@@ -344,12 +345,8 @@ class TailConvergenceStrategy {
 
         const [yesTokenId, noTokenId] = JSON.parse(market.clobTokenIds);
 
-        const [yesPrices, noPrices] = await Promise.all([
-            fetchBestPrice(yesTokenId),
-            fetchBestPrice(noTokenId),
-        ]);
-        const [yesBid, yesAsk] = yesPrices;
-        const [noBid, noAsk] = noPrices;
+        const [yesBid, yesAsk] = await this.cache.getBestPrice(yesTokenId);
+        const [noBid, noAsk] = await this.cache.getBestPrice(noTokenId);
         if (yesAsk === 0 || noAsk === 0) {
             logger.info(
                 `[${this.symbol}-${this.currentLoopHour}时] yesAsk=${yesAsk} noAsk=${noAsk} 卖方流动性为0, 结束信号`,
@@ -580,6 +577,20 @@ class TailConvergenceStrategy {
      * @param {Object} signal
      */
     async handleSignal(signal) {
+        // 二次检查价格、如果最新价格 小于信号价格、直接返回
+        const [yesBid, yesAsk] = await this.cache.getBestPrice(signal.chosen.tokenId);
+        if (yesAsk < signal.chosen.price) {
+            // 如果只是短暂波动造成价格小于信号价格、还有二次信号
+            // 如果是尾部反转、则可避免风险
+            // 如果价格相等、则无影响
+            // 如果价格大于信号价格、则可能错过机会、需要修改为最新价格
+            logger.info(
+                `[${this.symbol}-${this.currentLoopHour}时] 最新价格${yesAsk}小于信号价格${signal.chosen.price}，直接返回`,
+            );
+            return;
+        }
+        signal.chosen.price = yesAsk;
+
         // 首次建仓
         if (!this.initialEntryDone) {
             await this.openPosition({

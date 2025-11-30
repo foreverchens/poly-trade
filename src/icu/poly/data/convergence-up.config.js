@@ -7,8 +7,9 @@ export default [
         // 任务基础配置
         task: {
             name: "ETH_UpDown_Hourly",
-            slug: "ethereum-up-or-down-november-${day}-${hour}${am_pm}-et",
+            slug: "ethereum-up-or-down-december-${day}-${hour}${am_pm}-et",
             symbol: "ETH",
+            pkIdx: 8, // 私钥索引编号
             active: true,
             test: false,
         },
@@ -68,8 +69,9 @@ export default [
     {
         task: {
             name: "BTC_UpDown_Hourly",
-            slug: "bitcoin-up-or-down-november-${day}-${hour}${am_pm}-et",
+            slug: "bitcoin-up-or-down-december-${day}-${hour}${am_pm}-et",
             symbol: "BTC",
+            pkIdx: 8,
             active: true,
             test: false,
         },
@@ -80,7 +82,7 @@ export default [
         },
         position: {
             positionSizeUsdc: 100,
-            extraSizeUsdc: 300,
+            extraSizeUsdc: 500,
             allowExtraEntryAtCeiling: true,
         },
         riskControl: {
@@ -108,8 +110,9 @@ export default [
     {
         task: {
             name: "XRP_UpDown_Hourly",
-            slug: "xrp-up-or-down-november-${day}-${hour}${am_pm}-et",
+            slug: "xrp-up-or-down-december-${day}-${hour}${am_pm}-et",
             symbol: "XRP",
+            pkIdx: 8,
             active: true,
             test: false,
         },
@@ -148,8 +151,9 @@ export default [
     {
         task: {
             name: "SOL_UpDown_Hourly",
-            slug: "solana-up-or-down-november-${day}-${hour}${am_pm}-et",
+            slug: "solana-up-or-down-december-${day}-${hour}${am_pm}-et",
             symbol: "SOL",
+            pkIdx: 8,
             active: true,
             test: false,
         },

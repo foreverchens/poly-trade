@@ -7,30 +7,49 @@ import {
     finalizeHourMarket,
 } from './hour-market-recorder.js';
 import { getHourOverview, deleteHourDataBefore } from '../db/statisc-repository.js';
+import convergenceTaskConfigs from '../data/convergence-up.config.js';
 
-// 配置
-const CONFIG = {
-    symbol: 'BTC',
-    eventSlugTemplate: 'bitcoin-up-or-down-november-${day}-${hour}${am_pm}-et',
-    scheduleIntervalMs: 1000, // 每秒调度一次，便于精确到 :30
-    sampleSecond: 30, // 每分钟第30秒采样
-};
+const DEFAULT_SCHEDULE_INTERVAL_MS = 10_000; // 每个任务10秒调度一次
+const DEFAULT_SAMPLE_SECOND = 30; // 在30秒附近采样
 
 const UTC8_OFFSET = 8 * 60 * 60 * 1000;
 const TWENTY_FOUR_HOURS_MS = 24 * 60 * 60 * 1000;
 
-// 状态追踪
-const state = {
-    currentMarketSlug: null,      // 当前小时市场的slug
-    upTokenId: null,               // UP token ID
-    downTokenId: null,             // DOWN token ID
-    initialized: false,            // 是否已初始化
-    lastRecordedMinute: -1,        // 上次录入的分钟数
-};
+function createSchedulerContext(taskConfig) {
+    const symbol = taskConfig?.task?.symbol;
+    const eventSlugTemplate = taskConfig?.task?.slug;
+    const taskName = taskConfig?.task?.name || symbol || 'UNKNOWN';
 
-let isScheduling = false;
-let lastNoMarketLogTs = 0;
-let lastCleanupHourKey = null;
+    if (!symbol || !eventSlugTemplate) {
+        throw new Error(`[小时数据调度] 任务 ${taskName} 缺少 symbol 或 slug 配置`);
+    }
+
+    const config = {
+        name: taskName,
+        symbol,
+        eventSlugTemplate,
+        scheduleIntervalMs: DEFAULT_SCHEDULE_INTERVAL_MS,
+        sampleSecond: DEFAULT_SAMPLE_SECOND,
+    };
+
+    return {
+        config,
+        state: {
+            currentMarketSlug: null,
+            upTokenId: null,
+            downTokenId: null,
+            initialized: false,
+            lastRecordedMinute: -1,
+        },
+        isScheduling: false,
+        lastNoMarketLogTs: 0,
+        lastCleanupHourKey: null,
+    };
+}
+
+function schedulerPrefix(context) {
+    return `[小时数据调度][${context.config.symbol}]`;
+}
 
 function calcUtc8Components(timestamp) {
     const utc8Date = new Date(timestamp + UTC8_OFFSET);
@@ -53,13 +72,9 @@ function getUtc8DayHourFromTimestamp(timestamp) {
     return { day, hour };
 }
 
-/**
- * 获取当前活跃的小时市场
- * @returns {Promise<Object|null>}
- */
-async function getCurrentHourMarket() {
+async function getCurrentHourMarket(context) {
     try {
-        const eventSlug = resolveSlugList(CONFIG.eventSlugTemplate);
+        const eventSlug = resolveSlugList(context.config.eventSlugTemplate);
         const client = getPolyClient();
         const event = await client.getEventBySlug(eventSlug);
 
@@ -67,101 +82,90 @@ async function getCurrentHourMarket() {
             return null;
         }
 
-        // 通常事件只有一个市场
         return event.markets[0];
     } catch (error) {
-        logger.error('[小时数据调度] 获取当前小时市场失败:', error);
+        logger.error(`${schedulerPrefix(context)} 获取当前小时市场失败:`, error);
         return null;
     }
 }
 
-/**
- * 尝试初始化当前小时市场
- */
-async function tryInitializeMarket() {
+async function tryInitializeMarket(context) {
+    const prefix = schedulerPrefix(context);
     try {
-        const market = await getCurrentHourMarket();
+        const market = await getCurrentHourMarket(context);
         if (!market) {
             const now = Date.now();
-            if (now - lastNoMarketLogTs > 60 * 1000) {
-                logger.info('[小时数据调度] 当前没有活跃的小时市场');
-                lastNoMarketLogTs = now;
+            if (now - context.lastNoMarketLogTs > 60 * 1000) {
+                logger.info(`${prefix} 当前没有活跃的小时市场`);
+                context.lastNoMarketLogTs = now;
             }
             return;
         }
 
         const marketSlug = market.marketSlug || market.slug;
 
-        // 如果已经在追踪这个市场，不重复初始化
-        if (state.currentMarketSlug === marketSlug && state.initialized) {
+        if (context.state.currentMarketSlug === marketSlug && context.state.initialized) {
             return;
         }
 
-        // 检查数据库是否已存在
         const existing = await getHourOverview(marketSlug);
         if (existing) {
-            logger.info(`[小时数据调度] 市场 ${marketSlug} 已初始化，加载到状态`);
+            logger.info(`${prefix} 市场 ${marketSlug} 已初始化，加载到状态`);
         } else {
-            // 初始化新市场
-            await initializeHourMarket(market, CONFIG.symbol, CONFIG.eventSlugTemplate);
+            await initializeHourMarket(market, context.config.symbol, context.config.eventSlugTemplate);
         }
 
-        // 提取token IDs
         const tokens = JSON.parse(market.clobTokenIds) || [];
-        const upToken =tokens[0];
+        const upToken = tokens[0];
         const downToken = tokens[1];
 
         if (!upToken || !downToken) {
-            logger.error(`[小时数据调度] 市场 ${marketSlug} 缺少UP或DOWN token`);
+            logger.error(`${prefix} 市场 ${marketSlug} 缺少UP或DOWN token`);
             return;
         }
 
-        // 更新状态
-        state.currentMarketSlug = marketSlug;
-        state.upTokenId = upToken;
-        state.downTokenId = downToken;
-        state.initialized = true;
-        state.lastRecordedMinute = -1; // 重置录入记录
+        context.state.currentMarketSlug = marketSlug;
+        context.state.upTokenId = upToken;
+        context.state.downTokenId = downToken;
+        context.state.initialized = true;
+        context.state.lastRecordedMinute = -1;
 
-        logger.info(`[小时数据调度] ✓ 市场 ${marketSlug} 已就绪 (UP: ${upToken.slice(0, 8)}..., DOWN: ${downToken.slice(0, 8)}...)`);
+        logger.info(`${prefix} ✓ 市场 ${marketSlug} 已就绪 (UP: ${upToken.slice(0, 8)}..., DOWN: ${downToken.slice(0, 8)}...)`);
     } catch (error) {
-        logger.error('[小时数据调度] 初始化市场失败:', error);
+        logger.error(`${prefix} 初始化市场失败:`, error);
     }
 }
 
-/**
- * 完成上一小时市场的数据录入
- */
-async function finalizePreviousHourMarket() {
+async function finalizePreviousHourMarket(context) {
+    const prefix = schedulerPrefix(context);
     try {
-        if (!state.currentMarketSlug) {
-            logger.info('[小时数据调度] 没有需要完成的市场');
+        if (!context.state.currentMarketSlug) {
+            logger.info(`${prefix} 没有需要完成的市场`);
             return;
         }
 
-        logger.info(`[小时数据调度] 准备完成上一小时市场 ${state.currentMarketSlug} 的数据录入`);
+        logger.info(`${prefix} 准备完成上一小时市场 ${context.state.currentMarketSlug} 的数据录入`);
 
-        await finalizeHourMarket(state.currentMarketSlug, CONFIG.symbol);
+        await finalizeHourMarket(context.state.currentMarketSlug, context.config.symbol);
 
-        // 重置状态，准备下一个小时
-        state.currentMarketSlug = null;
-        state.upTokenId = null;
-        state.downTokenId = null;
-        state.initialized = false;
-        state.lastRecordedMinute = -1;
+        context.state.currentMarketSlug = null;
+        context.state.upTokenId = null;
+        context.state.downTokenId = null;
+        context.state.initialized = false;
+        context.state.lastRecordedMinute = -1;
 
-        logger.info('[小时数据调度] ✓ 上一小时市场数据录入已完成，状态已重置');
+        logger.info(`${prefix} ✓ 上一小时市场数据录入已完成，状态已重置`);
     } catch (error) {
-        logger.error('[小时数据调度] 完成上一小时市场失败:', error);
+        logger.error(`${prefix} 完成上一小时市场失败:`, error);
     }
 }
 
-async function cleanupOldHourData(currentDay, currentHour) {
+async function cleanupOldHourData(context, currentDay, currentHour) {
     const hourKey = `${currentDay}-${currentHour}`;
-    if (lastCleanupHourKey === hourKey) {
+    if (context.lastCleanupHourKey === hourKey) {
         return;
     }
-    lastCleanupHourKey = hourKey;
+    context.lastCleanupHourKey = hourKey;
 
     try {
         const cutoffTs = Date.now() - TWENTY_FOUR_HOURS_MS;
@@ -170,130 +174,137 @@ async function cleanupOldHourData(currentDay, currentHour) {
 
         if (result.overviews || result.samples) {
             logger.info(
-                `[小时数据调度] 清理24小时前数据: 主表 ${result.overviews} 条, 附表 ${result.samples} 条` +
-                ` (阈值 ${thresholdDay} ${String(thresholdHour).padStart(2, '0')}:00)`
+                `${schedulerPrefix(context)} 清理24小时前数据: 主表 ${result.overviews} 条, 附表 ${result.samples} 条 ` +
+                `(阈值 ${thresholdDay} ${String(thresholdHour).padStart(2, '0')}:00)`
             );
         }
     } catch (error) {
-        logger.error('[小时数据调度] 清理旧数据失败:', error);
+        logger.error(`${schedulerPrefix(context)} 清理旧数据失败:`, error);
     }
 }
 
-/**
- * 按分钟索引录入市场数据（在该分钟的第30秒触发）
- * @param {number} minuteIdx - 要录入的分钟索引 (0-59)
- */
-async function recordPreviousMinute(minuteIdx) {
+async function recordPreviousMinute(context, minuteIdx) {
+    const prefix = schedulerPrefix(context);
     try {
-        if (!state.initialized || !state.currentMarketSlug) {
-            logger.warn('[小时数据调度] 市场未初始化，跳过分钟数据录入');
+        if (!context.state.initialized || !context.state.currentMarketSlug) {
+            logger.warn(`${prefix} 市场未初始化，跳过分钟数据录入`);
             return;
         }
 
-        if (!state.upTokenId || !state.downTokenId) {
-            logger.error('[小时数据调度] 缺少token ID，无法录入数据');
+        if (!context.state.upTokenId || !context.state.downTokenId) {
+            logger.error(`${prefix} 缺少token ID，无法录入数据`);
             return;
         }
 
-        // 避免重复录入
-        if (state.lastRecordedMinute === minuteIdx) {
-            logger.debug(`[小时数据调度] 第 ${minuteIdx} 分钟数据已录入，跳过`);
+        if (context.state.lastRecordedMinute === minuteIdx) {
+            logger.debug(`${prefix} 第 ${minuteIdx} 分钟数据已录入，跳过`);
             return;
         }
 
-        console.log(`[小时数据调度] 录入第 ${minuteIdx} 分钟数据...`);
+        logger.info(`${prefix} 录入第 ${minuteIdx} 分钟数据...`);
 
         await recordMinuteSample(
-            state.currentMarketSlug,
-            CONFIG.symbol,
-            state.upTokenId,
-            state.downTokenId,
+            context.state.currentMarketSlug,
+            context.config.symbol,
+            context.state.upTokenId,
+            context.state.downTokenId,
             minuteIdx
         );
 
-        state.lastRecordedMinute = minuteIdx;
+        context.state.lastRecordedMinute = minuteIdx;
 
-        console.log(`[小时数据调度] ✓ 第 ${minuteIdx} 分钟数据已录入`);
+        logger.info(`${prefix} ✓ 第 ${minuteIdx} 分钟数据已录入`);
     } catch (error) {
-        logger.error(`[小时数据调度] 录入第 ${minuteIdx} 分钟数据失败:`, error);
+        logger.error(`${prefix} 录入第 ${minuteIdx} 分钟数据失败:`, error);
     }
 }
 
-/**
- * 主调度逻辑 - 每秒执行一次
- */
-async function scheduleTask() {
+async function scheduleTask(context) {
+    const prefix = schedulerPrefix(context);
     const { day, hour, minute, second } = getUtc8Clock();
-    const inHourWarmupWindow = minute === 0 && second < CONFIG.sampleSecond;
+    const inHourWarmupWindow = minute === 0 && second < context.config.sampleSecond;
 
     if (inHourWarmupWindow) {
-        // 新的小时刚开始，先补齐上一小时主表
-        if (state.initialized && state.currentMarketSlug) {
-            logger.info(`[小时数据调度] ${hour.toString().padStart(2, '0')}:00 到来，完成上一小时市场 ${state.currentMarketSlug} 的剩余字段录入`);
-            await finalizePreviousHourMarket();
+        if (context.state.initialized && context.state.currentMarketSlug) {
+            logger.info(`${prefix} ${hour.toString().padStart(2, '0')}:00 到来，完成上一小时市场 ${context.state.currentMarketSlug} 的剩余字段录入`);
+            await finalizePreviousHourMarket(context);
         }
 
-        await cleanupOldHourData(day, hour);
+        await cleanupOldHourData(context, day, hour);
 
-        // 然后尝试初始化新的小时市场（可能需要多次尝试直至市场出现）
-        if (!state.initialized) {
-            await tryInitializeMarket();
+        if (!context.state.initialized) {
+            await tryInitializeMarket(context);
         }
         return;
     }
 
-    // 非整点窗口，如果市场尚未就绪则持续尝试
-    if (!state.initialized) {
-        await tryInitializeMarket();
-        if (!state.initialized) {
+    if (!context.state.initialized) {
+        await tryInitializeMarket(context);
+        if (!context.state.initialized) {
             return;
         }
     }
 
-    // 在每分钟第sampleSecond秒生成当分钟的数据，如 10:05:30 生成 minuteIdx=5
-    if (second >= CONFIG.sampleSecond && state.lastRecordedMinute !== minute) {
-        await recordPreviousMinute(minute);
+    if (second >= context.config.sampleSecond && context.state.lastRecordedMinute !== minute) {
+        await recordPreviousMinute(context, minute);
     }
 }
 
-/**
- * 启动调度器
- */
-export async function startScheduler() {
-    logger.info('[小时数据调度] ==========================================');
-    logger.info('[小时数据调度] 小时市场数据录入调度器启动');
-    logger.info('[小时数据调度] 资产符号: ' + CONFIG.symbol);
-    logger.info('[小时数据调度] 事件模板: ' + CONFIG.eventSlugTemplate);
-    logger.info('[小时数据调度] 调度间隔: 每秒');
-    logger.info('[小时数据调度] ==========================================\n');
-
-    async function safeRun(context = '') {
-        if (isScheduling) {
-            return;
-        }
-        isScheduling = true;
-        try {
-            await scheduleTask();
-        } catch (error) {
-            const prefix = context ? `[小时数据调度] ${context}` : '[小时数据调度]';
-            logger.error(`${prefix} 调度执行失败:`, error);
-        } finally {
-            isScheduling = false;
-        }
+async function safeRun(context, runLabel = '') {
+    if (context.isScheduling) {
+        return;
     }
+    context.isScheduling = true;
+    try {
+        await scheduleTask(context);
+    } catch (error) {
+        const prefix = schedulerPrefix(context);
+        const label = runLabel ? `${prefix} ${runLabel}` : prefix;
+        logger.error(`${label} 调度执行失败:`, error);
+    } finally {
+        context.isScheduling = false;
+    }
+}
 
-    // 立即执行一次
-    await safeRun('首次');
+async function startSchedulerForTask(taskConfig) {
+    const context = createSchedulerContext(taskConfig);
+    const prefix = schedulerPrefix(context);
 
-    // 每秒执行一次
+    logger.info(`${prefix} ==========================================`);
+    logger.info(`${prefix} 小时市场数据录入调度器启动 (${context.config.name})`);
+    logger.info(`${prefix} 资产符号: ${context.config.symbol}`);
+    logger.info(`${prefix} 事件模板: ${context.config.eventSlugTemplate}`);
+    logger.info(`${prefix} 调度间隔: 每 ${context.config.scheduleIntervalMs / 1000} 秒`);
+    logger.info(`${prefix} 采样秒数: ${context.config.sampleSecond}`);
+    logger.info(`${prefix} ==========================================\n`);
+
+    await safeRun(context, '首次');
+
     setInterval(() => {
-        safeRun();
-    }, CONFIG.scheduleIntervalMs);
+        safeRun(context);
+    }, context.config.scheduleIntervalMs);
 
-    logger.info('[小时数据调度] 调度器已启动，等待下一次执行...\n');
+    logger.info(`${prefix} 调度器已启动，等待下一次执行...\n`);
 }
 
-// 如果直接执行此文件，启动调度器
+export async function startScheduler() {
+    const activeTaskConfigs = convergenceTaskConfigs.filter(taskConfig => taskConfig?.task?.active);
+
+    if (!activeTaskConfigs.length) {
+        logger.warn('[小时数据调度] 没有激活的任务，调度器不会启动');
+        return;
+    }
+
+    for (const taskConfig of activeTaskConfigs) {
+        try {
+            await startSchedulerForTask(taskConfig);
+        } catch (error) {
+            const taskName = taskConfig?.task?.name || taskConfig?.task?.symbol || 'UNKNOWN';
+            logger.error(`[小时数据调度] 启动任务 ${taskName} 失败:`, error);
+        }
+    }
+}
+
 startScheduler().catch(error => {
     logger.error('[小时数据调度] 调度器启动失败:', error);
     process.exit(1);

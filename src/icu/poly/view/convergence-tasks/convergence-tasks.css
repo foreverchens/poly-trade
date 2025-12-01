@@ -56,6 +56,29 @@ header p {
     font-size: 14px;
 }
 
+.balance-summary {
+    margin-top: 12px;
+    padding: 10px 16px;
+    background: var(--accent-bg);
+    border: 1px solid rgba(0, 194, 255, 0.2);
+    border-radius: 8px;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.balance-label {
+    color: var(--muted);
+    font-size: 14px;
+}
+
+.balance-value {
+    color: var(--accent);
+    font-size: 16px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+}
+
 .header-actions {
     display: flex;
     gap: 8px;

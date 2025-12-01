@@ -359,6 +359,7 @@ class TailConvergenceStrategy {
         const [yesBid, yesAsk] = await this.cache.getBestPrice(yesTokenId);
         const [noBid, noAsk] = await this.cache.getBestPrice(noTokenId);
         if (yesAsk === 0 || noAsk === 0) {
+            // todo 流动性为0、可以尝试直接挂99单
             logger.info(
                 `[${this.symbol}-${this.currentLoopHour}时] yesAsk=${yesAsk} noAsk=${noAsk} 卖方流动性为0, 结束信号`,
             );

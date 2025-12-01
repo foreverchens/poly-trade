@@ -139,6 +139,7 @@ const tableBody = document.getElementById("task-table-body");
 const messageEl = document.getElementById("message");
 const refreshBtn = document.getElementById("btn-refresh");
 const createBtn = document.getElementById("btn-create");
+const totalBalanceEl = document.getElementById("total-balance");
 
 async function fetchTasks() {
     if (state.loading) return;
@@ -158,6 +159,7 @@ async function fetchTasks() {
         }));
         showMessage(`已加载 ${state.items.length} 条配置`);
         renderTable();
+        updateTotalBalance();
     } catch (err) {
         showMessage(err.message, "error");
         state.items = [];
@@ -452,6 +454,7 @@ async function persistRow(rowIndex, hintLabel = "") {
         __dirty: false,
     };
     renderTable();
+    updateTotalBalance();
     showMessage(hintLabel ? `${hintLabel} 已保存` : "配置已保存", "success");
 }
 
@@ -562,6 +565,23 @@ function formatDateTime(value) {
     return `${date.toLocaleDateString()} ${date.toLocaleTimeString(undefined, { hour12: false })}`;
 }
 
+function updateTotalBalance() {
+    const uniqueAccounts = new Map();
+    state.items.forEach((item) => {
+        const account = item.account;
+        if (account?.address && account.usdcBalance !== null && account.usdcBalance !== undefined) {
+            if (!uniqueAccounts.has(account.address)) {
+                uniqueAccounts.set(account.address, account.usdcBalance);
+            }
+        }
+    });
+    const total = Array.from(uniqueAccounts.values()).reduce((sum, balance) => {
+        const num = Number(balance);
+        return sum + (Number.isFinite(num) ? num : 0);
+    }, 0);
+    totalBalanceEl.textContent = formatUsdcBalance(total);
+}
+
 tableBody.addEventListener("dblclick", (event) => {
     const td = event.target.closest("td");
     if (!td) return;
@@ -599,9 +619,10 @@ refreshBtn.addEventListener("click", () => {
 });
 
 createBtn.addEventListener("click", () => {
-    state.items = [createEmptyTask(), ...state.items];
-    renderTable();
-    showMessage("已新增一行，请补充全量字段后点击保存。");
+        state.items = [createEmptyTask(), ...state.items];
+        renderTable();
+        updateTotalBalance();
+        showMessage("已新增一行，请补充全量字段后点击保存。");
 });
 
 async function handleDelete(rowIndex) {
@@ -623,6 +644,7 @@ async function handleDelete(rowIndex) {
         }
         state.items.splice(rowIndex, 1);
         renderTable();
+        updateTotalBalance();
         showMessage("任务已删除", "success");
     } catch (err) {
         showMessage(err.message, "error");

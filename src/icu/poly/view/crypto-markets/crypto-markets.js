@@ -2215,11 +2215,13 @@ async function submitOrderRequest(payload, signal) {
         body: JSON.stringify(payload),
         signal,
     });
-    if (!res.ok) {
-        const data = await safeJson(res);
-        throw new Error(data?.message || "下单失败");
+    const data = await safeJson(res);
+    const apiError = Boolean(data?.error) || (typeof data?.status === "number" && data.status >= 400);
+    if (!res.ok || apiError) {
+        const message = data?.error || data?.message || `下单失败 (HTTP ${res.status})`;
+        throw new Error(message);
     }
-    return res.json();
+    return data;
 }
 
 function showOrderToast({ title = "提示", message = "", actionLabel, onAction }) {

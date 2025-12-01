@@ -74,11 +74,21 @@ async function placeCloseOrder(tokenId, price, size, side) {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ tokenId, price, size, side }),
         });
-        if (!res.ok) {
-            const error = await res.json();
-            throw new Error(error.message || `HTTP ${res.status}`);
+        const text = await res.text();
+        let payload = null;
+        if (text) {
+            try {
+                payload = JSON.parse(text);
+            } catch (parseErr) {
+                console.warn("Failed to parse place-order payload", parseErr);
+            }
         }
-        return await res.json();
+        const apiError = Boolean(payload?.error) || (typeof payload?.status === "number" && payload.status >= 400);
+        if (!res.ok || apiError) {
+            const fallback = payload?.error || payload?.message || text || `HTTP ${res.status}`;
+            throw new Error(fallback);
+        }
+        return payload;
     } catch (err) {
         console.error("Failed to place order:", err);
         throw err;

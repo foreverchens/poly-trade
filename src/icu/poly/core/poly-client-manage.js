@@ -27,6 +27,10 @@ import { transferPOL, transferUSDC } from "./ether-client.js";
 import { ethers } from "ethers";
 import addrInitV5 from "./addr-init-v5.js";
 import AsyncLock from "async-lock";
+import { updatePkIdxAndCredsByPkIdx } from "../db/convergence-task-config-repository.js";
+import { initCreds } from "./PolyClient.js";
+import { loadConvergenceTaskConfigs } from "../data/convergence-up.config.js";
+import logger from "./Logger.js";
 
 // ========== 配置 ==========
 const RPC_URL = process.env.RPC_URL || "https://polygon-rpc.com";
@@ -35,6 +39,7 @@ const CHAIN_ID = 137;
 // ========== 全局状态 ==========
 let currentPolyClient = null;
 let currentIndex = parseInt(process.env.poly_mnemonic_idx || "0", 10);
+let clientMap = new Map();
 
 const lock = new AsyncLock();
 /**
@@ -180,7 +185,6 @@ export async function rebuildPolyClientSync() {
     });
 }
 
-
 /**
  *  基于助记词和索引 生成账户
  * @param idx
@@ -205,7 +209,98 @@ export async function getAccountWithBalance(idx = currentIndex) {
     };
 }
 
+/**
+ * 基于助记词和索引以及creds 生成PolyClient实例 并缓存
+ * @param {number} idx
+ * @param {JSON} creds
+ * @returns {PolyClient}
+ */
+export function buildClient(idx, creds) {
+    if (clientMap.has(idx)) {
+        return clientMap.get(idx);
+    }
+    const account = getAccount(idx);
+    const client = new PolyClient(account.privateKey, creds);
+    clientMap.set(idx, client);
+    return client;
+}
+
+export async function nextClient(idx, oldClient) {
+    try {
+
+        const oldAddress = oldClient.funderAddress;
+        // 删除旧的缓存
+        clientMap.delete(idx);
+        // 将idx+1 得到新的私钥和地址、
+        const newAccount = getAccount(idx + 1);
+        logger.info("\n========== 账号切换 ==========");
+        logger.info(`[旧账户]: ${oldAddress || "无"}`);
+        logger.info(`[新账户 #${idx + 1}]: ${newAccount.address}`);
+
+        // 转移1POL到新地址、用于初始化gas费
+        logger.info("[步骤 1/8] 划转 1 POL 到新地址...");
+        await transferPOL(oldClient.privateKey, newAccount.address, "1");
+        logger.info("  ✓ 已划转 1 POL 用于初始化");
+        // 初始化新地址授权
+        logger.info("[步骤 2/8] 初始化新地址授权...");
+        await initializeAddress(newAccount.privateKey);
+        logger.info("  ✓ 新地址授权初始化完成");
+        // 转移USDC
+        logger.info("[步骤 3/8] 转移 USDC...");
+        const usdcBalance = await oldClient.getUsdcEBalance();
+        const usdcBalanceNum = parseFloat(usdcBalance);
+        if (usdcBalanceNum > 0.1) {
+            const amountToTransfer = usdcBalanceNum.toFixed(6);
+            await transferUSDC(oldClient.privateKey, newAccount.address, amountToTransfer);
+            logger.info(`  ✓ USDC 转移成功: ${amountToTransfer}`);
+        }else{
+            logger.info("  - USDC 余额太少，跳过处理");
+        }
+        // 转移剩余POL
+        logger.info("[步骤 4/8] 转移剩余 POL...");
+        const provider = new ethers.providers.JsonRpcProvider(RPC_URL, CHAIN_ID);
+        const polBalance = await provider.getBalance(oldAddress);
+        const polBalanceFormatted = ethers.utils.formatEther(polBalance);
+        if (parseFloat(polBalanceFormatted) > 0.01) {
+            const amountToTransfer = (parseFloat(polBalanceFormatted) - 0.01).toFixed(6);
+            await transferPOL(oldClient.privateKey, newAccount.address, amountToTransfer);
+            logger.info(`  ✓ POL 转移成功: ${amountToTransfer}`);
+        }else{
+            logger.info("  - POL 余额太少，跳过处理");
+        }
+        // 使用新的私钥和地址 生成新的creds
+        logger.info("[步骤 5/8] 生成新的creds...");
+        const creds = await initCreds(newAccount.privateKey);
+        logger.info("  ✓ creds 生成完成");
+        // 生成新的PolyClient实例
+        logger.info("[步骤 6/8] 生成新的PolyClient实例...");
+        const client = new PolyClient(newAccount.privateKey, creds);
+        logger.info("  ✓ PolyClient 实例生成完成");
+        // 更新缓存
+        logger.info("[步骤 7/8] 更新缓存...");
+        clientMap.set(idx + 1, client);
+        // 更新DB中的索引
+        logger.info("[步骤 8/8] 更新DB中的索引和creds...");
+        await updatePkIdxAndCredsByPkIdx(idx, idx + 1, creds);
+        logger.info("  ✓ DB 更新完成");
+        logger.info("\n========== 账号切换完成 ==========\n");
+        return client;
+    } catch (error) {
+        logger.error("[致命错误] PolyClient 切换失败:", error.message);
+        logger.error(error.stack);
+        return null;
+    }
+}
+
+export async function getDefaultClient() {
+    const configs = await loadConvergenceTaskConfigs();
+    const config = configs[0];
+    const client = buildClient(config.task.pkIdx, config.task.creds);
+    logger.info(`使用账户—> #${config.task.pkIdx}  ${client.funderAddress}`);
+    return client;
+}
+
 // 初始化PolyClient
-getPolyClient();
+// getPolyClient();
 
 // rebuildPolyClientSync();

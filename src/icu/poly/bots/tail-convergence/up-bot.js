@@ -2,7 +2,7 @@ import "dotenv/config";
 import dayjs from "dayjs";
 import cron from "node-cron";
 import { PolySide } from "../../core/PolyClient.js";
-import { getPolyClient, rebuildPolyClientSync } from "../../core/poly-client-manage.js";
+import { buildClient, nextClient } from "../../core/poly-client-manage.js";
 import { getZ } from "../../core/z-score.js";
 import { fetchBestPrice, threshold, get1HourAmp } from "./common.js";
 import { TakeProfitManager } from "./take-profit.js";
@@ -49,6 +49,10 @@ class TailConvergenceStrategy {
             takeProfitPrice: this.takeProfitPrice,
         });
 
+        this.pkIdx = config.pkIdx;
+        this.creds = config.creds;
+        this.client = buildClient(this.pkIdx,this.creds);
+
         this.validateCronConfig();
         this.logBootstrapSummary();
     }
@@ -64,6 +68,8 @@ class TailConvergenceStrategy {
             name: task.name,
             slug: task.slug,
             symbol: task.symbol,
+            pkIdx: task.pkIdx,
+            creds: task.creds,
             test: task.test,
 
             // 调度配置
@@ -652,7 +658,7 @@ class TailConvergenceStrategy {
                 sizeUsd->${sizeUsd}
                 tokenId->${tokenId}`,
         );
-        const entryOrder = await getPolyClient()
+        const entryOrder = await this.client
             .placeOrder(price, sizeShares, PolySide.BUY, tokenId)
             .catch((err) => {
                 logger.error(
@@ -673,9 +679,14 @@ class TailConvergenceStrategy {
                 logger.error(
                     `[${this.symbol}-${this.currentLoopHour}时] 建仓被拒绝: address in closed only mode`,
                 );
-                // 重建PolyClient实例
-                await rebuildPolyClientSync();
-                // 重建后重新建仓
+                // 切换到下一个PolyClient实例
+                this.client = await nextClient(this.pkIdx,this.client);
+                if(!this.client){
+                    logger.error(`[${this.symbol}-${this.currentLoopHour}时] 切换到下一个PolyClient实例失败，结束进程`);
+                    process.exit(1);
+                }
+                this.pkIdx = this.pkIdx + 1;
+                // 切换后重新建仓
                 await this.openPosition({ tokenId, price, sizeUsd, signal, isExtra });
             }
             return null;

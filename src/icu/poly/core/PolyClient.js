@@ -39,8 +39,15 @@ const CTF_ABI = [
     "function getCollectionId(bytes32 parentCollectionId, uint256 conditionId, uint256 indexSet) pure returns (bytes32)",
 ];
 
+
+export async function initCreds(pk) {
+    const baseClient = new ClobClient(DEFAULT_HOST, DEFAULT_CHAIN_ID, new EthersV5Wallet(pk));
+    const creds = await baseClient.createApiKey();
+    return creds;
+}
+
 export class PolyClient {
-    constructor(pk = null, mock = false) {
+    constructor(pk = null,creds = null, mock = false) {
         if (pk) {
             this.privateKey = pk;
         } else {
@@ -67,10 +74,15 @@ export class PolyClient {
         this.mock = mock;
 
         // 初始化 client
-        this.getClient().catch((err) => {
-            console.error("[PolyClient] 初始化失败", err);
-            process.exit(1);
-        });
+        // this.getClient().catch((err) => {
+        //     console.error("[PolyClient] 初始化失败", err);
+        //     process.exit(1);
+        // });
+        // 如果creds存在、则使用creds初始化client
+        if(creds){
+            this.creds = creds;
+            this.client = new ClobClient(this.host, this.chainId, this.signer, this.creds, this.signatureType, this.funderAddress);
+        }
     }
 
 
@@ -79,7 +91,7 @@ export class PolyClient {
             return this.client;
         }
         const baseClient = new ClobClient(this.host, this.chainId, this.signer);
-        const creds = await baseClient.createOrDeriveApiKey();
+        const creds = await baseClient.deriveApiKey();
         this.client = new ClobClient(
             this.host,
             this.chainId,
@@ -620,7 +632,7 @@ export class PolyClient {
             negRisk,
         };
 
-        return client.createAndPostOrder(orderRequest, orderOptions, this.orderType);
+        return await client.createAndPostOrder(orderRequest, orderOptions, this.orderType);
     }
 
     /**

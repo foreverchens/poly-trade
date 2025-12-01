@@ -12,6 +12,7 @@ function mapRowToTaskConfig(row) {
             symbol: row.symbol,
             pkIdx: row.pk_idx,
             active: row.active,
+            creds: row.creds,
             test: row.test,
             extra: row.extra ?? "",
         },

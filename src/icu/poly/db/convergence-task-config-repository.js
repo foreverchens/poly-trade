@@ -120,3 +120,12 @@ export async function upsertConvergenceTaskConfig(config) {
     return mapRowToTaskConfig(row);
 }
 
+export async function deleteConvergenceTaskConfig(slug) {
+    if (!slug) {
+        throw new Error('缺少 slug，无法删除配置');
+    }
+    await prisma.convergence_task_config.delete({
+        where: { slug },
+    });
+}
+

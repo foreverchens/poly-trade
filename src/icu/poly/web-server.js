@@ -5,6 +5,12 @@ import axios from "axios";
 import { getPolyClient } from "./core/poly-client-manage.js";
 import {listOrders, deleteOrder, updateOrder} from "./db/repository.js";
 import {getMinuteSamples} from "./db/statisc-repository.js";
+import {
+    listConvergenceTaskConfigs,
+    getConvergenceTaskConfig,
+    upsertConvergenceTaskConfig,
+    deleteConvergenceTaskConfig,
+} from "./db/convergence-task-config-repository.js";
 
 const PORT = process.env.PORT || 3001;
 const BTC_PRICE_SOURCE = process.env.BTC_PRICE_SOURCE || "https://api.binance.com/api/v3/klines";
@@ -42,6 +48,7 @@ const PAGE_ROUTES = [
     {label: "dashboard", path: "/dashboard"},
     {label: "Bot Orders", path: "/bot-orders"},
     {label: "Hour Samples", path: "/hour-minute-samples"},
+    {label: "Convergence Tasks", path: "/convergence-tasks"},
 ];
 const TRADE_LOOKBACK_DAYS = 3;
 const MAX_TRADE_ITEMS = 10;
@@ -169,6 +176,88 @@ app.get("/api/open-orders", async (req, res) => {
         res.status(err.response?.status || 500).json({
             error: "failed_to_fetch_open_orders",
             message: err.response?.data || err.message,
+        });
+    }
+});
+
+app.get("/api/convergence-tasks", async (_req, res) => {
+    try {
+        const configs = await listConvergenceTaskConfigs();
+        res.json({count: configs.length, items: configs});
+    } catch (err) {
+        console.error("Failed to list convergence tasks:", err.message);
+        res.status(err.statusCode || err.status || 500).json({
+            error: "failed_to_list_convergence_tasks",
+            message: err.message,
+        });
+    }
+});
+
+app.get("/api/convergence-tasks/:slug", async (req, res) => {
+    try {
+        const {slug} = req.params;
+        if (!slug) {
+            throw validationError("slug 不能为空");
+        }
+        const task = await getConvergenceTaskConfig(slug);
+        if (!task) {
+            return res.status(404).json({
+                error: "convergence_task_not_found",
+                message: `任务 ${slug} 不存在`,
+            });
+        }
+        res.json(task);
+    } catch (err) {
+        console.error("Failed to fetch convergence task:", err.message);
+        res.status(err.statusCode || err.status || 500).json({
+            error: "failed_to_fetch_convergence_task",
+            message: err.message,
+        });
+    }
+});
+
+app.post("/api/convergence-tasks", async (req, res) => {
+    try {
+        const payload = buildTaskConfigPayload(req.body || {});
+        const saved = await upsertConvergenceTaskConfig(payload);
+        res.status(201).json(saved);
+    } catch (err) {
+        console.error("Failed to create convergence task:", err.message);
+        res.status(err.statusCode || err.status || 500).json({
+            error: "failed_to_create_convergence_task",
+            message: err.message,
+        });
+    }
+});
+
+app.put("/api/convergence-tasks/:slug", async (req, res) => {
+    try {
+        const {slug} = req.params;
+        const payload = buildTaskConfigPayload(req.body || {}, {slugFromParams: slug});
+        const saved = await upsertConvergenceTaskConfig(payload);
+        res.json(saved);
+    } catch (err) {
+        console.error("Failed to update convergence task:", err.message);
+        res.status(err.statusCode || err.status || 500).json({
+            error: "failed_to_update_convergence_task",
+            message: err.message,
+        });
+    }
+});
+
+app.delete("/api/convergence-tasks/:slug", async (req, res) => {
+    try {
+        const {slug} = req.params;
+        if (!slug) {
+            throw validationError("slug 不能为空");
+        }
+        await deleteConvergenceTaskConfig(slug);
+        res.json({success: true});
+    } catch (err) {
+        console.error("Failed to delete convergence task:", err.message);
+        res.status(err.statusCode || err.status || 500).json({
+            error: "failed_to_delete_convergence_task",
+            message: err.message,
         });
     }
 });
@@ -401,6 +490,154 @@ async function enrichOrdersWithMarketMeta(orders) {
     return orders;
 }
 
+function validationError(message) {
+    const error = new Error(message);
+    error.statusCode = 400;
+    return error;
+}
+
+function parseRequiredString(value, fieldName) {
+    if (typeof value === "string" && value.trim().length > 0) {
+        return value.trim();
+    }
+    throw validationError(`${fieldName} 不能为空`);
+}
+
+function parseNumberField(value, fieldName, {integer = false} = {}) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) {
+        throw validationError(`${fieldName} 必须是数字`);
+    }
+    if (integer && !Number.isInteger(numeric)) {
+        throw validationError(`${fieldName} 必须是整数`);
+    }
+    return numeric;
+}
+
+function parseBooleanField(value) {
+    if (typeof value === "boolean") {
+        return value;
+    }
+    if (typeof value === "string") {
+        const normalized = value.trim().toLowerCase();
+        return normalized === "true" || normalized === "1" || normalized === "yes" || normalized === "on";
+    }
+    return Boolean(value);
+}
+
+function buildTaskConfigPayload(body, {slugFromParams = null} = {}) {
+    if (!body || typeof body !== "object") {
+        throw validationError("请求体必须是对象");
+    }
+
+    const taskInput = body.task ?? {};
+    const scheduleInput = body.schedule ?? {};
+    const positionInput = body.position ?? {};
+    const riskInput = body.riskControl ?? {};
+    const riskPriceInput = riskInput.price ?? {};
+    const riskTimeInput = riskInput.time ?? {};
+    const riskStatsInput = riskInput.statistics ?? {};
+    const riskLiquidityInput = riskInput.liquidity ?? {};
+    const riskSpikeInput = riskInput.spikeProtection ?? {};
+
+    const candidateSlug = taskInput.slug ?? body.slug ?? null;
+    const slugBase = slugFromParams ?? candidateSlug;
+    const slug = parseRequiredString(slugBase, "task.slug");
+    if (slugFromParams && candidateSlug && slugFromParams !== candidateSlug) {
+        throw validationError("URL 中的 slug 与请求体不一致");
+    }
+
+    const task = {
+        name: parseRequiredString(taskInput.name, "task.name"),
+        slug,
+        symbol: parseRequiredString(taskInput.symbol, "task.symbol"),
+        pkIdx: parseNumberField(taskInput.pkIdx, "task.pkIdx", {integer: true}),
+        active: parseBooleanField(taskInput.active),
+        test: parseBooleanField(taskInput.test),
+    };
+
+    const schedule = {
+        cronExpression: parseRequiredString(scheduleInput.cronExpression, "schedule.cronExpression"),
+        cronTimeZone: parseRequiredString(scheduleInput.cronTimeZone, "schedule.cronTimeZone"),
+        tickIntervalSeconds: parseNumberField(
+            scheduleInput.tickIntervalSeconds,
+            "schedule.tickIntervalSeconds",
+            {integer: true},
+        ),
+    };
+
+    const position = {
+        positionSizeUsdc: parseNumberField(
+            positionInput.positionSizeUsdc,
+            "position.positionSizeUsdc",
+        ),
+        extraSizeUsdc: parseNumberField(positionInput.extraSizeUsdc, "position.extraSizeUsdc"),
+        allowExtraEntryAtCeiling: parseBooleanField(positionInput.allowExtraEntryAtCeiling),
+    };
+
+    const riskControl = {
+        price: {
+            triggerPriceGt: parseNumberField(
+                riskPriceInput.triggerPriceGt,
+                "riskControl.price.triggerPriceGt",
+            ),
+            takeProfitPrice: parseNumberField(
+                riskPriceInput.takeProfitPrice,
+                "riskControl.price.takeProfitPrice",
+            ),
+        },
+        time: {
+            maxMinutesToEnd: parseNumberField(
+                riskTimeInput.maxMinutesToEnd,
+                "riskControl.time.maxMinutesToEnd",
+                {integer: true},
+            ),
+            monitorModeMinuteThreshold: parseNumberField(
+                riskTimeInput.monitorModeMinuteThreshold,
+                "riskControl.time.monitorModeMinuteThreshold",
+                {integer: true},
+            ),
+        },
+        statistics: {
+            zMin: parseNumberField(riskStatsInput.zMin, "riskControl.statistics.zMin"),
+            ampMin: parseNumberField(riskStatsInput.ampMin, "riskControl.statistics.ampMin"),
+            highVolatilityZThreshold: parseNumberField(
+                riskStatsInput.highVolatilityZThreshold,
+                "riskControl.statistics.highVolatilityZThreshold",
+            ),
+        },
+        liquidity: {
+            sufficientThreshold: parseNumberField(
+                riskLiquidityInput.sufficientThreshold,
+                "riskControl.liquidity.sufficientThreshold",
+            ),
+        },
+        spikeProtection: {
+            count: parseNumberField(
+                riskSpikeInput.count,
+                "riskControl.spikeProtection.count",
+                {integer: true},
+            ),
+        },
+    };
+
+    const extra =
+        typeof body.extra === "string"
+            ? body.extra
+            : typeof taskInput.extra === "string"
+                ? taskInput.extra
+                : "";
+
+    return {
+        task,
+        schedule,
+        position,
+        riskControl,
+        extra,
+    };
+}
+
+
 app.get("/api/bot-orders", async (req, res) => {
     try {
         const limit = req.query.limit ? parseInt(req.query.limit) : 100;
@@ -458,6 +695,10 @@ app.get("/bot-orders", (_req, res) => {
 
 app.get("/hour-minute-samples", (_req, res) => {
     res.sendFile(path.join(viewDir, "hour-minute-samples.html"));
+});
+
+app.get("/convergence-tasks", (_req, res) => {
+    res.sendFile(path.join(viewDir, "convergence-tasks.html"));
 });
 
 app.listen(PORT, () => {

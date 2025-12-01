@@ -2,7 +2,6 @@ import dayjs from "dayjs";
 import cron from "node-cron";
 import { resolveSlugList, fetchMarkets, getAsksLiq, resolvePositionSize } from "./common.js";
 import logger from "../../core/Logger.js";
-import { getPolyClient } from "../../core/poly-client-manage.js";
 
 export class UpBotCache {
     constructor(config) {
@@ -10,6 +9,7 @@ export class UpBotCache {
         this.maxMinutesToEnd = config.maxMinutesToEnd;
         this.maxSizeUsdc = config.maxSizeUsdc;
         this.cronExpression = config.cronExpression || "* 30-59 * * * *";
+        this.client = config.client;
         // 运行时数据存储
         this.store = {
             hour: null,
@@ -127,7 +127,7 @@ export class UpBotCache {
         if (!tokenId) {
             return null;
         }
-        const orderBook = await getPolyClient().getOrderBook(tokenId);
+        const orderBook = await this.client.getOrderBook(tokenId);
         if (!orderBook) {
             return null;
         }

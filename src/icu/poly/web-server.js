@@ -11,6 +11,7 @@ import {
     upsertConvergenceTaskConfig,
     deleteConvergenceTaskConfig,
 } from "./db/convergence-task-config-repository.js";
+import { listClients } from "./core/poly-client-manage.js";
 
 const PORT = process.env.PORT || 3001;
 const BTC_PRICE_SOURCE = process.env.BTC_PRICE_SOURCE || "https://api.binance.com/api/v3/klines";
@@ -167,12 +168,17 @@ app.get("/api/trades", async (req, res) => {
 app.get("/api/open-orders", async (req, res) => {
     try {
         const {market, assetId} = req.query;
-        const orders = await polyClient.listOpenOrders({
-            market: market || undefined,
-            assetId: assetId || undefined,
-        });
-        const enriched = await enrichOrdersWithMarketMeta(orders);
-        res.json(enriched);
+        const clients = listClients();
+        let allOrders = [];
+        for(let client of clients){
+            const orders = await client.listOpenOrders({
+                market: market || undefined,
+                assetId: assetId || undefined,
+            });
+            const enriched = await enrichOrdersWithMarketMeta(orders);
+            allOrders.push(...enriched);
+        }
+        res.json(allOrders);
     } catch (err) {
         console.error("Failed to fetch open orders:", err.message);
         res.status(err.response?.status || 500).json({
@@ -368,8 +374,13 @@ app.post("/api/cancel-order", async (req, res) => {
 
 app.get("/api/current-address", async (req, res) => {
     try {
-        const address = polyClient.signer.address;
-        res.json({address});
+        const clients = listClients();
+        let allAddresses = new Set();
+        for(let client of clients){
+            const address = client.funderAddress;
+            allAddresses.add(address);
+        }
+        res.json({addresses: allAddresses.join(",")});
     } catch (err) {
         console.error("Failed to get current address:", err.message);
         res.status(500).json({

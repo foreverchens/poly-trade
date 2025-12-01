@@ -300,6 +300,9 @@ export async function getDefaultClient() {
     return client;
 }
 
+export const listClients = () => {
+    return Array.from(clientMap.values());
+}
 // 初始化PolyClient
 // getPolyClient();
 

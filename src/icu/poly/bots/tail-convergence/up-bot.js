@@ -35,23 +35,28 @@ class TailConvergenceStrategy {
         this.initializeConfig(config);
         this.initializeRuntimeState();
 
+
+
+        this.pkIdx = config.pkIdx;
+        this.creds = config.creds;
+        this.client = buildClient(this.pkIdx,this.creds);
+        logger.info(`[扫尾盘策略] 初始化PolyClient实例: #${this.pkIdx}  ${this.client.funderAddress}`);
+
         // 初始化缓存层 (UpBot专用)
         this.cache = new UpBotCache({
             slug: this.slugTemplate,
             maxMinutesToEnd: this.maxMinutesToEnd,
             maxSizeUsdc: this.extraSizeUsdc + this.positionSizeUsdc,
             cronExpression: "* 30-59 * * * *",
+            client: this.client,
         });
 
         // 初始化止盈管理器
         this.tpManager = new TakeProfitManager({
             cronTimeZone: this.cronTimeZone,
             takeProfitPrice: this.takeProfitPrice,
+            client: this.client,
         });
-
-        this.pkIdx = config.pkIdx;
-        this.creds = config.creds;
-        this.client = buildClient(this.pkIdx,this.creds);
 
         this.validateCronConfig();
         this.logBootstrapSummary();
@@ -686,6 +691,8 @@ class TailConvergenceStrategy {
                     process.exit(1);
                 }
                 this.pkIdx = this.pkIdx + 1;
+                this.tpManager.client = this.client;
+                this.cache.client = this.client;
                 // 切换后重新建仓
                 await this.openPosition({ tokenId, price, sizeUsd, signal, isExtra });
             }

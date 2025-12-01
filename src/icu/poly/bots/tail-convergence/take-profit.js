@@ -3,12 +3,12 @@ import cron from "node-cron";
 import { PolySide } from "../../core/PolyClient.js";
 import { saveOrder } from "../../db/repository.js";
 import logger from "../../core/Logger.js";
-import { getPolyClient } from "../../core/poly-client-manage.js";
 
 export class TakeProfitManager {
     constructor(config) {
         this.cronTimeZone = config.cronTimeZone;
         this.takeProfitPrice = config.takeProfitPrice;
+        this.client = config.client;
 
         this.takeProfitOrders = [];
         this.takeProfitCronTask = null;
@@ -81,7 +81,7 @@ export class TakeProfitManager {
             const orderKey = takeProfitOrder.orderKey;
             try {
                 // 查询建仓订单状态
-                const order = await getPolyClient().getOrder(takeProfitOrder.entryOrderId);
+                const order = await this.client.getOrder(takeProfitOrder.entryOrderId);
                 if (!order) {
                     logger.info(
                         `[止盈] ${orderKey} 订单不存在(可能已完全成交或取消)，跳过`,
@@ -101,7 +101,7 @@ export class TakeProfitManager {
                 if (matchedSize === 0 || matchedSize < originalSize) {
                     // 未成交，或者部分成交 撤单
                     try {
-                        await getPolyClient().cancelOrder(takeProfitOrder.entryOrderId);
+                        await this.client.cancelOrder(takeProfitOrder.entryOrderId);
                         cancelledCount++;
                     } catch (cancelErr) {
                         errorCount++;
@@ -146,7 +146,7 @@ export class TakeProfitManager {
         const orderKey = takeProfitOrder.orderKey;
         try {
             // 获取最优bid价格
-            const [bestBid, bestAsk] = await getPolyClient().getBestPrice(takeProfitOrder.tokenId);
+            const [bestBid, bestAsk] = await this.client.getBestPrice(takeProfitOrder.tokenId);
             const bestBidPrice = typeof bestBid === "number" && bestBid > 0 ? bestBid : 0;
             // 先检查价格是否有效
             if (bestBidPrice <= 0) {
@@ -166,7 +166,7 @@ export class TakeProfitManager {
                 `[止盈] ${orderKey} 提交止盈: SELL --> ${bestBidPrice}@${size}`,
             );
 
-            const takeProfitOrderResp = await getPolyClient().placeOrder(
+            const takeProfitOrderResp = await this.client.placeOrder(
                 bestBidPrice,
                 size,
                 PolySide.SELL,

@@ -125,6 +125,83 @@ button:active {
     opacity: 0.9;
 }
 
+.account-panel {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 16px 20px;
+    margin: 12px 0 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.account-panel-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+.account-panel-title {
+    font-weight: 600;
+}
+
+.account-panel-desc {
+    font-size: 12px;
+}
+
+.account-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+}
+
+.account-chip {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    background: #0f141c;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 10px 14px;
+    min-width: 220px;
+    cursor: pointer;
+    transition: border 0.2s ease, transform 0.2s ease;
+}
+
+.account-chip.active {
+    border-color: var(--green);
+    transform: translateY(-1px);
+}
+
+.account-chip input {
+    width: 18px;
+    height: 18px;
+    margin: 0;
+    cursor: pointer;
+}
+
+.account-chip-body {
+    font-size: 13px;
+    color: var(--text);
+}
+
+.account-chip-title {
+    font-weight: 600;
+    font-size: 13px;
+}
+
+.account-chip-meta {
+    font-size: 12px;
+    color: var(--muted);
+}
+
+.accounts-empty {
+    padding: 10px 0;
+}
+
 .pnl-dashboard {
     background: var(--card);
     border: 1px solid var(--line);
@@ -356,6 +433,16 @@ tbody td {
     padding: 8px 16px;
     font-size: 14px;
     min-width: auto;
+}
+
+.account-cell {
+    text-align: left;
+}
+
+.account-cell span {
+    font-size: 12px;
+    color: var(--muted);
+    white-space: nowrap;
 }
 
 a.link {

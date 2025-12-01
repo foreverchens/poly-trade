@@ -90,6 +90,6 @@ async function main() {
     console.log("\n全部处理完成。");
 }
 
-main().catch((e) => {
-    console.error(e);
-});
+// main().catch((e) => {
+//     console.error(e);
+// });

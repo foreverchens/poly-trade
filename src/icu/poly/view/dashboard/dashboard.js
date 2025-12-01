@@ -30,6 +30,47 @@ const shorten = (text = "", head = 6, tail = 4) => {
 const POLY_EVENT_BASE_URL = "https://polymarket.com/event/";
 const MIN_CURRENT_VALUE = 0.1;
 let cachedPositions = []; // 保存已加载的原始持仓数据
+const accountMetaByAddress = new Map();
+let selectedAccountAddresses = new Set();
+
+const normalizeAddress = (value = "") => {
+    if (typeof value !== "string") return "";
+    return value.trim().toLowerCase();
+};
+
+function ensureManualAccountMeta(address) {
+    const normalized = normalizeAddress(address);
+    if (!normalized) return null;
+    if (accountMetaByAddress.has(normalized)) {
+        return accountMetaByAddress.get(normalized);
+    }
+    const meta = {
+        address: normalized,
+        rawAddress: address,
+        pkIdx: null,
+        name: "",
+        usdcBalance: null,
+        manual: true,
+    };
+    accountMetaByAddress.set(normalized, meta);
+    return meta;
+}
+
+function getAccountMeta(address, metaMap = accountMetaByAddress) {
+    const normalized = normalizeAddress(address);
+    if (!normalized) return null;
+    return metaMap.get(normalized) || null;
+}
+
+function getActiveAddresses() {
+    const addresses = [];
+    selectedAccountAddresses.forEach((addr) => {
+        const meta = accountMetaByAddress.get(addr);
+        const address = meta?.rawAddress || addr;
+        if (address) addresses.push(address);
+    });
+    return addresses;
+}
 
 async function fetchPositions(addr) {
     const url = `https://data-api.polymarket.com/positions?sizeThreshold=1&limit=100&sortBy=TOKENS&sortDirection=DESC&user=${addr}`;
@@ -47,6 +88,89 @@ async function fetchPositions(addr) {
         return data;
     }
     return data;
+}
+
+async function fetchAccounts() {
+    const res = await fetch("/api/accounts");
+    if (!res.ok) {
+        const text = await res.text();
+        throw new Error(text || `HTTP ${res.status}`);
+    }
+    return res.json();
+}
+
+function renderAccounts(items = []) {
+    const container = $("accountsList");
+    if (!container) return;
+    container.innerHTML = "";
+    if (!items.length) {
+        container.innerHTML =
+            '<div class="accounts-empty muted">暂无托管账号，使用上方输入框手动加载地址。</div>';
+        return;
+    }
+
+    items.forEach((item) => {
+        const normalized = normalizeAddress(item.address);
+        if (!normalized) return;
+        const meta = {
+            ...item,
+            address: normalized,
+            rawAddress: item.address,
+            manual: false,
+        };
+        accountMetaByAddress.set(normalized, meta);
+        const chip = document.createElement("label");
+        chip.className = `account-chip${selectedAccountAddresses.has(normalized) ? " active" : ""}`;
+        const checkbox = document.createElement("input");
+        checkbox.type = "checkbox";
+        checkbox.checked = selectedAccountAddresses.has(normalized);
+        checkbox.addEventListener("change", () => {
+            if (checkbox.checked) {
+                selectedAccountAddresses.add(normalized);
+            } else {
+                selectedAccountAddresses.delete(normalized);
+            }
+            chip.classList.toggle("active", checkbox.checked);
+            load();
+        });
+
+        const body = document.createElement("div");
+        body.className = "account-chip-body";
+        const pkLabel = Number.isInteger(item.pkIdx) ? `#${item.pkIdx}` : "—";
+        const addressLabel = shorten(item.address || "");
+        body.textContent = `${pkLabel} · ${addressLabel}`;
+        chip.appendChild(checkbox);
+        chip.appendChild(body);
+        container.appendChild(chip);
+    });
+}
+
+async function initAccountsPanel() {
+    const status = $("accountsStatus");
+    if (status) {
+        status.textContent = "加载账户…";
+    }
+    try {
+        const payload = await fetchAccounts();
+        const items = Array.isArray(payload?.items) ? payload.items : [];
+        accountMetaByAddress.clear();
+        selectedAccountAddresses = new Set();
+        items.forEach((item) => {
+            const normalized = normalizeAddress(item.address);
+            if (!normalized) return;
+            selectedAccountAddresses.add(normalized);
+        });
+        renderAccounts(items);
+        if (status) {
+            status.textContent = `共 ${items.length} 个账户`;
+        }
+        return items;
+    } catch (err) {
+        console.error("Failed to fetch accounts:", err);
+        if (status) status.textContent = "账户加载失败";
+        renderAccounts([]);
+        return [];
+    }
 }
 
 async function fetchOrderBook(tokenId) {
@@ -67,28 +191,40 @@ async function fetchOrderBook(tokenId) {
     }
 }
 
-async function placeCloseOrder(tokenId, price, size, side) {
+async function placeCloseOrder(tokenId, price, size, side, pkIdx) {
     try {
+        const numericPkIdx = Number(pkIdx);
+        const payload = {
+            tokenId,
+            price,
+            size,
+            side,
+        };
+        if (Number.isInteger(numericPkIdx)) {
+            payload.pkIdx = numericPkIdx;
+        }
         const res = await fetch("/api/place-order", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ tokenId, price, size, side }),
+            body: JSON.stringify(payload),
         });
         const text = await res.text();
-        let payload = null;
+        let responsePayload = null;
         if (text) {
             try {
-                payload = JSON.parse(text);
+                responsePayload = JSON.parse(text);
             } catch (parseErr) {
                 console.warn("Failed to parse place-order payload", parseErr);
             }
         }
-        const apiError = Boolean(payload?.error) || (typeof payload?.status === "number" && payload.status >= 400);
+        const apiError =
+            Boolean(responsePayload?.error) ||
+            (typeof responsePayload?.status === "number" && responsePayload.status >= 400);
         if (!res.ok || apiError) {
-            const fallback = payload?.error || payload?.message || text || `HTTP ${res.status}`;
+            const fallback = responsePayload?.error || responsePayload?.message || text || `HTTP ${res.status}`;
             throw new Error(fallback);
         }
-        return payload;
+        return responsePayload;
     } catch (err) {
         console.error("Failed to place order:", err);
         throw err;
@@ -120,10 +256,16 @@ async function fetchCurrentAddress() {
         throw new Error(text || `HTTP ${res.status}`);
     }
     const data = await res.json();
-    return data.address;
+    if (data.address) {
+        return data.address;
+    }
+    if (Array.isArray(data.addresses) && data.addresses.length) {
+        return data.addresses[0];
+    }
+    return null;
 }
 
-async function renderPositions(rows) {
+async function renderPositions(rows, { accountMetaMap = accountMetaByAddress } = {}) {
     const tbody = $("tbody");
     tbody.innerHTML = "";
 
@@ -211,6 +353,14 @@ async function renderPositions(rows) {
         const costValue = size * avg;
         const cashPnl = holdValue - costValue;
         const percentPnl = costValue ? cashPnl / costValue : 0;
+        const accountAddress = r.__accountAddress || r.address || r.ownerAddress || "";
+        if (accountAddress) {
+            ensureManualAccountMeta(accountAddress);
+        }
+        const accountMeta = getAccountMeta(accountAddress, accountMetaMap);
+        const pkIdx = accountMeta?.pkIdx;
+        const pkIdxLiteral = Number.isInteger(pkIdx) ? pkIdx : "null";
+        const actionDisabledAttr = Number.isInteger(pkIdx) ? "" : ' disabled title="该账号未托管，无法平仓"';
 
         // 注意：盈亏计算已在 nonSmallRows 中完成，这里只用于显示单行数据
 
@@ -223,7 +373,7 @@ async function renderPositions(rows) {
       ${icon ? `<img class="icon" src="${icon}" alt="">` : ""}
       <div>
         <div>${title}</div>
-        <div class="outcome">${r.eventSlug ? r.eventSlug + " · " : ""}${outcome}</div>
+        <div class="outcome">${outcome}</div>
       </div>
     </td>
     <td class="right" data-th="数量">${size}</td>
@@ -244,7 +394,7 @@ async function renderPositions(rows) {
              id="${rowId}-price" value="${formatPriceInput(bestBid)}" />
       <input type="number" step="0.01" min="0.01" placeholder="数量"
              id="${rowId}-size" value="${size > 0 ? size.toFixed(3) : ""}" max="${size}" />
-      <button${Number.isFinite(bestBid) ? ` data-best-bid="${bestBid}"` : ""} onclick="handleCloseOrder('${tokenId}', '${rowId}', 'SELL')">平仓</button>
+      <button${Number.isFinite(bestBid) ? ` data-best-bid="${bestBid}"` : ""} onclick="handleCloseOrder('${tokenId}', '${rowId}', 'SELL', ${pkIdxLiteral})"${actionDisabledAttr}>平仓</button>
     </td>
   `;
         tbody.appendChild(tr);
@@ -311,6 +461,15 @@ function renderOpenOrders(orders = []) {
         const marketCell = slug
             ? `<a class="link" href="${POLY_EVENT_BASE_URL}${slug}" target="_blank" rel="noreferrer">${marketLabel}</a>`
             : marketLabel;
+        const accountInfo = order.account || {};
+        const accountAddress = accountInfo.address || "";
+        if (accountAddress) {
+            ensureManualAccountMeta(accountAddress);
+        }
+        // pkIdx 直接从 order.pkIdx 读取（后端在 /api/open-orders 中设置）
+        const pkIdxValue = Number(order.pkIdx ?? accountInfo.pkIdx);
+        const pkIdx = Number.isInteger(pkIdxValue) ? pkIdxValue : null;
+        const cancelDisabledAttr = pkIdx === null ? ' disabled title="该账号未托管，无法撤单"' : "";
         const tr = document.createElement("tr");
         tr.innerHTML = `
   <td data-th="订单ID">${shorten(order.id || order.order_id || "")}</td>
@@ -322,7 +481,7 @@ function renderOpenOrders(orders = []) {
   <td data-th="状态">${order.status || order.state || "live"}</td>
   <td data-th="创建时间">${parseOrderTime(order.created_time || order.created_at || order.timestamp)}</td>
   <td data-th="操作">
-    <button class="cancel-btn" data-order-id="${order.id || order.order_id || ""}">撤单</button>
+    <button class="cancel-btn" data-order-id="${order.id || order.order_id || ""}" data-pkidx="${pkIdx ?? ""}"${cancelDisabledAttr}>撤单</button>
   </td>
 `;
         tbody.appendChild(tr);
@@ -331,13 +490,68 @@ function renderOpenOrders(orders = []) {
     tbody.querySelectorAll(".cancel-btn").forEach((button) => {
         button.addEventListener("click", () => {
             const orderId = button.dataset.orderId;
+            const pkIdx = Number.isFinite(Number(button.dataset.pkidx))
+                ? Number(button.dataset.pkidx)
+                : null;
             if (!orderId) {
                 alert("缺少 orderId，无法撤单");
                 return;
             }
-            cancelOpenOrder(orderId, button);
+            if (pkIdx === null) {
+                alert("该账号未托管，无法撤单");
+                return;
+            }
+            cancelOpenOrder(orderId, pkIdx, button);
         });
     });
+}
+
+async function fetchPositionsFor(addresses = []) {
+    const tasks = addresses.map(async (address) => {
+        const normalized = normalizeAddress(address);
+        try {
+            const rows = await fetchPositions(address);
+            return { address: normalized, rows: Array.isArray(rows) ? rows : [] };
+        } catch (error) {
+            return { address: normalized, rows: [], error };
+        }
+    });
+    const results = await Promise.all(tasks);
+    const rows = [];
+    const errors = [];
+    results.forEach(({ address, rows: items, error }) => {
+        if (!address) return;
+        ensureManualAccountMeta(address);
+        if (error) {
+            errors.push({ address, error });
+            return;
+        }
+        items.forEach((row) => {
+            rows.push({
+                ...row,
+                __accountAddress: address,
+            });
+        });
+    });
+    return { rows, errors };
+}
+
+async function fetchTradesFor(addresses = []) {
+    const tasks = addresses.map(async (address) => {
+        const normalized = normalizeAddress(address);
+        if (!normalized) {
+            return [];
+        }
+        try {
+            const trades = await fetchTrades(address);
+            return trades;
+        } catch (error) {
+            return [];
+        }
+    });
+    let  trades = await Promise.all(tasks);
+    trades = trades.flat().sort((a, b) => (b.match_time || 0) - (a.match_time || 0));
+    return trades;
 }
 
 async function refreshOpenOrdersSection() {
@@ -361,15 +575,19 @@ async function refreshOpenOrdersSection() {
     }
 }
 
-async function refreshTradesSection(addr) {
+async function refreshTradesSection(addresses = getActiveAddresses()) {
     const tradeHint = $("tradeStatus");
+    if (!addresses.length) {
+        if (tradeHint) tradeHint.textContent = "等待加载…";
+        return;
+    }
     if (tradeHint) {
         tradeHint.textContent = "刷新成交…";
         tradeHint.classList.add("loading");
     }
     try {
-        const trades = await fetchTrades(addr);
-        renderTrades(Array.isArray(trades) ? trades : []);
+        const trades = await fetchTradesFor(addresses);
+        renderTrades(trades);
     } catch (err) {
         console.error("Failed to refresh trades:", err);
         if (tradeHint) tradeHint.textContent = "成交刷新失败";
@@ -382,17 +600,24 @@ async function refreshTradesSection(addr) {
     }
 }
 
-async function refreshPositionsSection(addr) {
+async function refreshPositionsSection(addresses = getActiveAddresses()) {
     const st = $("status");
+    if (!addresses.length) {
+        if (st) st.textContent = "请先选择至少一个账户";
+        return;
+    }
     if (st) {
         st.textContent = "刷新资产…";
         st.classList.add("loading");
     }
     try {
-        const rows = await fetchPositions(addr);
-        cachedPositions = Array.isArray(rows) ? rows : [];
-        await renderPositions(cachedPositions);
-        if (st) st.textContent = `已加载 ${cachedPositions.length} 条持仓`;
+        const result = await fetchPositionsFor(addresses);
+        cachedPositions = result.rows;
+        const pnl = await renderPositions(cachedPositions, { accountMetaMap: accountMetaByAddress });
+        if (st) {
+            st.textContent = `已加载 ${cachedPositions.length} 条持仓`;
+        }
+        return pnl;
     } catch (err) {
         console.error("Failed to refresh positions:", err);
         if (st) st.textContent = "资产刷新失败";
@@ -404,7 +629,7 @@ async function refreshPositionsSection(addr) {
 // 重新渲染已缓存的持仓数据（不重新获取）
 async function rerenderCachedPositions() {
     if (cachedPositions.length > 0) {
-        await renderPositions(cachedPositions);
+        await renderPositions(cachedPositions, { accountMetaMap: accountMetaByAddress });
     }
 }
 
@@ -421,8 +646,13 @@ function showToast({ title = "提示", message = "" }) {
     }, 4000);
 }
 
-async function cancelOpenOrder(orderId, button) {
+async function cancelOpenOrder(orderId, pkIdx, button) {
     if (!orderId) return;
+    const numericPkIdx = Number(pkIdx);
+    if (!Number.isInteger(numericPkIdx)) {
+        alert("未找到托管账号，无法撤单");
+        return;
+    }
     const confirmed = confirm(`确认撤销订单 ${shorten(orderId)} 吗？`);
     if (!confirmed) return;
     const originalText = button.textContent;
@@ -432,7 +662,7 @@ async function cancelOpenOrder(orderId, button) {
         const res = await fetch("/api/cancel-order", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ orderId }),
+            body: JSON.stringify({ orderId, pkIdx: numericPkIdx }),
         });
         if (!res.ok) {
             const body = await res.json().catch(() => ({}));
@@ -482,6 +712,10 @@ function renderTrades(trades) {
         const marketLabel = trade.question || "—";
         const orderIdLabel = shorten(trade.order_id || trade.orderId || "");
         const outcome = trade.outcome || "—";
+        const accountAddress = trade.__accountAddress || "";
+        if (accountAddress) {
+            ensureManualAccountMeta(accountAddress);
+        }
         const trEl = document.createElement("tr");
         trEl.innerHTML = `
   <td data-th="市场">${marketLabel}</td>
@@ -638,9 +872,14 @@ function updatePnlDashboard({ currentPnl, currentPnlPct, last24hPnl, totalPnl })
     }
 }
 
-async function handleCloseOrder(tokenId, rowId, side) {
+async function handleCloseOrder(tokenId, rowId, side, pkIdx) {
     if (!tokenId) {
         alert("缺少 tokenId，无法平仓");
+        return;
+    }
+    const numericPkIdx = Number(pkIdx);
+    if (!Number.isInteger(numericPkIdx)) {
+        alert("该账号未托管，无法平仓");
         return;
     }
 
@@ -684,7 +923,7 @@ async function handleCloseOrder(tokenId, rowId, side) {
     button.textContent = "提交中...";
 
     try {
-        const result = await placeCloseOrder(tokenId, roundedPrice, size, side);
+        const result = await placeCloseOrder(tokenId, roundedPrice, size, side, numericPkIdx);
         console.log(result);
         if (result.error) {
             alert(`平仓失败: ${result.error || "未知错误"}`);
@@ -712,100 +951,85 @@ async function handleCloseOrder(tokenId, rowId, side) {
 }
 
 async function load() {
-    const addr = $("addr").value.trim();
-    if (!addr || !addr.startsWith("0x") || addr.length < 10) {
-        alert("请输入有效的钱包地址（0x...）");
+    const addresses = getActiveAddresses();
+    if (!addresses.length) {
+        alert("请先选择至少一个账户");
         return;
     }
     const st = $("status");
     const tradeHint = $("tradeStatus");
     const openOrderHint = $("openOrderStatus");
-    st.textContent = "加载中…";
-    st.classList.add("loading");
-    tradeHint.textContent = "加载最近成交…";
-    tradeHint.classList.add("loading");
-    openOrderHint.textContent = "加载挂单…";
-    openOrderHint.classList.add("loading");
+    if (st) {
+        st.textContent = "加载中…";
+        st.classList.add("loading");
+    }
+    if (tradeHint) {
+        tradeHint.textContent = "加载最近成交…";
+        tradeHint.classList.add("loading");
+    }
+    if (openOrderHint) {
+        openOrderHint.textContent = "加载挂单…";
+        openOrderHint.classList.add("loading");
+    }
     try {
-        const [positionResult, openOrderResult, tradeResult] = await Promise.allSettled([
-            fetchPositions(addr),
-            fetchOpenOrders(),
-            fetchTrades(addr),
+        const [positionResult, tradesResult, openOrders] = await Promise.all([
+            fetchPositionsFor(addresses),
+            fetchTradesFor(addresses),
+            fetchOpenOrders().catch((err) => {
+                console.error("Failed to fetch open orders:", err);
+                return null;
+            }),
         ]);
 
-        let trades = [];
-        if (tradeResult.status === "fulfilled") {
-            trades = Array.isArray(tradeResult.value) ? tradeResult.value : [];
-            renderTrades(trades);
-        } else {
-            console.error(tradeResult.reason);
-            tradeHint.textContent = "成交加载失败";
-            const tbody = $("tradeBody");
-            tbody.innerHTML = `<tr><td colspan="9" class="muted" data-th="提示">成交列表加载失败</td></tr>`;
+        cachedPositions = positionResult.rows;
+        const positionPnl = await renderPositions(cachedPositions, {
+            accountMetaMap: accountMetaByAddress,
+        });
+        if (st) {
+            st.textContent = `已加载 ${cachedPositions.length} 条持仓`;
         }
 
-        if (openOrderResult.status === "fulfilled") {
-            renderOpenOrders(Array.isArray(openOrderResult.value) ? openOrderResult.value : []);
-        } else {
-            console.error(openOrderResult.reason);
-            openOrderHint.textContent = "挂单加载失败";
-            const openBody = $("openOrderBody");
-            openBody.innerHTML = `<tr><td colspan="8" class="muted" data-th="提示">挂单列表加载失败</td></tr>`;
+        renderTrades(tradesResult);
+        const openOrdersList = Array.isArray(openOrders) ? openOrders : [];
+        renderOpenOrders(openOrdersList);
+        if (openOrderHint) {
+            openOrderHint.textContent = Array.isArray(openOrders)
+                ? `共有 ${openOrders.length} 条挂单`
+                : "挂单加载失败";
         }
 
-        if (positionResult.status !== "fulfilled") {
-            throw positionResult.reason;
-        }
-
-        const rows = positionResult.value;
-        cachedPositions = Array.isArray(rows) ? rows : [];
-
-        // renderPositions 会基于过滤后的持仓计算盈亏并返回
-        const positionPnl = await renderPositions(cachedPositions);
-
-        // 计算已实现盈亏并更新收益看板
-        const realizedPnl = calculateRealizedPnl(trades);
-
-        // 使用 renderPositions 返回的基于过滤后持仓的盈亏数据
+        const realizedPnl = calculateRealizedPnl(tradesResult);
         const currentPnl = positionPnl?.currentPnl ?? 0;
         const currentPnlPct = positionPnl?.currentPnlPct ?? 0;
-
         updatePnlDashboard({
             currentPnl,
             currentPnlPct,
             last24hPnl: realizedPnl.last24h,
             totalPnl: realizedPnl.total,
         });
-
-        st.textContent = `已加载 ${Array.isArray(rows) ? rows.length : 0} 条持仓`;
     } catch (err) {
         console.error(err);
-        st.textContent = "加载失败（请检查网络/CORS 或稍后重试）";
+        if (st) st.textContent = "加载失败（请检查网络/CORS 或稍后重试）";
     } finally {
-        st.classList.remove("loading");
-        tradeHint.classList.remove("loading");
-        openOrderHint.classList.remove("loading");
+        if (st) st.classList.remove("loading");
+        if (tradeHint) tradeHint.classList.remove("loading");
+        if (openOrderHint) openOrderHint.classList.remove("loading");
     }
 }
 
 $("refresh").addEventListener("click", load);
 const positionRefreshBtn = $("positionRefresh");
 if (positionRefreshBtn) {
-    positionRefreshBtn.addEventListener("click", () =>
-        refreshPositionsSection($("addr").value.trim()),
-    );
+    positionRefreshBtn.addEventListener("click", () => refreshPositionsSection());
 }
 const hideSmallPositionsCheckbox = $("hideSmallPositions");
 if (hideSmallPositionsCheckbox) {
     hideSmallPositionsCheckbox.addEventListener("change", () => {
-        // 如果有缓存的数据，直接重新渲染；否则尝试刷新
+        // 如果有缓存的数据，直接重新渲染；否则刷新
         if (cachedPositions.length > 0) {
             rerenderCachedPositions();
         } else {
-            const addr = $("addr").value.trim();
-            if (addr && addr.startsWith("0x") && addr.length >= 10) {
-                refreshPositionsSection(addr);
-            }
+            refreshPositionsSection();
         }
     });
 }
@@ -815,19 +1039,22 @@ if (openOrderRefreshBtn) {
 }
 const tradeRefreshBtn = $("tradeRefresh");
 if (tradeRefreshBtn) {
-    tradeRefreshBtn.addEventListener("click", () => refreshTradesSection($("addr").value.trim()));
+    tradeRefreshBtn.addEventListener("click", () => refreshTradesSection());
 }
 window.handleCloseOrder = handleCloseOrder;
 
 // 初始化：加载当前地址
 (async () => {
-    try {
-        const address = await fetchCurrentAddress();
-        if (address) {
-            $("addr").value = address;
+    const accounts = await initAccountsPanel();
+    if (!accounts.length) {
+        try {
+            const address = await fetchCurrentAddress();
+            if (address) {
+                $("addr").value = address;
+            }
+        } catch (err) {
+            console.error("Failed to fetch current address:", err);
         }
-    } catch (err) {
-        console.error("Failed to fetch current address:", err);
     }
     load();
 })();

@@ -2,7 +2,13 @@ import express from "express";
 import path from "path";
 import {fileURLToPath} from "url";
 import axios from "axios";
-import { getDefaultClient, getAccount, getAccountWithBalance } from "./core/poly-client-manage.js";
+import {
+    buildClient,
+    getAccount,
+    getAccountWithBalance,
+    activeClientMap,
+    getDefaultClient,
+} from "./core/poly-client-manage.js";
 import {listOrders, deleteOrder, updateOrder} from "./db/repository.js";
 import {getMinuteSamples} from "./db/statisc-repository.js";
 import {
@@ -11,7 +17,6 @@ import {
     upsertConvergenceTaskConfig,
     deleteConvergenceTaskConfig,
 } from "./db/convergence-task-config-repository.js";
-import { listClients } from "./core/poly-client-manage.js";
 
 const PORT = process.env.PORT || 3001;
 const BTC_PRICE_SOURCE = process.env.BTC_PRICE_SOURCE || "https://api.binance.com/api/v3/klines";
@@ -153,8 +158,11 @@ app.get("/api/trades", async (req, res) => {
         if (!/^0x[0-9a-fA-F]{40}$/.test(normalized)) {
             return res.status(400).json({error: "invalid_address", message: "address must be a valid EVM address"});
         }
-
-        const trades = await polyClient.listMyTrades({makerAddress: normalized});
+        const client = Array.from(activeClientMap().values()).find((client) => client.funderAddress === normalized);
+        if (!client) {
+            return res.status(400).json({error: "account_not_found", message: "account not found"});
+        }
+        const trades = await client.listMyTrades({makerAddress: normalized});
         res.json(trades);
     } catch (err) {
         console.error("Failed to fetch trades:", err.message);
@@ -168,15 +176,23 @@ app.get("/api/trades", async (req, res) => {
 app.get("/api/open-orders", async (req, res) => {
     try {
         const {market, assetId} = req.query;
-        const clients = listClients();
-        let allOrders = [];
-        for(let client of clients){
+        const clients = activeClientMap();
+        if (!clients.size) {
+            return res.json([]);
+        }
+        const allOrders = [];
+        for (const client of clients.values()) {
+            if (!client) continue;
             const orders = await client.listOpenOrders({
                 market: market || undefined,
                 assetId: assetId || undefined,
             });
-            const enriched = await enrichOrdersWithMarketMeta(orders);
-            allOrders.push(...enriched);
+            orders.map((order) => {
+                order.pkIdx = client.pkIdx;
+                return order;
+            });
+            await enrichOrdersWithMarketMeta(orders,client);
+            allOrders.push(...orders);
         }
         res.json(allOrders);
     } catch (err) {
@@ -272,27 +288,7 @@ app.delete("/api/convergence-tasks/:slug", async (req, res) => {
     }
 });
 
-function parseTradeTimestamp(value) {
-    if (!value) {
-        return Date.now();
-    }
 
-    if (typeof value === "number" && Number.isFinite(value)) {
-        return value > 1e12 ? value : value * 1000;
-    }
-
-    const numeric = Number(value);
-    if (!Number.isNaN(numeric)) {
-        return numeric > 1e12 ? numeric : numeric * 1000;
-    }
-
-    const parsed = Date.parse(value);
-    if (!Number.isNaN(parsed)) {
-        return parsed;
-    }
-
-    return Date.now();
-}
 
 /**
  * 获取最优买卖价格
@@ -334,14 +330,15 @@ app.get("/api/best-prices/:tokenId", async (req, res) => {
 
 app.post("/api/place-order", async (req, res) => {
     try {
-        const {price, size, side, tokenId} = req.body;
+        const {price, size, side, tokenId, pkIdx} = req.body;
         if (!price || !size || !side || !tokenId) {
             return res.status(400).json({
                 error: "missing_parameters",
                 message: "price, size, side, and tokenId are required",
             });
         }
-        const result = await polyClient.placeOrder(price, size, side, tokenId);
+        const client = activeClientMap().get(pkIdx);
+        const result = await client.placeOrder(price, size, side, tokenId);
         res.json(result);
     } catch (err) {
         console.error("Failed to place order:", err.message);
@@ -354,14 +351,21 @@ app.post("/api/place-order", async (req, res) => {
 
 app.post("/api/cancel-order", async (req, res) => {
     try {
-        const {orderId} = req.body;
+        const {orderId, pkIdx} = req.body;
         if (!orderId) {
             return res.status(400).json({
                 error: "missing_order_id",
                 message: "orderId is required",
             });
         }
-        const result = await polyClient.cancelOrder(orderId);
+        const client = activeClientMap().get(pkIdx);
+        if (!client) {
+            return res.status(400).json({
+                error: "client_not_found",
+                message: `No client found for pkIdx: ${pkIdx}`,
+            });
+        }
+        const result = await client.cancelOrder(orderId);
         res.json(result);
     } catch (err) {
         console.error("Failed to cancel order:", err.message);
@@ -374,17 +378,33 @@ app.post("/api/cancel-order", async (req, res) => {
 
 app.get("/api/current-address", async (req, res) => {
     try {
-        const clients = listClients();
-        let allAddresses = new Set();
-        for(let client of clients){
-            const address = client.funderAddress;
-            allAddresses.add(address);
-        }
-        res.json({addresses: allAddresses.join(",")});
+        const clients = Array.from(activeClientMap().values());
+        const addresses = clients.map((client) => client.funderAddress);
+        res.json({addresses, address: addresses[0] || null});
     } catch (err) {
         console.error("Failed to get current address:", err.message);
-        res.status(500).json({
-            error: "failed_to_get_address",
+        res.status(500).json({error: "failed_to_get_address", message: err.message});
+    }
+});
+
+app.get("/api/accounts", async (_req, res) => {
+    try {
+        const activeAccountConfigs = Array.from(activeClientMap().values());
+        const result = [];
+       for(const client of activeAccountConfigs) {
+            result.push({
+                slug: client.taskSlug,
+                name: client.taskName,
+                pkIdx: client.pkIdx,
+                active: true,
+                address: client.funderAddress,
+            });
+        }
+        res.json({count: result.length, items: result});
+    } catch (err) {
+        console.error("Failed to list accounts:", err.message);
+        res.status(err.statusCode || err.status || 500).json({
+            error: "failed_to_list_accounts",
             message: err.message,
         });
     }
@@ -565,10 +585,10 @@ function dedupeCandles(points) {
     });
 }
 
-async function enrichOrdersWithMarketMeta(orders) {
+async function enrichOrdersWithMarketMeta(orders,client) {
     for (let order of orders) {
         let conditionId = order.market;
-        order.market = (await polyClient.getMarketByConditionId(conditionId))[0].slug;
+        order.market = (await client.getMarketByConditionId(conditionId))[0].slug;
     }
     return orders;
 }

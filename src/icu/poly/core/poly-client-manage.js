@@ -29,7 +29,7 @@ import addrInitV5 from "./addr-init-v5.js";
 import AsyncLock from "async-lock";
 import { updatePkIdxAndCredsByPkIdx } from "../db/convergence-task-config-repository.js";
 import { initCreds } from "./PolyClient.js";
-import { loadConvergenceTaskConfigs } from "../data/convergence-up.config.js";
+import convergenceTaskConfigs from "../data/convergence-up.config.js";
 import logger from "./Logger.js";
 
 // ========== 配置 ==========
@@ -40,6 +40,15 @@ const CHAIN_ID = 137;
 let currentPolyClient = null;
 let currentIndex = parseInt(process.env.poly_mnemonic_idx || "0", 10);
 let clientMap = new Map();
+const accountConfigs = convergenceTaskConfigs;
+const activeAccountConfigs = accountConfigs.filter((config) => config.task.active);
+activeAccountConfigs.forEach((config) => {
+    const client = buildClient(config.task.pkIdx, config.task.creds);
+    client.pkIdx = config.task.pkIdx;
+    client.taskSlug = config.task.slug;
+    client.taskName = config.task.name;
+    clientMap.set(config.task.pkIdx, client);
+});
 
 const lock = new AsyncLock();
 /**
@@ -227,7 +236,6 @@ export function buildClient(idx, creds) {
 
 export async function nextClient(idx, oldClient) {
     try {
-
         const oldAddress = oldClient.funderAddress;
         // 删除旧的缓存
         clientMap.delete(idx);
@@ -293,15 +301,14 @@ export async function nextClient(idx, oldClient) {
 }
 
 export async function getDefaultClient() {
-    const configs = await loadConvergenceTaskConfigs();
-    const config = configs[0];
-    const client = buildClient(config.task.pkIdx, config.task.creds);
+    const config = activeAccountConfigs[0];
+    const client = buildClient(config .task.pkIdx, config.task.creds);
     logger.info(`使用账户—> #${config.task.pkIdx}  ${client.funderAddress}`);
     return client;
 }
 
-export const listClients = () => {
-    return Array.from(clientMap.values());
+export const activeClientMap = () => {
+    return clientMap
 }
 // 初始化PolyClient
 // getPolyClient();

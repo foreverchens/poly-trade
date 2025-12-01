@@ -40,13 +40,13 @@ const SIGMA_TTL = 5 * 60 * 1000; // σ 缓存有效期 5 分钟
 
 // 3. 配置参数
 const CONFIG = {
-    limit: 240,         // 回溯 240 根 5m K 线
-    dist: "normal",     // 分布假设
-    lambda: 0.94,       // EWMA 系数 数值越小短期越敏感
+    limit: 240, // 回溯 240 根 5m K 线
+    dist: "normal", // 分布假设
+    lambda: 0.94, // EWMA 系数 数值越小短期越敏感
     winsorLow: 0.0,
-    winsorHigh: 0.995,  // 保留更多极端值
-    sigmaMin: 0.003,    // 0.3%/h
-    sigmaMax: 0.06,     // 6%/h
+    winsorHigh: 0.995, // 保留更多极端值
+    sigmaMin: 0.003, // 0.3%/h
+    sigmaMax: 0.06, // 6%/h
 };
 
 /** ===== 内部工具 ===== */
@@ -131,7 +131,7 @@ async function getSigmaCached(symbol) {
 
     // 检查缓存是否有效
     const cached = CACHE[symbol].sigma;
-    if (cached && (now - cached.ts < SIGMA_TTL)) {
+    if (cached && now - cached.ts < SIGMA_TTL) {
         return cached.val;
     }
 
@@ -171,6 +171,7 @@ async function getS0Cached(symbol) {
     return val;
 }
 
+let lastZ = 0;
 /**
  * 获取当前市场状态的 Z-Score
  *
@@ -184,23 +185,24 @@ async function getS0Cached(symbol) {
  * @returns {Promise<number>} z 值（保留 1 位小数，如 4.2）
  */
 export async function getZ(symbol, tSec) {
-    symbol = symbol + "/USDT";
-    if (!(tSec >= 0)) throw new Error("tSec 必须是非负秒数（当前小时剩余时间，单位秒）");
+    try {
+        symbol = symbol + "/USDT";
+        if (!(tSec >= 0)) throw new Error("tSec 必须是非负秒数（当前小时剩余时间，单位秒）");
 
-    // 1) 获取缓存或计算 σ1h 和 S0 (并行执行)
-    const [sigma1h, S0] = await Promise.all([
-        getSigmaCached(symbol),
-        getS0Cached(symbol)
-    ]);
+        // 1) 获取缓存或计算 σ1h 和 S0 (并行执行)
+        const [sigma1h, S0] = await Promise.all([getSigmaCached(symbol), getS0Cached(symbol)]);
 
-    // 2) 取最新价 St（ticker.last）- 必须实时
-    const ticker = await ex.fetchTicker(symbol);
-    const St = Number(ticker.last);
-    if (!(St > 0)) throw new Error("最新成交价无效");
+        // 2) 取最新价 St（ticker.last）- 必须实时
+        const ticker = await ex.fetchTicker(symbol);
+        const St = Number(ticker.last);
+        if (!(St > 0)) throw new Error("最新成交价无效");
 
-    // 3) 计算 z
-    const z = calculateRawZ(St, S0, sigma1h, tSec);
-
-    // 保留1位小数并转回数字
-    return Number(z.toFixed(1));
+        // 3) 计算 z
+        const z = calculateRawZ(St, S0, sigma1h, tSec);
+        lastZ = Number(z.toFixed(1));
+        // 保留1位小数并转回数字
+        return lastZ;
+    } catch (error) {
+        return lastZ;
+    }
 }

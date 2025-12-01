@@ -120,6 +120,23 @@ export async function upsertConvergenceTaskConfig(config) {
     return mapRowToTaskConfig(row);
 }
 
+export async function updatePkIdxAndCredsByPkIdx(currentPkIdx, nextPkIdx, creds) {
+    if (!Number.isInteger(currentPkIdx)) {
+        throw new Error('currentPkIdx 必须是整数');
+    }
+    if (!Number.isInteger(nextPkIdx)) {
+        throw new Error('nextPkIdx 必须是整数');
+    }
+
+    return prisma.convergence_task_config.updateMany({
+        where: { pk_idx: currentPkIdx },
+        data: {
+            pk_idx: nextPkIdx,
+            creds: typeof creds === 'undefined' ? undefined : creds ?? null,
+        },
+    });
+}
+
 export async function deleteConvergenceTaskConfig(slug) {
     if (!slug) {
         throw new Error('缺少 slug，无法删除配置');
@@ -128,4 +145,3 @@ export async function deleteConvergenceTaskConfig(slug) {
         where: { slug },
     });
 }
-

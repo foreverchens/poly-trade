@@ -2,7 +2,7 @@ import express from "express";
 import path from "path";
 import {fileURLToPath} from "url";
 import axios from "axios";
-import { getPolyClient } from "./core/poly-client-manage.js";
+import { getPolyClient, getAccount, getAccountWithBalance } from "./core/poly-client-manage.js";
 import {listOrders, deleteOrder, updateOrder} from "./db/repository.js";
 import {getMinuteSamples} from "./db/statisc-repository.js";
 import {
@@ -183,7 +183,8 @@ app.get("/api/open-orders", async (req, res) => {
 app.get("/api/convergence-tasks", async (_req, res) => {
     try {
         const configs = await listConvergenceTaskConfigs();
-        res.json({count: configs.length, items: configs});
+        const enriched = await attachAccountDetails(configs);
+        res.json({count: enriched.length, items: enriched});
     } catch (err) {
         console.error("Failed to list convergence tasks:", err.message);
         res.status(err.statusCode || err.status || 500).json({
@@ -206,7 +207,8 @@ app.get("/api/convergence-tasks/:slug", async (req, res) => {
                 message: `任务 ${slug} 不存在`,
             });
         }
-        res.json(task);
+        const [enriched] = await attachAccountDetails([task]);
+        res.json(enriched || task);
     } catch (err) {
         console.error("Failed to fetch convergence task:", err.message);
         res.status(err.statusCode || err.status || 500).json({
@@ -378,6 +380,74 @@ app.get("/api/current-address", async (req, res) => {
 
 app.use(express.static(viewDir));
 const btcHistoryCache = new Map();
+
+async function attachAccountDetails(configs = []) {
+    if (!Array.isArray(configs) || configs.length === 0) {
+        return configs;
+    }
+
+    const indices = [
+        ...new Set(
+            configs
+                .map((config) => (Number.isInteger(config?.task?.pkIdx) ? config.task.pkIdx : null))
+                .filter((idx) => Number.isInteger(idx)),
+        ),
+    ];
+    if (!indices.length) {
+        return configs.map((config) => ({
+            ...config,
+            account: null,
+        }));
+    }
+
+    const accountEntries = await Promise.all(
+        indices.map(async (idx) => {
+            try {
+                const account = await getAccountWithBalance(idx);
+                return [
+                    idx,
+                    {
+                        idx,
+                        address: account.address,
+                        usdcBalance: account.usdcBalance ?? null,
+                    },
+                ];
+            } catch (err) {
+                console.error(
+                    `[convergence-tasks] Failed to fetch account #${idx}:`,
+                    err.message,
+                );
+                try {
+                    const fallback = getAccount(idx);
+                    return [
+                        idx,
+                        {
+                            idx,
+                            address: fallback.address,
+                            usdcBalance: null,
+                        },
+                    ];
+                } catch (deriveErr) {
+                    console.error(
+                        `[convergence-tasks] Failed to derive address for #${idx}:`,
+                        deriveErr.message,
+                    );
+                    return [idx, null];
+                }
+            }
+        }),
+    );
+
+    const accountMap = new Map(accountEntries.filter(([, value]) => Boolean(value)));
+
+    return configs.map((config) => {
+        const pkIdx = Number.isInteger(config?.task?.pkIdx) ? config.task.pkIdx : null;
+        return {
+            ...config,
+            account: pkIdx !== null ? accountMap.get(pkIdx) || null : null,
+        };
+    });
+}
 
 function normalizeBtcInterval(value) {
     const key = typeof value === "string" ? value.trim().toLowerCase() : "";

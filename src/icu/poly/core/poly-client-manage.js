@@ -132,7 +132,7 @@ async function rebuildPolyClient() {
 
         if (parseFloat(polBalanceFormatted) > 0.01) {
             // 预留 0.005 POL 用于可能的其他操作
-            const amountToTransfer = (parseFloat(polBalanceFormatted) - 0.005).toFixed(6);
+            const amountToTransfer = (parseFloat(polBalanceFormatted) - 0.01).toFixed(6);
             await transferPOL(oldPrivateKey, newAccount.address, amountToTransfer);
             console.log(`  ✓ POL 转移成功: ${amountToTransfer}`);
         } else {
@@ -179,6 +179,32 @@ export async function rebuildPolyClientSync() {
         }
     });
 }
+
+
+/**
+ *  基于助记词和索引 生成账户
+ * @param idx
+ * @returns {{address: string, privateKey: string, path: string}}
+ */
+export function getAccount(idx = currentIndex) {
+    return generateAccountFromMnemonic(process.env.poly_mnemonic, idx);
+}
+
+/**
+ * 基于助记词和索引 生成账户 并获取账户的USDC余额
+ * @param idx
+ * @returns {{address: string, privateKey: string, path: string, usdcBalance: string}}
+ */
+export async function getAccountWithBalance(idx = currentIndex) {
+    const account = getAccount(idx);
+    const client = new PolyClient(account.privateKey);
+    const usdcBalance = await client.getUsdcEBalance();
+    return {
+        ...account,
+        usdcBalance,
+    };
+}
+
 // 初始化PolyClient
 getPolyClient();
 

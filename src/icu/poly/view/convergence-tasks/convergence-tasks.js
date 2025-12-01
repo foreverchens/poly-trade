@@ -1,3 +1,14 @@
+function formatUsdcBalance(value) {
+    if (value === null || value === undefined || value === "") {
+        return "-";
+    }
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) {
+        return `${value}`;
+    }
+    return numeric >= 1 ? numeric.toFixed(2) : numeric.toFixed(4);
+}
+
 const columnDefs = [
     { key: "task.name", label: "任务名称", type: "text", width: 180 },
     {
@@ -9,6 +20,19 @@ const columnDefs = [
     },
     { key: "task.symbol", label: "Symbol", type: "text", width: 80 },
     { key: "task.pkIdx", label: "pkIdx", type: "number", integer: true, width: 70 },
+    {
+        key: "account.address",
+        label: "账户地址",
+        type: "readonly",
+        width: 280,
+    },
+    {
+        key: "account.usdcBalance",
+        label: "USDC(E) 余额",
+        type: "readonly",
+        width: 140,
+        formatter: (value) => formatUsdcBalance(value),
+    },
     { key: "task.active", label: "Active", type: "boolean", width: 70 },
     { key: "task.test", label: "Test", type: "boolean", width: 70 },
     { key: "schedule.cronExpression", label: "Cron 表达式", type: "text", width: 220 },

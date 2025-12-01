@@ -111,7 +111,7 @@ model convergence_task_config {
     risk_liquidity_sufficient_threshold      Float
     risk_spike_protection_count              Int
     create_time                              DateTime @default(now())
+    creds                                    Json?
     extra                                    String   @default("")
 }
-
 

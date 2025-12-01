@@ -39,18 +39,30 @@ export function getCurrentMinute() {
 }
 
 /**
- * Fetch asset price from Binance spot API
+ * Fetch latest 1m kline to derive open/close prices
  * @param {string} symbol - e.g., 'ETH', 'BTC'
- * @returns {Promise<string>} - Price as string
+ * @returns {Promise<{openPrice: string, closePrice: string}>}
  */
 async function fetchAssetPrice(symbol) {
     try {
-        const response = await axios.get(
-            `https://api.binance.com/api/v3/ticker/price?symbol=${symbol}USDT`,
-        );
-        return response.data.price;
+        const response = await axios.get('https://api.binance.com/api/v3/klines', {
+            params: {
+                symbol: `${symbol}USDT`,
+                interval: '1m',
+                limit: 1,
+            },
+        });
+
+        const kline = response.data?.[0];
+        if (!kline) {
+            throw new Error('No kline data returned');
+        }
+
+        const openPrice = kline[1];
+        const closePrice = kline[4];
+        return {openPrice, closePrice};
     } catch (error) {
-        logger.error(`Failed to fetch ${symbol} price from Binance:`, error.message);
+        logger.error(`Failed to fetch ${symbol} kline from Binance:`, error.message);
         throw error;
     }
 }
@@ -107,7 +119,7 @@ export async function initializeHourMarket(market, symbol, eventSlug) {
         const {day, hour} = getUtc8DayHour(endDate.getTime());
 
         // 获取开盘价
-        const openPrice = await fetchAssetPrice(symbol);
+        const {openPrice} = await fetchAssetPrice(symbol);
         logger.info(`[小时数据录入] 获取 ${symbol} 开盘价: ${openPrice}`);
 
         // 格式化市场结束时间为UTC+8字符串
@@ -145,7 +157,7 @@ export async function recordMinuteSample(marketSlug, symbol, upTokenId, downToke
     try {
 
         // Fetch asset price from Binance
-        const assertPrice = await fetchAssetPrice(symbol);
+        const {closePrice: assertPrice} = await fetchAssetPrice(symbol);
         const numericAssertPrice = Number(assertPrice);
 
         const client = getPolyClient();
@@ -243,7 +255,7 @@ export async function finalizeHourMarket(marketSlug, symbol) {
         logger.info(`[小时数据录入] 开始完成市场 ${marketSlug} 的数据录入...`);
 
         // 获取收盘价
-        const closePrice = await fetchAssetPrice(symbol);
+        const {closePrice} = await fetchAssetPrice(symbol);
         logger.info(`[小时数据录入] 获取 ${symbol} 收盘价: ${closePrice}`);
 
         // 获取分钟采样数据

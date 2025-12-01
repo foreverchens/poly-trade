@@ -1,6 +1,8 @@
 import "dotenv/config";
 import { TailConvergenceStrategy as UpDownStrategy } from "./bots/tail-convergence/up-bot.js";
-import taskConfigs from "./data/convergence-up.config.js";
+import { loadConvergenceTaskConfigs } from "./data/convergence-up.config.js";
+
+const taskConfigs = await loadConvergenceTaskConfigs();
 
 for (const taskConfig of taskConfigs) {
     console.log(`[扫尾盘管理器-UP/DOWN] 启动任务: ${taskConfig.task.name}`);
@@ -13,5 +15,4 @@ for (const taskConfig of taskConfigs) {
         process.exit(1);
     });
 }
-
 

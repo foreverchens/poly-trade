@@ -88,5 +88,30 @@ model hour_minute_samples {
   @@index([market_slug], name: "idx_samples_market")
 }
 
+model convergence_task_config {
+    slug                                     String   @id
+    name                                     String
+    symbol                                   String
+    pk_idx                                   Int
+    active                                   Boolean  @default(true)
+    test                                     Boolean  @default(false)
+    schedule_cron_expression                 String
+    schedule_cron_timezone                   String
+    schedule_tick_interval_seconds           Int
+    position_size_usdc                       Float
+    position_extra_size_usdc                 Float
+    allow_extra_entry_at_ceiling             Boolean  @default(false)
+    risk_price_trigger_gt                    Float
+    risk_price_take_profit                   Float
+    risk_time_max_minutes_to_end             Int
+    risk_time_monitor_mode_minute_threshold  Int
+    risk_statistics_z_min                    Float
+    risk_statistics_amp_min                  Float
+    risk_statistics_high_volatility_z_thresh Float
+    risk_liquidity_sufficient_threshold      Float
+    risk_spike_protection_count              Int
+    create_time                              DateTime @default(now())
+    extra                                    String   @default("")
+}
 
 

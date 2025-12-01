@@ -7,7 +7,9 @@ import {
     finalizeHourMarket,
 } from './hour-market-recorder.js';
 import { getHourOverview, deleteHourDataBefore } from '../db/statisc-repository.js';
-import convergenceTaskConfigs from '../data/convergence-up.config.js';
+import { loadConvergenceTaskConfigs } from '../data/convergence-up.config.js';
+
+const convergenceTaskConfigs = await loadConvergenceTaskConfigs();
 
 const DEFAULT_SCHEDULE_INTERVAL_MS = 10_000; // 每个任务10秒调度一次
 const DEFAULT_SAMPLE_SECOND = 30; // 在30秒附近采样

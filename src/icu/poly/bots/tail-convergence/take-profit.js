@@ -73,6 +73,7 @@ export class TakeProfitManager {
         let takeProfitCount = 0;
         let errorCount = 0;
         let skippedCount = 0;
+        //  合并止盈不可行、基础建仓和额外建仓买入参数可能不一致、无法合并
         for (const takeProfitOrder of pendingOrders) {
             if (takeProfitOrder.error) {
                 // 跳过已有错误的订单，避免重复执行

@@ -20,19 +20,6 @@ const columnDefs = [
     },
     { key: "task.symbol", label: "Symbol", type: "text", width: 80 },
     { key: "task.pkIdx", label: "pkIdx", type: "number", integer: true, width: 70 },
-    {
-        key: "account.address",
-        label: "账户地址",
-        type: "readonly",
-        width: 280,
-    },
-    {
-        key: "account.usdcBalance",
-        label: "USDC(E) 余额",
-        type: "readonly",
-        width: 140,
-        formatter: (value) => formatUsdcBalance(value),
-    },
     { key: "task.active", label: "Active", type: "boolean", width: 70 },
     { key: "task.test", label: "Test", type: "boolean", width: 70 },
     { key: "schedule.cronExpression", label: "Cron 表达式", type: "text", width: 220 },
@@ -140,6 +127,8 @@ const messageEl = document.getElementById("message");
 const refreshBtn = document.getElementById("btn-refresh");
 const createBtn = document.getElementById("btn-create");
 const totalBalanceEl = document.getElementById("total-balance");
+const accountsTableBody = document.getElementById("accounts-table-body");
+const refreshAccountsBtn = document.getElementById("btn-refresh-accounts");
 
 async function fetchTasks() {
     if (state.loading) return;
@@ -651,4 +640,291 @@ async function handleDelete(rowIndex) {
     }
 }
 
+// ========== 地址列表功能 ==========
+
+const accountsState = {
+    items: [],
+    loading: false,
+};
+
+function formatPolBalance(value) {
+    if (value === null || value === undefined || value === "") {
+        return "-";
+    }
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) {
+        return `${value}`;
+    }
+    return numeric >= 1 ? numeric.toFixed(4) : numeric.toFixed(6);
+}
+
+async function fetchAccounts() {
+    if (accountsState.loading) return;
+    accountsState.loading = true;
+    setAccountsLoading();
+    try {
+        const response = await fetch("/api/accounts");
+        if (!response.ok) {
+            const body = await response.json().catch(() => ({}));
+            throw new Error(body.message || "加载地址列表失败");
+        }
+        const payload = await response.json();
+        accountsState.items = payload.items || [];
+        renderAccounts();
+    } catch (err) {
+        showMessage(err.message, "error");
+        accountsState.items = [];
+        renderAccounts();
+    } finally {
+        accountsState.loading = false;
+    }
+}
+
+function setAccountsLoading() {
+    accountsTableBody.innerHTML = `<tr><td class="empty" colspan="5">加载中...</td></tr>`;
+}
+
+function renderAccounts() {
+    accountsTableBody.innerHTML = "";
+    if (!accountsState.items.length) {
+        const row = document.createElement("tr");
+        const cell = document.createElement("td");
+        cell.className = "empty";
+        cell.colSpan = 5;
+        cell.textContent = "暂无地址";
+        row.appendChild(cell);
+        accountsTableBody.appendChild(row);
+        return;
+    }
+
+    accountsState.items.forEach((account) => {
+        const tr = document.createElement("tr");
+        tr.dataset.pkIdx = account.pkIdx;
+
+        const pkIdxCell = document.createElement("td");
+        pkIdxCell.textContent = account.pkIdx;
+        tr.appendChild(pkIdxCell);
+
+        const addressCell = document.createElement("td");
+        addressCell.textContent = account.address;
+        addressCell.style.fontFamily = "monospace";
+        addressCell.style.fontSize = "12px";
+        tr.appendChild(addressCell);
+
+        const polCell = document.createElement("td");
+        polCell.textContent = formatPolBalance(account.polBalance);
+        polCell.style.fontVariantNumeric = "tabular-nums";
+        tr.appendChild(polCell);
+
+        const usdcCell = document.createElement("td");
+        usdcCell.textContent = formatUsdcBalance(account.usdcBalance);
+        usdcCell.style.fontVariantNumeric = "tabular-nums";
+        tr.appendChild(usdcCell);
+
+        const actionsCell = document.createElement("td");
+        actionsCell.className = "actions";
+        actionsCell.appendChild(createAccountActions(account));
+        tr.appendChild(actionsCell);
+
+        accountsTableBody.appendChild(tr);
+    });
+}
+
+function createAccountActions(account) {
+    const fragment = document.createDocumentFragment();
+
+    const transferPolBtn = document.createElement("button");
+    transferPolBtn.textContent = "划转 POL";
+    transferPolBtn.className = "transfer-btn";
+    transferPolBtn.dataset.action = "transfer-pol";
+    transferPolBtn.dataset.pkIdx = account.pkIdx;
+    transferPolBtn.dataset.address = account.address;
+    fragment.appendChild(transferPolBtn);
+
+    const transferUsdcBtn = document.createElement("button");
+    transferUsdcBtn.textContent = "划转 USDC.e";
+    transferUsdcBtn.className = "transfer-btn";
+    transferUsdcBtn.dataset.action = "transfer-usdc";
+    transferUsdcBtn.dataset.pkIdx = account.pkIdx;
+    transferUsdcBtn.dataset.address = account.address;
+    fragment.appendChild(transferUsdcBtn);
+
+    return fragment;
+}
+
+// ========== 模态对话框功能 ==========
+
+const transferModal = document.getElementById("transfer-modal");
+const transferModalTitle = document.getElementById("transfer-modal-title");
+const transferToInput = document.getElementById("transfer-to");
+const transferAmountInput = document.getElementById("transfer-amount");
+const transferUnit = document.getElementById("transfer-unit");
+const transferFromAddress = document.getElementById("transfer-from-address");
+const transferCancelBtn = document.getElementById("transfer-cancel");
+const transferConfirmBtn = document.getElementById("transfer-confirm");
+const modalCloseBtn = document.querySelector(".modal-close");
+const modalOverlay = document.querySelector(".modal-overlay");
+
+let currentTransferType = null;
+let currentPkIdx = null;
+let currentFromAddress = null;
+
+function isValidAddress(address) {
+    return /^0x[a-fA-F0-9]{40}$/.test(address);
+}
+
+function isValidAmount(amount) {
+    const num = parseFloat(amount);
+    return !isNaN(num) && num > 0 && isFinite(num);
+}
+
+function showTransferModal(type, pkIdx, fromAddress) {
+    currentTransferType = type;
+    currentPkIdx = pkIdx;
+    currentFromAddress = fromAddress;
+
+    const tokenName = type === "pol" ? "POL" : "USDC.e";
+    transferModalTitle.textContent = `划转 ${tokenName}`;
+    transferUnit.textContent = tokenName;
+    transferFromAddress.textContent = fromAddress;
+    transferToInput.value = "";
+    transferAmountInput.value = "";
+    transferToInput.classList.remove("error");
+    transferAmountInput.classList.remove("error");
+
+    transferModal.style.display = "flex";
+    setTimeout(() => {
+        transferToInput.focus();
+    }, 100);
+}
+
+function hideTransferModal() {
+    transferModal.style.display = "none";
+    currentTransferType = null;
+    currentPkIdx = null;
+    currentFromAddress = null;
+}
+
+function validateTransferForm() {
+    let isValid = true;
+    const to = transferToInput.value.trim();
+    const amount = transferAmountInput.value.trim();
+
+    if (!to || !isValidAddress(to)) {
+        transferToInput.classList.add("error");
+        isValid = false;
+    } else {
+        transferToInput.classList.remove("error");
+    }
+
+    if (!amount || !isValidAmount(amount)) {
+        transferAmountInput.classList.add("error");
+        isValid = false;
+    } else {
+        transferAmountInput.classList.remove("error");
+    }
+
+    return isValid;
+}
+
+async function executeTransfer() {
+    if (!validateTransferForm()) {
+        return;
+    }
+
+    const to = transferToInput.value.trim();
+    const amount = transferAmountInput.value.trim();
+    const tokenName = currentTransferType === "pol" ? "POL" : "USDC.e";
+
+    transferConfirmBtn.disabled = true;
+    transferConfirmBtn.textContent = "划转中...";
+
+    try {
+        showMessage(`正在划转 ${amount} ${tokenName}...`, "");
+        const endpoint = currentTransferType === "pol"
+            ? `/api/accounts/${currentPkIdx}/transfer-pol`
+            : `/api/accounts/${currentPkIdx}/transfer-usdc`;
+        const response = await fetch(endpoint, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ to, amount }),
+        });
+
+        if (!response.ok) {
+            const body = await response.json().catch(() => ({}));
+            throw new Error(body.message || "划转失败");
+        }
+
+        const result = await response.json();
+        hideTransferModal();
+        showMessage(
+            `划转成功! Hash: ${result.hash.slice(0, 10)}...`,
+            "success",
+        );
+        setTimeout(() => {
+            fetchAccounts();
+        }, 2000);
+    } catch (err) {
+        showMessage(err.message, "error");
+        transferConfirmBtn.disabled = false;
+        transferConfirmBtn.textContent = "确认划转";
+    }
+}
+
+transferConfirmBtn.addEventListener("click", executeTransfer);
+transferCancelBtn.addEventListener("click", hideTransferModal);
+modalCloseBtn.addEventListener("click", hideTransferModal);
+modalOverlay.addEventListener("click", hideTransferModal);
+
+transferToInput.addEventListener("input", () => {
+    transferToInput.classList.remove("error");
+});
+
+transferAmountInput.addEventListener("input", () => {
+    transferAmountInput.classList.remove("error");
+});
+
+transferToInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+        e.preventDefault();
+        transferAmountInput.focus();
+    }
+});
+
+transferAmountInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+        e.preventDefault();
+        executeTransfer();
+    }
+});
+
+document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && transferModal.style.display === "flex") {
+        hideTransferModal();
+    }
+});
+
+async function handleTransfer(type, pkIdx, fromAddress) {
+    showTransferModal(type, pkIdx, fromAddress);
+}
+
+accountsTableBody.addEventListener("click", (event) => {
+    const btn = event.target.closest("button[data-action]");
+    if (!btn) return;
+    const action = btn.dataset.action;
+    const pkIdx = btn.dataset.pkIdx;
+    const address = btn.dataset.address;
+
+    if (action === "transfer-pol") {
+        handleTransfer("pol", pkIdx, address);
+    } else if (action === "transfer-usdc") {
+        handleTransfer("usdc", pkIdx, address);
+    }
+});
+
+refreshAccountsBtn.addEventListener("click", () => {
+    fetchAccounts();
+});
+
 fetchTasks();
+fetchAccounts();

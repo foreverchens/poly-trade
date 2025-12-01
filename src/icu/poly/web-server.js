@@ -9,6 +9,7 @@ import {
     activeClientMap,
     getDefaultClient,
 } from "./core/poly-client-manage.js";
+import {getBalances, transferPOL, transferUSDC} from "./core/ether-client.js";
 import {listOrders, deleteOrder, updateOrder} from "./db/repository.js";
 import {getMinuteSamples} from "./db/statisc-repository.js";
 import {
@@ -389,22 +390,123 @@ app.get("/api/current-address", async (req, res) => {
 
 app.get("/api/accounts", async (_req, res) => {
     try {
-        const activeAccountConfigs = Array.from(activeClientMap().values());
-        const result = [];
-       for(const client of activeAccountConfigs) {
-            result.push({
-                slug: client.taskSlug,
-                name: client.taskName,
-                pkIdx: client.pkIdx,
-                active: true,
-                address: client.funderAddress,
-            });
-        }
-        res.json({count: result.length, items: result});
+        const configs = await listConvergenceTaskConfigs();
+        const uniqueIndices = [
+            ...new Set(
+                configs
+                    .map((config) => (Number.isInteger(config?.task?.pkIdx) ? config.task.pkIdx : null))
+                    .filter((idx) => Number.isInteger(idx)),
+            ),
+        ].sort((a, b) => a - b);
+
+        const accounts = await Promise.all(
+            uniqueIndices.map(async (idx) => {
+                try {
+                    const account = getAccount(idx);
+                    const balances = await getBalances(account.address);
+                    return {
+                        pkIdx: idx,
+                        address: account.address,
+                        polBalance: balances.pol,
+                        usdcBalance: balances.usdc,
+                    };
+                } catch (err) {
+                    console.error(`[accounts] Failed to fetch account #${idx}:`, err.message);
+                    const account = getAccount(idx);
+                    return {
+                        pkIdx: idx,
+                        address: account.address,
+                        polBalance: null,
+                        usdcBalance: null,
+                        error: err.message,
+                    };
+                }
+            }),
+        );
+
+        res.json({count: accounts.length, items: accounts});
     } catch (err) {
         console.error("Failed to list accounts:", err.message);
         res.status(err.statusCode || err.status || 500).json({
             error: "failed_to_list_accounts",
+            message: err.message,
+        });
+    }
+});
+
+app.post("/api/accounts/:pkIdx/transfer-pol", async (req, res) => {
+    try {
+        const {pkIdx} = req.params;
+        const {to, amount} = req.body;
+
+        if (!to || !amount) {
+            return res.status(400).json({
+                error: "invalid_params",
+                message: "to 和 amount 参数不能为空",
+            });
+        }
+
+        const idx = parseInt(pkIdx, 10);
+        if (!Number.isInteger(idx)) {
+            return res.status(400).json({
+                error: "invalid_pkIdx",
+                message: "pkIdx 必须是整数",
+            });
+        }
+
+        const account = getAccount(idx);
+        const result = await transferPOL(account.privateKey, to, amount);
+
+        res.json({
+            success: true,
+            hash: result.hash,
+            from: result.from,
+            to: result.to,
+            value: result.value,
+        });
+    } catch (err) {
+        console.error("Failed to transfer POL:", err.message);
+        res.status(err.statusCode || err.status || 500).json({
+            error: "failed_to_transfer_pol",
+            message: err.message,
+        });
+    }
+});
+
+app.post("/api/accounts/:pkIdx/transfer-usdc", async (req, res) => {
+    try {
+        const {pkIdx} = req.params;
+        const {to, amount} = req.body;
+
+        if (!to || !amount) {
+            return res.status(400).json({
+                error: "invalid_params",
+                message: "to 和 amount 参数不能为空",
+            });
+        }
+
+        const idx = parseInt(pkIdx, 10);
+        if (!Number.isInteger(idx)) {
+            return res.status(400).json({
+                error: "invalid_pkIdx",
+                message: "pkIdx 必须是整数",
+            });
+        }
+
+        const account = getAccount(idx);
+        const result = await transferUSDC(account.privateKey, to, amount);
+
+        res.json({
+            success: true,
+            hash: result.hash,
+            from: result.from,
+            to: result.to,
+            value: result.value,
+        });
+    } catch (err) {
+        console.error("Failed to transfer USDC:", err.message);
+        res.status(err.statusCode || err.status || 500).json({
+            error: "failed_to_transfer_usdc",
             message: err.message,
         });
     }

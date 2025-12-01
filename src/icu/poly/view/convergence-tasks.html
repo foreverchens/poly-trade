@@ -42,6 +42,80 @@
                     </table>
                 </div>
             </section>
+            <section class="accounts-card">
+                <div class="accounts-header">
+                    <h2>钱包地址列表</h2>
+                    <button id="btn-refresh-accounts" type="button" class="secondary">刷新余额</button>
+                </div>
+                <div class="accounts-wrapper">
+                    <table class="accounts-table">
+                        <thead>
+                            <tr>
+                                <th>pkIdx</th>
+                                <th>地址</th>
+                                <th>POL 余额</th>
+                                <th>USDC.e 余额</th>
+                                <th>操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="accounts-table-body">
+                            <tr>
+                                <td class="empty" colspan="5">加载中...</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+        </div>
+
+        <!-- 划转模态对话框 -->
+        <div id="transfer-modal" class="modal" style="display: none;">
+            <div class="modal-overlay"></div>
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3 id="transfer-modal-title">划转</h3>
+                    <button class="modal-close" type="button" aria-label="关闭">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <div class="form-group">
+                        <label for="transfer-to">接收地址</label>
+                        <input
+                            type="text"
+                            id="transfer-to"
+                            class="form-input"
+                            placeholder="0x..."
+                            autocomplete="off"
+                        />
+                        <div class="form-hint">请输入有效的以太坊地址</div>
+                    </div>
+                    <div class="form-group">
+                        <label for="transfer-amount">划转金额</label>
+                        <div class="input-with-unit">
+                            <input
+                                type="number"
+                                id="transfer-amount"
+                                class="form-input"
+                                placeholder="0.00"
+                                step="any"
+                                min="0"
+                                autocomplete="off"
+                            />
+                            <span id="transfer-unit" class="input-unit">POL</span>
+                        </div>
+                        <div class="form-hint">请输入要划转的金额</div>
+                    </div>
+                    <div class="transfer-info">
+                        <div class="info-row">
+                            <span class="info-label">发送地址:</span>
+                            <span id="transfer-from-address" class="info-value">-</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn-secondary" id="transfer-cancel">取消</button>
+                    <button type="button" class="btn-primary" id="transfer-confirm">确认划转</button>
+                </div>
+            </div>
         </div>
 
         <script type="module" src="/convergence-tasks/convergence-tasks.js"></script>

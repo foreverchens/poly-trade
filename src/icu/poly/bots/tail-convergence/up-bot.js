@@ -22,6 +22,7 @@ const delay = (liq, t = 100) => {
 
 class TailConvergenceStrategy {
     constructor(taskConfig) {
+        // 每小时更新下配置
         // 从导入的配置中获取指定任务
         const config = this.flattenConfig(taskConfig);
 
@@ -35,12 +36,12 @@ class TailConvergenceStrategy {
         this.initializeConfig(config);
         this.initializeRuntimeState();
 
-
-
         this.pkIdx = config.pkIdx;
         this.creds = config.creds;
-        this.client = buildClient(this.pkIdx,this.creds);
-        logger.info(`[扫尾盘策略] 初始化PolyClient实例: #${this.pkIdx}  ${this.client.funderAddress}`);
+        this.client = buildClient(this.pkIdx, this.creds);
+        logger.info(
+            `[扫尾盘策略] 初始化PolyClient实例: #${this.pkIdx}  ${this.client.funderAddress}`,
+        );
 
         // 初始化缓存层 (UpBot专用)
         this.cache = new UpBotCache({
@@ -359,7 +360,7 @@ class TailConvergenceStrategy {
         const [yesBid, yesAsk] = await this.cache.getBestPrice(yesTokenId);
         const [noBid, noAsk] = await this.cache.getBestPrice(noTokenId);
         if (yesAsk === 0 || noAsk === 0) {
-            // todo 流动性为0、可以尝试直接挂99单
+            // todo 流动性为0、可以尝试直接挂99单、
             logger.info(
                 `[${this.symbol}-${this.currentLoopHour}时] yesAsk=${yesAsk} noAsk=${noAsk} 卖方流动性为0, 结束信号`,
             );
@@ -619,6 +620,7 @@ class TailConvergenceStrategy {
             return;
         }
 
+        // todo 基于指标动态买入金额
         // 已建仓、执行额外买入逻辑
         const extraEntryCheck = await this.checkExtraEntry(signal);
         if (!extraEntryCheck.allowed) {
@@ -674,6 +676,16 @@ class TailConvergenceStrategy {
                 return null;
             });
         if (!entryOrder?.success) {
+            // 建仓被拒绝:not enough balance / allowance
+            if (errorMsg.includes("not enough balance / allowance")) {
+                logger.error(
+                    `[${this.symbol}-${this.currentLoopHour}时] 建仓被拒绝: not enough balance / allowance`,
+                );
+                // 暂停任务
+                this.stopHourlyLoop();
+                return;
+            }
+            // 建仓被拒绝:address in closed only mode
             logger.info(
                 `[${this.symbol}-${this.currentLoopHour}时] 建仓被拒绝:${entryOrder.error}`,
             );
@@ -686,9 +698,11 @@ class TailConvergenceStrategy {
                     `[${this.symbol}-${this.currentLoopHour}时] 建仓被拒绝: address in closed only mode`,
                 );
                 // 切换到下一个PolyClient实例
-                this.client = await nextClient(this.pkIdx,this.client);
-                if(!this.client){
-                    logger.error(`[${this.symbol}-${this.currentLoopHour}时] 切换到下一个PolyClient实例失败，结束进程`);
+                this.client = await nextClient(this.pkIdx, this.client);
+                if (!this.client) {
+                    logger.error(
+                        `[${this.symbol}-${this.currentLoopHour}时] 切换到下一个PolyClient实例失败，结束进程`,
+                    );
                     process.exit(1);
                 }
                 this.pkIdx = this.pkIdx + 1;

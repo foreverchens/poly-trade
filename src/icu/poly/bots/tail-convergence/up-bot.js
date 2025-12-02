@@ -393,7 +393,7 @@ class TailConvergenceStrategy {
             // 时间是否低于监控模式分钟阈值
             const isBeforeMonitorThreshold = dayjs().minute() < this.monitorModeMinuteThreshold;
             // 价格是否低于最高触发价格
-            const isPriceNotTriggered = topPrice != 1 && topPrice <= this.triggerPriceGt;
+            const isPriceNotTriggered = topPrice != 1 && topPrice < this.triggerPriceGt;
             // zVal是否低于高波动阈值
             const isZValBelowHighVolatility = zVal < this.highVolatilityZThreshold;
             // 高波动发生
@@ -454,20 +454,20 @@ class TailConvergenceStrategy {
             if (zVal < this.zMin) {
                 if (topPrice > 0.9) {
                     logger.info(
-                        `[${this.symbol}-${this.currentLoopHour}时] 常规信号、asksLiq:${asksLiq}、Z-Score:${zVal} < ${this.zMin}, 继续等待`,
+                        `[${this.symbol}-${this.currentLoopHour}时] 常规信号-zVal不达标、继续等待、asksLiq=${asksLiq}、zVal=${zVal} < ${this.zMin}`,
                     );
                 }
                 return null;
             }
             // Z-Score达标、继续执行 (isLiquiditySignal 保持 false，走正常风控)
             logger.info(
-                `[${this.symbol}-${this.currentLoopHour}时] 常规信号、asksLiq:${asksLiq}、Z-Score:${zVal} >= ${this.zMin}, 继续执行`,
+                    `[${this.symbol}-${this.currentLoopHour}时] 常规信号-zVal达标、继续执行、asksLiq=${asksLiq}、zVal=${zVal} >= ${this.zMin}`,
             );
         } else {
             // 流动性不足、触发流动性信号
-            logger.info(
-                `[${this.symbol}-${this.currentLoopHour}时] 流动性信号触发、Z-Score:${zVal}, 卖方流动性:${asksLiq}, 剩余时间:${secondsToEnd}s 继续执行`,
-            );
+            // logger.info(
+            //     `[${this.symbol}-${this.currentLoopHour}时] 流动性信号触发、Z-Score:${zVal}, 卖方流动性:${asksLiq}, 剩余时间:${secondsToEnd}s 继续执行`,
+            // );
             // 触发流动性信号、设置流动性信号标记
             isLiquiditySignal = true;
         }
@@ -478,7 +478,7 @@ class TailConvergenceStrategy {
         if (topPrice > this.triggerPriceGt || topPrice < priceThreshold) {
             if (topPrice > 0.9) {
                 logger.info(
-                    `[${this.symbol}-${this.currentLoopHour}时] topPrice:[${topPrice}] not in range [${priceThreshold}, ${this.triggerPriceGt}]  continue waiting`,
+                    `[${this.symbol}-${this.currentLoopHour}时] 入场价格检查失败-topPrice=${topPrice} not in range [${priceThreshold}, ${this.triggerPriceGt}] 继续等待`,
                 );
             }
             return null;
@@ -489,14 +489,14 @@ class TailConvergenceStrategy {
         const amp = await get1HourAmp(this.symbol);
         if (!isLiquiditySignal && amp < this.ampMin) {
             logger.info(
-                `[${this.symbol}-${this.currentLoopHour}时] 常规信号、波动率:${amp.toFixed(4)} < ${this.ampMin}, 继续等待`,
+                `[${this.symbol}-${this.currentLoopHour}时] 常规信号-波动率不达标、继续等待、amp=${amp.toFixed(4)} < ${this.ampMin}`,
             );
             return null;
         }
         if (isLiquiditySignal && zVal < 1) {
             // 即使流动性信号、zVal小于0.5、也继续等待
             logger.info(
-                `[${this.symbol}-${this.currentLoopHour}时] 流动性信号、zVal:${zVal} < 1, 继续等待`,
+                `[${this.symbol}-${this.currentLoopHour}时] 流动性信号-zVal不达标、继续等待、zVal=${zVal} < 1`,
             );
             return null;
         }
@@ -576,13 +576,13 @@ class TailConvergenceStrategy {
             const upPriceCount = recentPriceHistory.filter((price) => price.p > 0.5).length;
             const totalCount = recentPriceHistory.length;
             const upPriceRatio = upPriceCount / totalCount;
-            if (upPriceRatio < 0.6 && upPriceRatio > 0.4) {
-                return { allowed: false, reason: `最近30分钟价格p>0.5的次数占比位于60%和40%之间(${(upPriceRatio * 100).toFixed(1)}%)，方向不明确，不进行额外买入` };
+            if (upPriceRatio < 0.7) {
+                return { allowed: false, reason: `风控-方向稳定性检查不通过、最近30分钟价格p>0.5的次数占比(${(upPriceRatio * 100).toFixed(1)}%)小于70%，方向不明确，不进行额外买入` };
             }
-            logger.info( `[${this.symbol}-${this.currentLoopHour}时] 额外买入风控检查通过: 最近30分钟价格p>0.5的次数占比=${(upPriceRatio * 100).toFixed(1)}%、可以进行额外买入`);
+            logger.info( `[${this.symbol}-${this.currentLoopHour}时] 风控-方向稳定性检查通过: 最近30分钟价格p>0.5的次数占比=${(upPriceRatio * 100).toFixed(1)}%、可以进行额外买入、upPriceRatio=${upPriceRatio.toFixed(4)}`);
         } catch (error) {
             logger.error(
-                `[${this.symbol}-${this.currentLoopHour}时] 额外买入风控检查失败`,
+                `[${this.symbol}-${this.currentLoopHour}时] 风控-方向稳定性检查失败`,
                 error?.message ?? error,
             );
         }
@@ -593,8 +593,8 @@ class TailConvergenceStrategy {
             // 2.下跌1%后、反弹到-0.2%、且仍有向上的趋势、此时可能DOWN方向概率仍然在90%以上、但实际具备反转可能、不进行额外买入
             //
             // 获取当前小时内所有1min级别k线数据
-            const limitKlines = await listLimitKlines(this.symbol, dayjs().minute());
-            if (!limitKlines || limitKlines.length === 0) {
+            const limitKlines = await listLimitKlines(this.symbol, dayjs().minute()+1);
+            if (!limitKlines || limitKlines.length <= 1) {
                 logger.error(`[${this.symbol}-${this.currentLoopHour}时] 无法获取k线数据，跳过价格趋势检查`);
                 return { allowed: false, reason: "无法获取k线数据，跳过价格趋势检查" };
             }
@@ -607,21 +607,63 @@ class TailConvergenceStrategy {
                 // 上涨
                 const highP = limitKlines.reduce((max, kline) => Math.max(max, kline[2]), limitKlines[0][2]);
                 if((curP - openP) / (highP - openP) < 0.2) {
-                    logger.info(`[${this.symbol}-${this.currentLoopHour}时] 当前价格${curP}在开盘价${openP}和最高价${highP}之间过于贴近开盘价、反转概率较高、不进行额外买入`);
-                    return { allowed: false, reason: `当前价格${curP}在开盘价${openP}和最高价${highP}之间过于贴近开盘价、反转概率较高、不进行额外买入` };
+                    const msg = `风控-价格位置检查不通过、当前价格${curP.toFixed(4)}在开盘价${openP.toFixed(4)}和最高价${highP.toFixed(4)}之间过于贴近开盘价、反转概率较高、不进行额外买入`;
+                    logger.info(`[${this.symbol}-${this.currentLoopHour}时] ${msg}`);
+                    return { allowed: false, reason: msg };
                 }
             }else{
                 // 下跌
                 const lowP = limitKlines.reduce((min, kline) => Math.min(min, kline[3]), limitKlines[0][3]);
                 if((curP - lowP) / (openP - lowP) > 0.8) {
-                    logger.info(`[${this.symbol}-${this.currentLoopHour}时] 当前价格${curP}在开盘价${openP}和最低价${lowP}之间过于贴近开盘价、反转概率较高、不进行额外买入`);
-                    return { allowed: false, reason: `当前价格${curP}在开盘价${openP}和最低价${lowP}之间过于贴近开盘价、反转概率较高、不进行额外买入` };
+                    const msg = `风控-价格位置检查不通过、当前价格${curP.toFixed(4)}在开盘价${openP.toFixed(4)}和最低价${lowP.toFixed(4)}之间过于贴近开盘价、反转概率较高、不进行额外买入`;
+                    logger.info(`[${this.symbol}-${this.currentLoopHour}时] ${msg}`);
+                    return { allowed: false, reason: msg };
                 }
             }
-            logger.info(`[${this.symbol}-${this.currentLoopHour}时] 价格趋势检查通过`);
+            // 价格趋势检查、检查1min背离强度
+            // 获取最近3根k线的最高价和最低价、计算价差、如果价差大于当前价和开盘价的差值、则不进行额外买入
+            const recentKlines = limitKlines.slice(-3);
+            const highP = recentKlines.reduce((max, kline) => Math.max(max, kline[2]), recentKlines[0][2]);
+            const lowP = recentKlines.reduce((min, kline) => Math.min(min, kline[3]), recentKlines[0][3]);
+            const priceDiff = highP - lowP;
+            const openDiff = openP - curP;
+            // 检查最近3分钟趋势是否与信号方向背离，且波动幅度可能带来反转风险
+            const lastCloseP = recentKlines[2][4];
+            const firstOpenP = recentKlines[0][1];
+            if(signal.chosen.outcome === "UP") {
+                // 信号方向为上涨、最新价格大于开盘价、但是最近3分钟整体方向是下跌、并且下跌预期程度有跌破风险、则不进行额外买入
+                if(curP > openP && firstOpenP > lastCloseP && priceDiff > Math.abs(openDiff)) {
+                    const msg = `风控-价格趋势检查不通过、信号方向为上涨、最新价格大于开盘价、但是最近3分钟整体方向是下跌、并且下跌预期程度有跌破风险、则不进行额外买入
+                        lastCloseP:${lastCloseP}
+                        firstOpenP:${firstOpenP}
+                        priceDiff:${priceDiff}
+                        openDiff:${openDiff}
+                        curP:${curP}
+                        openP:${openP}
+                    `;
+                    logger.info(`[${this.symbol}-${this.currentLoopHour}时] ${msg}`);
+                    return { allowed: false, reason: msg };
+                }
+            }else{
+                // 信号方向为下跌、最新价格小于开盘价、但是最近3分钟整体方向是上涨、并且上涨预期程度有突破风险、则不进行额外买入
+                if(curP < openP && firstOpenP < lastCloseP && priceDiff > Math.abs(openDiff)) {
+                    const msg = `风控-价格趋势检查不通过、信号方向为下跌、最新价格小于开盘价、但是最近3分钟整体方向是上涨、并且上涨预期程度有突破风险、则不进行额外买入
+                        lastCloseP:${lastCloseP}
+                        firstOpenP:${firstOpenP}
+                        priceDiff:${priceDiff}
+                        openDiff:${openDiff}
+                        curP:${curP}
+                        openP:${openP}
+                    `;
+                    logger.info(`[${this.symbol}-${this.currentLoopHour}时] ${msg}`);
+                    return { allowed: false, reason: msg };
+                }
+            }
+            logger.info(`[${this.symbol}-${this.currentLoopHour}时] 风控-价格趋势检查通过`);
+
         } catch (error) {
             logger.error(
-                `[${this.symbol}-${this.currentLoopHour}时] 价格趋势检查失败`,
+                `[${this.symbol}-${this.currentLoopHour}时] 风控-价格趋势检查失败`,
                 error?.message ?? error,
             );
         }

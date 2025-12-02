@@ -161,6 +161,7 @@ const orderForm = $("orderForm");
 const orderBuyPriceInput = $("orderBuyPrice");
 const orderSizeInput = $("orderSize");
 const orderTakeProfitInput = $("orderTakeProfit");
+const orderPkIdxSelect = $("orderPkIdx");
 const orderStatusEl = $("orderStatus");
 const orderSubmitBtn = $("orderSubmit");
 fields.forEach((f) => {
@@ -348,7 +349,15 @@ function isTopPriceTooHigh(value) {
 }
 
 function filterMarketsByTopPrice(list) {
-    return list.filter((item) => !isTopPriceTooHigh(item.topPrice));
+    return list.filter((item) => {
+        const category = getOutcomeCategory(item.outcomes);
+        // 只有 YesNo 类型才过滤，UpDown 类型不过滤
+        if (category === "yesno") {
+            return !isTopPriceTooHigh(item.topPrice);
+        }
+        // UpDown 或其他类型直接通过
+        return true;
+    });
 }
 
 function sortMarketsByTopPrice(list) {
@@ -2170,6 +2179,33 @@ function updateOrderBestAskDisplay({ writeToInput = false } = {}) {
     }
 }
 
+async function loadAvailableClients() {
+    if (!orderPkIdxSelect) return;
+    try {
+        const res = await fetch("/api/available-clients");
+        const data = await safeJson(res);
+        if (!res.ok || data?.error) {
+            console.error("Failed to load clients:", data?.message || "Unknown error");
+            return;
+        }
+        orderPkIdxSelect.innerHTML = '<option value="">请选择客户端</option>';
+        if (Array.isArray(data) && data.length > 0) {
+            data.forEach(({ pkIdx }) => {
+                const option = document.createElement("option");
+                option.value = pkIdx;
+                option.textContent = `pkIdx: ${pkIdx}`;
+                orderPkIdxSelect.appendChild(option);
+            });
+            // 默认选择索引为1的客户端（数组第二个元素）
+            if (data.length > 1 && data[1]?.pkIdx) {
+                orderPkIdxSelect.value = data[1].pkIdx;
+            }
+        }
+    } catch (err) {
+        console.error("Error loading available clients:", err);
+    }
+}
+
 function openOrderPanel(item) {
     if (!orderPanel) return;
     const tokens = getTokenIds(item);
@@ -2191,6 +2227,7 @@ function openOrderPanel(item) {
     orderTakeProfitInput.value = "";
     setOrderStatus("");
     updateOrderTokenOptions(item);
+    loadAvailableClients();
     orderPanel.classList.add("active");
     orderBuyPriceInput.focus();
 }
@@ -2414,6 +2451,11 @@ if (orderForm) {
             setOrderStatus("请选择 token", true);
             return;
         }
+        const pkIdx = orderPkIdxSelect?.value;
+        if (!pkIdx) {
+            setOrderStatus("请选择客户端", true);
+            return;
+        }
         const bestAskAttr = tokenInput?.dataset?.bestAsk;
         const currentBestAsk = Number(bestAskAttr);
         if (Number.isFinite(currentBestAsk) && price > currentBestAsk) {
@@ -2435,7 +2477,7 @@ if (orderForm) {
         orderSubmitBtn.disabled = true;
         setOrderStatus("提交买单中…");
         try {
-            await submitOrderRequest({ price, size, side: "buy", tokenId });
+            await submitOrderRequest({ price, size, side: "buy", tokenId, pkIdx });
             finalize(true);
         } catch (err) {
             setOrderStatus(err?.message || "下单失败", true);

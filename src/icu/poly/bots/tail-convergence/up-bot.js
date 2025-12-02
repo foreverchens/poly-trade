@@ -1,13 +1,16 @@
 import "dotenv/config";
 import dayjs from "dayjs";
 import cron from "node-cron";
-import { buildClient } from "../../core/poly-client-manage.js";
+import { buildClient, nextClient } from "../../core/poly-client-manage.js";
 import { threshold, listLimitKlines } from "./common.js";
 import { TakeProfitManager } from "./take-profit.js";
 import { UpBotCache } from "./up-bot-cache.js";
 import { saveOrder } from "../../db/repository.js";
 import logger from "../../core/Logger.js";
 import convergenceTaskConfigs from "../../data/convergence-up.config.js";
+import { getZ } from "../../core/z-score.js";
+import { get1HourAmp } from "./common.js";
+import { PolySide } from "../../core/PolyClient.js";
 // 基于流动性计算下次tick 时间间隔
 const delay = (liq, t = 100) => {
     const m = liq / t;
@@ -390,7 +393,7 @@ class TailConvergenceStrategy {
             // 时间是否低于监控模式分钟阈值
             const isBeforeMonitorThreshold = dayjs().minute() < this.monitorModeMinuteThreshold;
             // 价格是否低于最高触发价格
-            const isPriceNotTriggered = topPrice != 1 && topPrice < this.triggerPriceGt;
+            const isPriceNotTriggered = topPrice != 1 && topPrice <= this.triggerPriceGt;
             // zVal是否低于高波动阈值
             const isZValBelowHighVolatility = zVal < this.highVolatilityZThreshold;
             // 高波动发生
@@ -592,6 +595,7 @@ class TailConvergenceStrategy {
             // 获取当前小时内所有1min级别k线数据
             const limitKlines = await listLimitKlines(this.symbol, dayjs().minute());
             if (!limitKlines || limitKlines.length === 0) {
+                logger.error(`[${this.symbol}-${this.currentLoopHour}时] 无法获取k线数据，跳过价格趋势检查`);
                 return { allowed: false, reason: "无法获取k线数据，跳过价格趋势检查" };
             }
             // 检查当前价格所在位置
@@ -603,15 +607,18 @@ class TailConvergenceStrategy {
                 // 上涨
                 const highP = limitKlines.reduce((max, kline) => Math.max(max, kline[2]), limitKlines[0][2]);
                 if((curP - openP) / (highP - openP) < 0.2) {
+                    logger.info(`[${this.symbol}-${this.currentLoopHour}时] 当前价格${curP}在开盘价${openP}和最高价${highP}之间过于贴近开盘价、反转概率较高、不进行额外买入`);
                     return { allowed: false, reason: `当前价格${curP}在开盘价${openP}和最高价${highP}之间过于贴近开盘价、反转概率较高、不进行额外买入` };
                 }
             }else{
                 // 下跌
                 const lowP = limitKlines.reduce((min, kline) => Math.min(min, kline[3]), limitKlines[0][3]);
                 if((curP - lowP) / (openP - lowP) > 0.8) {
+                    logger.info(`[${this.symbol}-${this.currentLoopHour}时] 当前价格${curP}在开盘价${openP}和最低价${lowP}之间过于贴近开盘价、反转概率较高、不进行额外买入`);
                     return { allowed: false, reason: `当前价格${curP}在开盘价${openP}和最低价${lowP}之间过于贴近开盘价、反转概率较高、不进行额外买入` };
                 }
             }
+            logger.info(`[${this.symbol}-${this.currentLoopHour}时] 价格趋势检查通过`);
         } catch (error) {
             logger.error(
                 `[${this.symbol}-${this.currentLoopHour}时] 价格趋势检查失败`,

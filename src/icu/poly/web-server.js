@@ -18,6 +18,7 @@ import {
     upsertConvergenceTaskConfig,
     deleteConvergenceTaskConfig,
 } from "./db/convergence-task-config-repository.js";
+import { log } from "console";
 
 const PORT = process.env.PORT || 3001;
 const BTC_PRICE_SOURCE = process.env.BTC_PRICE_SOURCE || "https://api.binance.com/api/v3/klines";
@@ -329,16 +330,39 @@ app.get("/api/best-prices/:tokenId", async (req, res) => {
     }
 });
 
+app.get("/api/available-clients", async (_req, res) => {
+    try {
+        const clients = activeClientMap();
+        const clientList = Array.from(clients.keys()).map((pkIdx) => ({
+            pkIdx,
+        }));
+        res.json(clientList);
+    } catch (err) {
+        console.error("Failed to fetch available clients:", err.message);
+        res.status(500).json({
+            error: "failed_to_fetch_clients",
+            message: err.message,
+        });
+    }
+});
+
 app.post("/api/place-order", async (req, res) => {
     try {
         const {price, size, side, tokenId, pkIdx} = req.body;
+        logger.info(`[place-order] ${price}, ${size}, ${side}, ${tokenId}, ${pkIdx}`);
         if (!price || !size || !side || !tokenId) {
             return res.status(400).json({
                 error: "missing_parameters",
                 message: "price, size, side, and tokenId are required",
             });
         }
-        const client = activeClientMap().get(pkIdx);
+        const client = activeClientMap().get(Number(pkIdx));
+        if (!client) {
+            return res.status(400).json({
+                error: "client_not_found",
+                message: `No client found for pkIdx: ${pkIdx}`,
+            });
+        }
         const result = await client.placeOrder(price, size, side, tokenId);
         res.json(result);
     } catch (err) {

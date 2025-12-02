@@ -202,7 +202,7 @@
                 empty.textContent = "暂无数据";
                 card.appendChild(empty);
             } else {
-                const svg = buildLineChart(points, getColor(index));
+                const svg = buildLineChart(points, getColor(index), metric);
                 card.appendChild(svg);
             }
             chartsGrid.appendChild(card);
@@ -226,8 +226,8 @@
         samplesTableBody.innerHTML = rows;
     }
 
-    function buildLineChart(points, color) {
-        const width = 600;
+    function buildLineChart(points, color, metric) {
+        const width = 650;
         const height = 220;
         const padding = 40;
         const svg = document.createElementNS(SVG_NS, "svg");
@@ -267,6 +267,50 @@
             line.setAttribute("stroke-width", "1");
             svg.appendChild(line);
         }
+
+        // Add Y-axis tick marks and labels
+        const tickMarks = [];
+        if (metric && (metric.key === "up_price" || metric.key === "down_price" || metric.key === "top_price")) {
+            // Add 50 tick mark for probability charts
+            if (50 >= minY && 50 <= maxY) {
+                tickMarks.push(50);
+            }
+        } else if (metric && metric.key === "top_z") {
+            // Add 1 and 2 tick marks for topZ chart
+            if (1 >= minY && 1 <= maxY) {
+                tickMarks.push(1);
+            }
+            if (2 >= minY && 2 <= maxY) {
+                tickMarks.push(2);
+            }
+        }
+
+        tickMarks.forEach((tickValue) => {
+            const y = scaleY(tickValue);
+            const rightX = padding + chartWidth;
+
+            // Draw tick line on right axis
+            const tickLine = document.createElementNS(SVG_NS, "line");
+            tickLine.setAttribute("x1", rightX);
+            tickLine.setAttribute("x2", rightX + 5);
+            tickLine.setAttribute("y1", y);
+            tickLine.setAttribute("y2", y);
+            tickLine.setAttribute("stroke", "rgba(255,255,255,0.4)");
+            tickLine.setAttribute("stroke-width", "2");
+            svg.appendChild(tickLine);
+
+            // Draw tick label on right axis with enhanced visibility
+            const label = document.createElementNS(SVG_NS, "text");
+            label.setAttribute("x", rightX + 8);
+            label.setAttribute("y", y + 5);
+            label.setAttribute("text-anchor", "start");
+            label.setAttribute("fill", "rgba(255,255,255,0.9)");
+            label.setAttribute("font-size", "13");
+            label.setAttribute("font-weight", "700");
+            label.setAttribute("font-family", "system-ui, -apple-system, sans-serif");
+            label.textContent = tickValue.toString();
+            svg.appendChild(label);
+        });
 
         const path = document.createElementNS(SVG_NS, "path");
         const d = points

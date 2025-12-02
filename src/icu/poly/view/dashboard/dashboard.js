@@ -924,7 +924,6 @@ async function handleCloseOrder(tokenId, rowId, side, pkIdx) {
 
     try {
         const result = await placeCloseOrder(tokenId, roundedPrice, size, side, numericPkIdx);
-        console.log(result);
         if (result.error) {
             alert(`平仓失败: ${result.error || "未知错误"}`);
         } else {

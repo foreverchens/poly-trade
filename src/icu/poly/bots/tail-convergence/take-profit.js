@@ -96,7 +96,7 @@ export class TakeProfitManager {
                 const originalSize = Number(order.original_size) || 0;
 
                 logger.info(
-                    `[止盈] ${orderKey} 成交情况: ${matchedSize}/${originalSize}`,
+                    `[止盈] ${orderKey} 成交情况: ${order.side.toUpperCase()}@${matchedSize}/${originalSize}`,
                 );
 
                 if (matchedSize === 0 || matchedSize < originalSize) {

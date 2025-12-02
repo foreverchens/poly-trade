@@ -107,10 +107,10 @@ export async function fetchBestPrice(tokenId) {
  *
  * 事件最后十分钟、价格阈值对剩余时间的发散函数
  * 剩余时间越短、价格阈值越小
- * @param {number} sec
- * @param {number} baseValue
- * @param {number} growthRate
- * @param {*} k 发散程度
+ * @param {number} sec 剩余时间(秒)
+ * @param {number} k 发散程度
+ * @param {number} a 基础值
+ * @param {number} b 增长值
  * @returns {number} 阈值
  */
 export function threshold(sec, k = 0.3, a = 0.92, b = 0.06) {
@@ -128,6 +128,29 @@ export async function get1HourAmp(symbol) {
     }
     const kline = klines.data[0];
     return Number((Math.abs(kline[1] - kline[4]) / kline[1]).toFixed(5));
+}
+
+/**
+ * 获取最近N根1分钟级别k线数据
+ * @param {string} symbol - 交易对符号，如 'ETH', 'BTC'
+ * @param {number} limit - 获取的k线数量
+ * @returns {Promise<Array>} Binance kline格式数组，每根k线为 [timestamp, open, high, low, close, volume, ...]
+ */
+export async function listLimitKlines(symbol, limit = 10) {
+    try {
+        const response = await axios.get('https://api.binance.com/api/v3/klines', {
+            params: {
+                symbol: `${symbol}USDT`,
+                interval: '1m',
+                limit: limit,
+            },
+            timeout: 10000,
+        });
+        return Array.isArray(response.data) ? response.data : [];
+    } catch (error) {
+        logger.error(`Failed to fetch ${symbol} klines:`, error?.message ?? error);
+        return [];
+    }
 }
 
 /**

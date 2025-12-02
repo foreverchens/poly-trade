@@ -1,15 +1,13 @@
 import "dotenv/config";
 import dayjs from "dayjs";
 import cron from "node-cron";
-import { PolySide } from "../../core/PolyClient.js";
-import { buildClient, nextClient } from "../../core/poly-client-manage.js";
-import { getZ } from "../../core/z-score.js";
-import { fetchBestPrice, threshold, get1HourAmp } from "./common.js";
+import { buildClient } from "../../core/poly-client-manage.js";
+import { threshold, listLimitKlines } from "./common.js";
 import { TakeProfitManager } from "./take-profit.js";
 import { UpBotCache } from "./up-bot-cache.js";
 import { saveOrder } from "../../db/repository.js";
 import logger from "../../core/Logger.js";
-
+import convergenceTaskConfigs from "../../data/convergence-up.config.js";
 // 基于流动性计算下次tick 时间间隔
 const delay = (liq, t = 100) => {
     const m = liq / t;
@@ -257,14 +255,28 @@ class TailConvergenceStrategy {
      * 循环调度启动、运行时状态初始化、开始tick循环
      * @param {string} source 启动来源 cron/test
      */
-    startHourlyLoop(source = "cron") {
+    async startHourlyLoop(source = "cron") {
         if (this.loopActive) {
             return;
         }
         this.loopActive = true;
         this.currentLoopHour = dayjs().hour();
         logger.info(`[扫尾盘策略] 启动小时循环(${source}),当前小时=${this.currentLoopHour}`);
+        // 更新taskConfig
+        await this.updateTaskConfig();
         this.runTickLoop();
+    }
+
+    async updateTaskConfig() {
+        const taskConfigs = convergenceTaskConfigs;
+        const taskConfig = taskConfigs.find((config) => config.task.slug === this.slugTemplate);
+        if (!taskConfig) {
+            logger.error(`[扫尾盘策略] 未找到任务配置: ${this.slugTemplate}`);
+            return;
+        }
+        const config = this.flattenConfig(taskConfig);
+        this.initializeConfig(config);
+        logger.info(`[扫尾盘策略] 任务配置更新完毕: ${this.slugTemplate}`);
     }
 
     /**
@@ -458,7 +470,7 @@ class TailConvergenceStrategy {
         }
 
         // 先检查价格是否在触发价格范围内
-        const priceThreshold = threshold(secondsToEnd);
+        const priceThreshold = threshold(secondsToEnd,0.1,0.95,0.03);
         // 价格不能超出 triggerPriceGt (0.99) 和 priceThreshold 的范围
         if (topPrice > this.triggerPriceGt || topPrice < priceThreshold) {
             if (topPrice > 0.9) {
@@ -478,10 +490,10 @@ class TailConvergenceStrategy {
             );
             return null;
         }
-        if (isLiquiditySignal && zVal < 0.5) {
+        if (isLiquiditySignal && zVal < 1) {
             // 即使流动性信号、zVal小于0.5、也继续等待
             logger.info(
-                `[${this.symbol}-${this.currentLoopHour}时] 流动性信号、zVal:${zVal} < 0.5, 继续等待`,
+                `[${this.symbol}-${this.currentLoopHour}时] 流动性信号、zVal:${zVal} < 1, 继续等待`,
             );
             return null;
         }
@@ -550,6 +562,63 @@ class TailConvergenceStrategy {
             return { allowed: false, reason: "已用过额外买入" };
         }
 
+        try {
+            // 检查过去30分钟价格p>0.5的次数占比是否位于70%和30%之间、如果不在、则不进行额外买入
+            // 如果位于70%和30%之间、说明市场还在震荡、方向不明确、不进行额外买入
+            const priceHistory = await this.client.getPricesHistory(signal.chosen.tokenId);
+            const recentPriceHistory = priceHistory.history.filter((price) => price.t > (Date.now() - 30 * 60 * 1000)/1000);
+            if (recentPriceHistory.length === 0) {
+                return { allowed: false, reason: "最近30分钟价格数据为空，无法进行价格趋势判断" };
+            }
+            const upPriceCount = recentPriceHistory.filter((price) => price.p > 0.5).length;
+            const totalCount = recentPriceHistory.length;
+            const upPriceRatio = upPriceCount / totalCount;
+            if (upPriceRatio < 0.6 && upPriceRatio > 0.4) {
+                return { allowed: false, reason: `最近30分钟价格p>0.5的次数占比位于60%和40%之间(${(upPriceRatio * 100).toFixed(1)}%)，方向不明确，不进行额外买入` };
+            }
+            logger.info( `[${this.symbol}-${this.currentLoopHour}时] 额外买入风控检查通过: 最近30分钟价格p>0.5的次数占比=${(upPriceRatio * 100).toFixed(1)}%、可以进行额外买入`);
+        } catch (error) {
+            logger.error(
+                `[${this.symbol}-${this.currentLoopHour}时] 额外买入风控检查失败`,
+                error?.message ?? error,
+            );
+        }
+        try {
+            // 检查价格k线、查询最近10根1min级别k线的价格、如果涨跌趋势整体朝反转方向发展、则不进行额外买入
+            // 需要避免的情况、比如
+            // 1.上涨1%后、回踩到+0.2%、且仍有向下的趋势、此时可能UP方向概率仍然在90%以上、但实际具备反转可能、不进行额外买入
+            // 2.下跌1%后、反弹到-0.2%、且仍有向上的趋势、此时可能DOWN方向概率仍然在90%以上、但实际具备反转可能、不进行额外买入
+            //
+            // 获取当前小时内所有1min级别k线数据
+            const limitKlines = await listLimitKlines(this.symbol, dayjs().minute());
+            if (!limitKlines || limitKlines.length === 0) {
+                return { allowed: false, reason: "无法获取k线数据，跳过价格趋势检查" };
+            }
+            // 检查当前价格所在位置
+            // 如果是上涨、检查当前价格在开盘价和最高价之间的位置、如果位置较低、则不进行额外买入
+            // 如果是下跌、检查当前价格在开盘价和最低价之间的位置、如果位置较高、则不进行额外买入
+            const curP = limitKlines[limitKlines.length - 1][4];
+            const openP = limitKlines[0][1];
+            if(curP > openP) {
+                // 上涨
+                const highP = limitKlines.reduce((max, kline) => Math.max(max, kline[2]), limitKlines[0][2]);
+                if((curP - openP) / (highP - openP) < 0.2) {
+                    return { allowed: false, reason: `当前价格${curP}在开盘价${openP}和最高价${highP}之间过于贴近开盘价、反转概率较高、不进行额外买入` };
+                }
+            }else{
+                // 下跌
+                const lowP = limitKlines.reduce((min, kline) => Math.min(min, kline[3]), limitKlines[0][3]);
+                if((curP - lowP) / (openP - lowP) > 0.8) {
+                    return { allowed: false, reason: `当前价格${curP}在开盘价${openP}和最低价${lowP}之间过于贴近开盘价、反转概率较高、不进行额外买入` };
+                }
+            }
+        } catch (error) {
+            logger.error(
+                `[${this.symbol}-${this.currentLoopHour}时] 价格趋势检查失败`,
+                error?.message ?? error,
+            );
+        }
+
         // 3. 流动性信号：直接通过所有检查
         if (signal.liquiditySignal) {
             logger.info(
@@ -574,6 +643,7 @@ class TailConvergenceStrategy {
                 reason: `价格${price}<0.99 或流动性充足(${chosenAsksLiq}>=${this.liquiditySufficientThreshold})，等待更佳时机`,
             };
         }
+
 
         logger.info(
             `[${this.symbol}-${this.currentLoopHour}时] 风控检查通过: 价格${price}>=0.99 或流动性已经不足(chosenAsksLiq=${chosenAsksLiq} < ${this.liquiditySufficientThreshold})`,
@@ -677,6 +747,10 @@ class TailConvergenceStrategy {
             });
         if (!entryOrder?.success) {
             // 建仓被拒绝:not enough balance / allowance
+            const errorMsg =
+                typeof entryOrder.error === "string"
+                    ? entryOrder.error
+                    : entryOrder.error?.message || "";
             if (errorMsg.includes("not enough balance / allowance")) {
                 logger.error(
                     `[${this.symbol}-${this.currentLoopHour}时] 建仓被拒绝: not enough balance / allowance`,
@@ -686,13 +760,6 @@ class TailConvergenceStrategy {
                 return;
             }
             // 建仓被拒绝:address in closed only mode
-            logger.info(
-                `[${this.symbol}-${this.currentLoopHour}时] 建仓被拒绝:${entryOrder.error}`,
-            );
-            const errorMsg =
-                typeof entryOrder.error === "string"
-                    ? entryOrder.error
-                    : entryOrder.error?.message || "";
             if (errorMsg.includes("address in closed only mode")) {
                 logger.error(
                     `[${this.symbol}-${this.currentLoopHour}时] 建仓被拒绝: address in closed only mode`,
@@ -710,7 +777,11 @@ class TailConvergenceStrategy {
                 this.cache.client = this.client;
                 // 切换后重新建仓
                 await this.openPosition({ tokenId, price, sizeUsd, signal, isExtra });
+                return;
             }
+            logger.info(
+                `[${this.symbol}-${this.currentLoopHour}时] 建仓被拒绝:${entryOrder.error}`,
+            );
             return null;
         }
         const orderId = entryOrder.orderID;

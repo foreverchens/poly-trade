@@ -792,6 +792,10 @@ function showTransferModal(type, pkIdx, fromAddress) {
     transferToInput.classList.remove("error");
     transferAmountInput.classList.remove("error");
 
+    // 重置按钮状态
+    transferConfirmBtn.disabled = false;
+    transferConfirmBtn.textContent = "确认划转";
+
     transferModal.style.display = "flex";
     setTimeout(() => {
         transferToInput.focus();
@@ -856,6 +860,9 @@ async function executeTransfer() {
         }
 
         const result = await response.json();
+        // 重置按钮状态
+        transferConfirmBtn.disabled = false;
+        transferConfirmBtn.textContent = "确认划转";
         hideTransferModal();
         showMessage(
             `划转成功! Hash: ${result.hash.slice(0, 10)}...`,

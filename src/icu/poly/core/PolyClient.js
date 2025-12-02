@@ -148,7 +148,7 @@ export class PolyClient {
      *     }
      *    }}
      */
-    async getPricesHistory(market, interval) {
+    async getPricesHistory(market, interval = PriceHistoryInterval.ONE_HOUR) {
         const normalizeMarket = (value) => {
             if (typeof value === "string") {
                 return value.trim();
@@ -164,17 +164,10 @@ export class PolyClient {
             throw new Error("market is required to fetch price history");
         }
 
-        const resolvedInterval = interval ?? PriceHistoryInterval.ONE_HOUR;
-        const intervalToUse =
-            typeof resolvedInterval === "string" ? resolvedInterval.trim() : resolvedInterval;
-        if (!VALID_PRICE_HISTORY_INTERVALS.has(intervalToUse)) {
-            throw new Error(`Invalid interval "${interval}" supplied to getPricesHistory`);
-        }
-
         const client = await this.getClient();
         const response = await client.getPricesHistory({
             market: resolvedMarket,
-            interval: intervalToUse,
+            interval: interval,
         });
         const history = Array.isArray(response) ? response : response?.history;
 

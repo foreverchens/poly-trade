@@ -113,6 +113,25 @@ export async function getMinuteSamples(market_slug) {
 }
 
 /**
+ * Get recent minute samples for a market (ordered by minute_idx desc, limited)
+ * @param {string} market_slug
+ * @param {number} limit - Maximum number of samples to return
+ * @returns {Promise<Array>}
+ */
+export async function getRecentMinuteSamples(market_slug, limit = 30) {
+    try {
+        return await prisma.hour_minute_samples.findMany({
+            where: { market_slug },
+            orderBy: { minute_idx: 'desc' },
+            take: limit,
+        });
+    } catch (error) {
+        console.error('Failed to get recent minute samples:', error);
+        return [];
+    }
+}
+
+/**
  * Get minute sample at specific minute
  * @param {string} market_slug
  * @param {number} minute_idx

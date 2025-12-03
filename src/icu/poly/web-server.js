@@ -98,8 +98,23 @@ app.get("/api/price-history", async (req, res) => {
 app.get("/api/btc-history", async (req, res) => {
     try {
         const interval = normalizeBtcInterval(req.query.interval);
-        const customRange = normalizeBtcRange(req.query.start, req.query.end);
-        const history = await getBtcHistory(interval, customRange);
+
+        // 如果指定了 btcInterval 和 limit，则使用这些参数
+        const options = {};
+        if (req.query.btcInterval === "1m") {
+            options.btcInterval = "1m";
+            options.btcIntervalMs = MINUTE_MS;
+        }
+        if (req.query.limit) {
+            const limit = Number.parseInt(req.query.limit, 10);
+            if (Number.isFinite(limit) && limit > 0) {
+                options.limit = limit;
+            }
+        }
+
+        const btcIntervalMs = options.btcIntervalMs || BTC_PROVIDER_INTERVAL_MS;
+        const customRange = normalizeBtcRange(req.query.start, req.query.end, btcIntervalMs);
+        const history = await getBtcHistory(interval, customRange, Object.keys(options).length > 0 ? options : undefined);
         res.json({history});
     } catch (err) {
         console.error("Failed to fetch BTC price history:", err.message);
@@ -630,7 +645,7 @@ function normalizeBtcInterval(value) {
     return DEFAULT_BTC_INTERVAL;
 }
 
-function normalizeBtcRange(startValue, endValue) {
+function normalizeBtcRange(startValue, endValue, btcIntervalMs = BTC_PROVIDER_INTERVAL_MS) {
     if (startValue === undefined || endValue === undefined) return null;
     const startNum = Number(startValue);
     const endNum = Number(endValue);
@@ -639,11 +654,11 @@ function normalizeBtcRange(startValue, endValue) {
     const orderedEnd = Math.max(startNum, endNum);
     const now = Date.now();
     const safeEnd = Math.min(orderedEnd, now);
-    const safeStart = Math.max(0, Math.min(orderedStart, safeEnd - BTC_PROVIDER_INTERVAL_MS));
-    if (safeEnd - safeStart < BTC_PROVIDER_INTERVAL_MS) {
+    const safeStart = Math.max(0, Math.min(orderedStart, safeEnd - btcIntervalMs));
+    if (safeEnd - safeStart < btcIntervalMs) {
         return {
             startTime: safeStart,
-            endTime: safeStart + BTC_PROVIDER_INTERVAL_MS,
+            endTime: safeStart + btcIntervalMs,
         };
     }
     return {
@@ -652,10 +667,17 @@ function normalizeBtcRange(startValue, endValue) {
     };
 }
 
-async function getBtcHistory(interval, customRange = null) {
+async function getBtcHistory(interval, customRange = null, options = null) {
     const key = interval || DEFAULT_BTC_INTERVAL;
     const useCache = !customRange;
-    const cacheKey = `${BTC_CACHE_VERSION}:${key}`;
+
+    // 如果提供了 options，使用指定的 btcInterval 和 limit
+    // 否则使用默认的 15 分钟间隔
+    const btcInterval = options?.btcInterval || BTC_PROVIDER_INTERVAL;
+    const btcIntervalMs = options?.btcIntervalMs || BTC_PROVIDER_INTERVAL_MS;
+    const limit = options?.limit || null;
+
+    const cacheKey = `${BTC_CACHE_VERSION}:${key}:${btcInterval}${limit ? `:${limit}` : ""}`;
     if (useCache) {
         const cached = btcHistoryCache.get(cacheKey);
         if (cached && Date.now() - cached.timestamp < BTC_HISTORY_CACHE_TTL_MS) {
@@ -666,27 +688,42 @@ async function getBtcHistory(interval, customRange = null) {
     const defaultDuration = config.durationMs ?? DAY_MS;
     const now = Date.now();
     const targetEnd = customRange?.endTime ?? now;
+
+    // 如果指定了 limit，计算所需的时间范围（最近1小时）
     const durationMs = customRange
-        ? Math.max(BTC_PROVIDER_INTERVAL_MS, customRange.endTime - customRange.startTime)
-        : defaultDuration;
+        ? Math.max(btcIntervalMs, customRange.endTime - customRange.startTime)
+        : (limit ? limit * btcIntervalMs : defaultDuration);
+
     const targetStart = customRange?.startTime ?? Math.max(0, targetEnd - durationMs);
-    const normalizedStart = Math.floor(targetStart / BTC_PROVIDER_INTERVAL_MS) * BTC_PROVIDER_INTERVAL_MS;
-    const totalRange = Math.max(BTC_PROVIDER_INTERVAL_MS, (targetEnd - normalizedStart));
-    const requiredCandles = Math.max(2, Math.ceil(totalRange / BTC_PROVIDER_INTERVAL_MS) + 2);
+    const normalizedStart = Math.floor(targetStart / btcIntervalMs) * btcIntervalMs;
+    const totalRange = Math.max(btcIntervalMs, (targetEnd - normalizedStart));
+    const requiredCandles = limit
+        ? Math.min(limit, Math.ceil(totalRange / btcIntervalMs) + 2)
+        : Math.max(2, Math.ceil(totalRange / btcIntervalMs) + 2);
+
     const history = await fetchBtcCandles({
         startTime: normalizedStart,
         endTime: targetEnd,
         requiredCandles,
+        interval: btcInterval,
+        intervalMs: btcIntervalMs,
     });
-    const filtered = history
-        .filter(point => point.t >= targetStart && point.t <= targetEnd + BTC_PROVIDER_INTERVAL_MS);
+
+    let filtered = history.filter(point => point.t >= targetStart && point.t <= targetEnd + btcIntervalMs);
+
+    // 如果指定了 limit，只返回最近的 limit 根 k 线（按时间倒序取前 limit 根，然后按时间正序返回）
+    if (limit && filtered.length > limit) {
+        const sorted = filtered.sort((a, b) => b.t - a.t);
+        filtered = sorted.slice(0, limit).sort((a, b) => a.t - b.t);
+    }
+
     if (useCache) {
         btcHistoryCache.set(cacheKey, {timestamp: now, history: filtered});
     }
     return filtered;
 }
 
-async function fetchBtcCandles({startTime, endTime, requiredCandles}) {
+async function fetchBtcCandles({startTime, endTime, requiredCandles, interval = BTC_PROVIDER_INTERVAL, intervalMs = BTC_PROVIDER_INTERVAL_MS}) {
     const points = [];
     let nextStart = startTime;
     let batchCount = 0;
@@ -695,7 +732,7 @@ async function fetchBtcCandles({startTime, endTime, requiredCandles}) {
         const limit = Math.min(MAX_BINANCE_LIMIT, Math.max(remaining, 10));
         const params = {
             symbol: BTC_PRICE_SYMBOL,
-            interval: BTC_PROVIDER_INTERVAL,
+            interval: interval,
             limit,
             startTime: nextStart,
         };
@@ -709,10 +746,10 @@ async function fetchBtcCandles({startTime, endTime, requiredCandles}) {
         points.push(...batchPoints);
         const lastTime = batchPoints[batchPoints.length - 1].t;
         if (!Number.isFinite(lastTime)) break;
-        nextStart = lastTime + BTC_PROVIDER_INTERVAL_MS;
+        nextStart = lastTime + intervalMs;
         batchCount++;
     }
-    return dedupeCandles(points).filter(point => point.t <= endTime + BTC_PROVIDER_INTERVAL_MS);
+    return dedupeCandles(points).filter(point => point.t <= endTime + intervalMs);
 }
 
 function dedupeCandles(points) {

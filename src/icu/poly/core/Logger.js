@@ -112,7 +112,7 @@ function configure(dateYmd) {
 // === 初始化 ===
 let currentDate = TODAY();
 configure(currentDate);
-const base = log4js.getLogger(); // 基础 logger（不直接暴露）
+const base = log4js.getLogger(' '); // 基础 logger（不直接暴露）
 
 // 2) 在调用点拼装“Java风格”的消息体： file:line [func] - message
 function wrapWithCaller(level) {

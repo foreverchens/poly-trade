@@ -1090,7 +1090,7 @@ function renderBalanceChart() {
     if (totalPoints.length > 0) {
         series.push({
             points: totalPoints,
-            color: "#facc15",
+            color: "#22c55e",
             label: "总余额",
             currentValue: totalPoints[totalPoints.length - 1].balance,
             isTotal: true,
@@ -1271,7 +1271,7 @@ function handleSeriesToggle(event) {
 function buildCombinedBalanceChart(series) {
     const width = 1200;
     const height = 500;
-    const padding = { top: 30, right: 20, bottom: 60, left: 80 };
+    const padding = { top: 30, right: 80, bottom: 60, left: 20 };
 
     const svg = document.createElementNS(SVG_NS, "svg");
     svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
@@ -1318,14 +1318,14 @@ function buildCombinedBalanceChart(series) {
         svg.appendChild(line);
     }
 
-    // 绘制 Y 轴刻度
+    // 绘制 Y 轴刻度（右侧）
     for (let i = 0; i <= 4; i++) {
         const value = minY + ((maxY - minY) / 4) * i;
         const y = scaleY(value);
         const label = document.createElementNS(SVG_NS, "text");
-        label.setAttribute("x", padding.left - 10);
+        label.setAttribute("x", width - padding.right + 10);
         label.setAttribute("y", y + 5);
-        label.setAttribute("text-anchor", "end");
+        label.setAttribute("text-anchor", "start");
         label.setAttribute("fill", "rgba(255,255,255,0.6)");
         label.setAttribute("font-size", "12");
         label.setAttribute("font-family", "system-ui, -apple-system, sans-serif");
@@ -1356,23 +1356,70 @@ function buildCombinedBalanceChart(series) {
     // 绘制所有曲线
     series.forEach((s) => {
         const path = document.createElementNS(SVG_NS, "path");
-        const d = s.points
-            .map((point, idx) => {
-                const x = scaleX(point.time).toFixed(2);
-                const y = scaleY(point.balance).toFixed(2);
-                return `${idx === 0 ? "M" : "L"}${x} ${y}`;
-            })
-            .join(" ");
+
+        // 生成平滑曲线路径
+        let d = "";
+        if (s.points.length > 0) {
+            if (s.points.length === 1) {
+                // 只有一个点时，画一个点
+                const x = scaleX(s.points[0].time).toFixed(2);
+                const y = scaleY(s.points[0].balance).toFixed(2);
+                d = `M${x} ${y}`;
+            } else if (s.points.length === 2) {
+                // 两个点时，画直线
+                const x1 = scaleX(s.points[0].time).toFixed(2);
+                const y1 = scaleY(s.points[0].balance).toFixed(2);
+                const x2 = scaleX(s.points[1].time).toFixed(2);
+                const y2 = scaleY(s.points[1].balance).toFixed(2);
+                d = `M${x1} ${y1} L${x2} ${y2}`;
+            } else {
+                // 多个点时，使用平滑曲线
+                const points = s.points.map((point) => ({
+                    x: scaleX(point.time),
+                    y: scaleY(point.balance),
+                }));
+
+                // 使用 Catmull-Rom 样条曲线生成平滑路径
+                d = `M${points[0].x.toFixed(2)} ${points[0].y.toFixed(2)}`;
+                for (let i = 0; i < points.length - 1; i++) {
+                    const p0 = i > 0 ? points[i - 1] : points[i];
+                    const p1 = points[i];
+                    const p2 = points[i + 1];
+                    const p3 = i < points.length - 2 ? points[i + 2] : points[i + 1];
+
+                    // Catmull-Rom 到 Bezier 转换
+                    const cp1x = p1.x + (p2.x - p0.x) / 6;
+                    const cp1y = p1.y + (p2.y - p0.y) / 6;
+                    const cp2x = p2.x - (p3.x - p1.x) / 6;
+                    const cp2y = p2.y - (p3.y - p1.y) / 6;
+
+                    d += ` C${cp1x.toFixed(2)} ${cp1y.toFixed(2)}, ${cp2x.toFixed(2)} ${cp2y.toFixed(2)}, ${p2.x.toFixed(2)} ${p2.y.toFixed(2)}`;
+                }
+            }
+        }
+
         path.setAttribute("d", d);
         path.setAttribute("fill", "none");
         path.setAttribute("stroke", s.color);
         path.setAttribute("stroke-width", s.isTotal ? "3" : "2");
         path.setAttribute("stroke-linecap", "round");
         path.setAttribute("stroke-linejoin", "round");
-        if (s.isTotal) {
-            path.setAttribute("stroke-dasharray", "8,4");
-        }
+        // 移除虚线样式，改为实线
         svg.appendChild(path);
+
+        // 绘制数据点标记
+        s.points.forEach((point) => {
+            const circle = document.createElementNS(SVG_NS, "circle");
+            const x = scaleX(point.time);
+            const y = scaleY(point.balance);
+            circle.setAttribute("cx", x.toFixed(2));
+            circle.setAttribute("cy", y.toFixed(2));
+            circle.setAttribute("r", s.isTotal ? "4" : "3");
+            circle.setAttribute("fill", s.color);
+            circle.setAttribute("stroke", "#000");
+            circle.setAttribute("stroke-width", "1");
+            svg.appendChild(circle);
+        });
     });
 
     return svg;

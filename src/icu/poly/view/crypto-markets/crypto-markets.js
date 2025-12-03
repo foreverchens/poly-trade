@@ -78,7 +78,7 @@ let currentData = [];
 let currentTagId = DEFAULT_TAG_ID;
 let currentEventGroupKey = null;
 let lastRenderedMarkets = [];
-let chartInterval = "1d";
+let chartInterval = "1h";
 let lastChartDatasets = [];
 let chartRequestId = 0;
 let chartAbortController = null;
@@ -1070,6 +1070,11 @@ async function ensureBtcHistory(interval, signal, bounds) {
 async function fetchBtcHistory(interval, bounds, signal) {
     const params = new URLSearchParams();
     params.append("interval", interval);
+
+    // 统一使用1分钟k线，且只获取最近60根（1小时）
+    params.append("btcInterval", "1m");
+    params.append("limit", "60");
+
     if (isValidBounds(bounds)) {
         params.append("start", Math.floor(bounds.min));
         params.append("end", Math.floor(bounds.max));

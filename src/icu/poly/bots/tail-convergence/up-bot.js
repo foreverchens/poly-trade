@@ -566,6 +566,23 @@ class TailConvergenceStrategy {
             return { allowed: false, reason: "已用过额外买入" };
         }
 
+        // 先检查检查流动性和价格、在进行其他复杂检查
+        // 只要流动性尚且充沛或者价格未抵达最高触发价格、就不进行额外买入
+        const chosenAsksLiq = await this.cache.getAsksLiq(signal.chosen.tokenId);
+        if (chosenAsksLiq < 1) {
+            logger.error(`[${this.symbol}-${this.currentLoopHour}时] 卖方流动性为0,结束信号`);
+            return { allowed: false, reason: "卖方流动性为0,结束信号" };
+        }
+        if (price < this.triggerPriceGt || chosenAsksLiq >= this.liquiditySufficientThreshold) {
+            // price < 0.99
+            // 流动性大于阈值、就还能再等等
+            return {
+                allowed: false,
+                reason: `价格${price}<0.99 或流动性充足(${chosenAsksLiq}>=${this.liquiditySufficientThreshold})，等待更佳时机`,
+            };
+        }
+
+        // 方向稳定性、价格位置、价格趋势检查
         try {
             // 检查过去30分钟价格p>0.5的次数占比是否位于70%和30%之间、如果不在、则不进行额外买入
             // 如果位于70%和30%之间、说明市场还在震荡、方向不明确、不进行额外买入
@@ -691,23 +708,6 @@ class TailConvergenceStrategy {
                 `[${this.symbol}-${this.currentLoopHour}时] 流动性信号触发，跳过常规风控检查`,
             );
             return { allowed: true, reason: "流动性信号触发" };
-        }
-
-        // 4. 简化风控：只允许价格>=0.99时额外买入
-        // 理由：价格到0.99本身就是强烈的收敛信号，不需要额外的时间和波动率检查
-        // 若流动性尚且充足、等待匮乏机会
-        const chosenAsksLiq = await this.cache.getAsksLiq(signal.chosen.tokenId);
-        if (chosenAsksLiq < 1) {
-            logger.error(`[${this.symbol}-${this.currentLoopHour}时] 卖方流动性为0,结束信号`);
-            return { allowed: false, reason: "卖方流动性为0,结束信号" };
-        }
-        if (price < this.triggerPriceGt || chosenAsksLiq >= this.liquiditySufficientThreshold) {
-            // price < 0.99
-            // 流动性大于阈值、就还能再等等
-            return {
-                allowed: false,
-                reason: `价格${price}<0.99 或流动性充足(${chosenAsksLiq}>=${this.liquiditySufficientThreshold})，等待更佳时机`,
-            };
         }
 
 

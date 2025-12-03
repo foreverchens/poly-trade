@@ -606,19 +606,23 @@ class TailConvergenceStrategy {
             if(curP > openP) {
                 // 上涨
                 const highP = limitKlines.reduce((max, kline) => Math.max(max, kline[2]), limitKlines[0][2]);
-                if((curP - openP) / (highP - openP) < 0.2) {
+                const pricePosition = (curP - openP) / (highP - openP);
+                if(pricePosition < 0.2) {
                     const msg = `风控-价格位置检查不通过、当前价格${curP.toFixed(4)}在开盘价${openP.toFixed(4)}和最高价${highP.toFixed(4)}之间过于贴近开盘价、反转概率较高、不进行额外买入`;
                     logger.info(`[${this.symbol}-${this.currentLoopHour}时] ${msg}`);
                     return { allowed: false, reason: msg };
                 }
+                logger.info(`[${this.symbol}-${this.currentLoopHour}时] 风控-价格位置检查通过、当前价格${curP.toFixed(4)}在开盘价${openP.toFixed(4)}和最高价${highP.toFixed(4)}之间位置=${(pricePosition * 100).toFixed(1)}%、大于20%、反转概率较低、进行额外买入`);
             }else{
                 // 下跌
                 const lowP = limitKlines.reduce((min, kline) => Math.min(min, kline[3]), limitKlines[0][3]);
-                if((curP - lowP) / (openP - lowP) > 0.8) {
+                const pricePosition = (curP - lowP) / (openP - lowP);
+                if(pricePosition > 0.8) {
                     const msg = `风控-价格位置检查不通过、当前价格${curP.toFixed(4)}在开盘价${openP.toFixed(4)}和最低价${lowP.toFixed(4)}之间过于贴近开盘价、反转概率较高、不进行额外买入`;
                     logger.info(`[${this.symbol}-${this.currentLoopHour}时] ${msg}`);
                     return { allowed: false, reason: msg };
                 }
+                logger.info(`[${this.symbol}-${this.currentLoopHour}时] 风控-价格位置检查通过、当前价格${curP.toFixed(4)}在开盘价${openP.toFixed(4)}和最低价${lowP.toFixed(4)}之间位置=${(pricePosition * 100).toFixed(1)}% 小于80%、反转概率较低、进行额外买入`);
             }
             // 价格趋势检查、检查1min背离强度
             // 获取最近3根k线的最高价和最低价、计算价差、如果价差大于当前价和开盘价的差值、则不进行额外买入

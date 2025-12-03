@@ -122,3 +122,16 @@ model convergence_task_config {
     extra                                    String   @default("")
 }
 
+
+model balance_log {
+  id        Int      @id @default(autoincrement())
+  pk_idx    Int      // 账户索引
+  address   String   // 钱包地址
+  day       Int      // 自然日，格式YYYYMMDD，例如20251203
+  hour      Int      // 小时 0–23
+  balance   Float    // 余额（USDC）
+  log_time  DateTime @default(now()) // 记录时间戳
+
+  @@unique([pk_idx, day, hour], name: "unique_balance_log_pk_day_hour")
+  @@index([log_time], name: "idx_balance_log_time")
+}

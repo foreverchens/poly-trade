@@ -51,6 +51,7 @@ class TailConvergenceStrategy {
             maxSizeUsdc: this.extraSizeUsdc + this.positionSizeUsdc,
             cronExpression: "* 30-59 * * * *",
             client: this.client,
+            pkIdx: this.pkIdx,
         });
 
         // 初始化止盈管理器

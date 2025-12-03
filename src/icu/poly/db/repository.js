@@ -185,3 +185,27 @@ export async function updateTakeProfit(entryOrderId, profitOrderId, profitPrice,
         throw error;
     }
 }
+
+/**
+ * Save balance log record (保存余额记录)
+ * @param {Object} balanceData
+ * @returns {Promise<Object>}
+ */
+export async function saveBalanceLog(balanceData) {
+    try {
+        const balanceLog = await prisma.balance_log.create({
+            data: {
+                pk_idx: parseInt(balanceData.pkIdx),
+                address: balanceData.address,
+                day: parseInt(balanceData.day),
+                hour: parseInt(balanceData.hour),
+                balance: parseFloat(balanceData.balance),
+                log_time: balanceData.logTime || new Date(),
+            },
+        });
+        return balanceLog;
+    } catch (error) {
+        console.error('Failed to save balance log to DB:', error);
+        throw error;
+    }
+}

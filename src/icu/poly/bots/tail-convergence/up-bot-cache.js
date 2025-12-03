@@ -2,6 +2,7 @@ import dayjs from "dayjs";
 import cron from "node-cron";
 import { resolveSlugList, fetchMarkets, getAsksLiq, resolvePositionSize } from "./common.js";
 import logger from "../../core/Logger.js";
+import { saveBalanceLog } from "../../db/repository.js";
 
 export class UpBotCache {
     constructor(config) {
@@ -10,6 +11,7 @@ export class UpBotCache {
         this.maxSizeUsdc = config.maxSizeUsdc;
         this.cronExpression = config.cronExpression || "* 30-59 * * * *";
         this.client = config.client;
+        this.pkIdx = config.pkIdx;
         // 运行时数据存储
         this.store = {
             hour: null,
@@ -47,6 +49,12 @@ export class UpBotCache {
         const currentHour = dayjs().hour();
         if (this.store.hour !== currentHour) {
             logger.info(`[UpBotCache] 小时轮转 ${this.store.hour} -> ${currentHour}, 重置缓存`);
+
+            // 记录余额到db
+            this._logBalance(currentHour).catch(err => {
+                logger.error('[UpBotCache] 余额记录失败', err?.message ?? err);
+            });
+
             this.store.hour = currentHour;
             this.store.targetSlug = null;
             this.store.market = null;
@@ -58,11 +66,40 @@ export class UpBotCache {
             this.orderBookCache.clear();
 
             // 打印命中率
-            logger.info(`[UpBotCache] 缓存命中率:
-                getAsksLiq函数缓存命中率为 ${this.hitArr[0]}/(${this.hitArr[0]} + ${this.hitArr[1]}) = ${((this.hitArr[0] / (this.hitArr[0] + this.hitArr[1])) * 100).toFixed(2)}%,
-                getBestPrice函数缓存命中率为 ${this.hitArr[2]}/(${this.hitArr[2]} + ${this.hitArr[3]}) = ${((this.hitArr[2] / (this.hitArr[2] + this.hitArr[3])) * 100).toFixed(2)}%`);
+            // logger.info(`[UpBotCache] 缓存命中率:
+            //     getAsksLiq函数缓存命中率为 ${this.hitArr[0]}/(${this.hitArr[0]} + ${this.hitArr[1]}) = ${((this.hitArr[0] / (this.hitArr[0] + this.hitArr[1])) * 100).toFixed(2)}%,
+            //     getBestPrice函数缓存命中率为 ${this.hitArr[2]}/(${this.hitArr[2]} + ${this.hitArr[3]}) = ${((this.hitArr[2] / (this.hitArr[2] + this.hitArr[3])) * 100).toFixed(2)}%`);
             // 重置命中次数队列
             this.hitArr.fill(1);
+        }
+    }
+
+    /**
+     * 记录余额到数据库
+     * @param {number} hour - 小时数
+     */
+    async _logBalance(hour) {
+        try {
+            const now = dayjs();
+            const day = parseInt(now.format('YYYYMMDD'));
+            const balance = await this.client.getUsdcEBalance();
+            const balanceNum = parseFloat(balance);
+
+            await saveBalanceLog({
+                pkIdx: this.pkIdx,
+                address: this.client.funderAddress,
+                day: day,
+                hour: hour,
+                balance: balanceNum,
+                logTime: new Date(),
+            });
+
+            logger.info(
+                `[UpBotCache] 余额记录已保存: pkIdx=${this.pkIdx}, address=${this.client.funderAddress}, day=${day}, hour=${hour}, balance=${balanceNum}`
+            );
+        } catch (err) {
+            logger.error('[UpBotCache] 余额记录失败', err?.message ?? err);
+            throw err;
         }
     }
 

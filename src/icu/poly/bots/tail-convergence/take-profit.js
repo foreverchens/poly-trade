@@ -1,7 +1,7 @@
 import dayjs from "dayjs";
 import cron from "node-cron";
 import { PolySide } from "../../core/PolyClient.js";
-import { saveOrder } from "../../db/repository.js";
+import { saveOrder, updateOrderMatchedAndProfit } from "../../db/repository.js";
 import logger from "../../core/Logger.js";
 
 export class TakeProfitManager {
@@ -107,6 +107,22 @@ export class TakeProfitManager {
                     } catch (cancelErr) {
                         errorCount++;
                     }
+                    // 更新建仓订单的matched字段（建仓订单的profit保持为0）
+                    try {
+                        await updateOrderMatchedAndProfit(
+                            takeProfitOrder.entryOrderId,
+                            matchedSize, // 实际撮合数量
+                            0 // 建仓订单的profit保持为0
+                        );
+                        logger.info(
+                            `[止盈] ${orderKey} 已更新建仓订单matched: ${matchedSize}/${originalSize}`,
+                        );
+                    } catch (updateErr) {
+                        logger.error(
+                            `[止盈] ${orderKey} 更新建仓订单matched失败`,
+                            updateErr?.message ?? updateErr,
+                        );
+                    }
                     processedCount++;
                     if(matchedSize < 1) {
                         // 事件结束、未成交、视为错误
@@ -185,7 +201,13 @@ export class TakeProfitManager {
             const takeProfitOrderId = takeProfitOrderResp.orderID;
             takeProfitOrder.takeProfitOrderId = takeProfitOrderId;
 
-            // 保存止盈订单
+            // 计算利润 = (止盈价格 - 入场价格) * 实际撮合数量
+            // 入场价格从signal中获取，不需要查表
+            const entryPrice = takeProfitOrder.signal.chosen.price;
+            const profit = (bestBidPrice - entryPrice) * size;
+
+            // 保存止盈订单（size是建仓订单的实际撮合数量，也是止盈订单的size）
+            // 止盈订单的matched等于size，profit存储在止盈订单上
             saveOrder({
                 eventSlug: takeProfitOrder.signal.eventSlug,
                 marketSlug: takeProfitOrder.signal.marketSlug,
@@ -194,7 +216,9 @@ export class TakeProfitManager {
                 orderId: takeProfitOrderId,
                 price: bestBidPrice,
                 size: size,
+                matched: size, // 止盈订单的matched等于size
                 parentOrderId: takeProfitOrder.entryOrderId,
+                profit: profit, // 止盈订单的profit
 
                 tokenId: takeProfitOrder.tokenId,
                 zScore: takeProfitOrder.signal.zVal,

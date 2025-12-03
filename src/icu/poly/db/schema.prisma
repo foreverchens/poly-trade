@@ -23,6 +23,8 @@ model Order {
   orderId           String   @unique
   price             Float
   size              Float
+  matched           Float    @default(0)  // 实际撮合的数量
+  profit            Float    @default(0)  // 该笔订单所获取的利润
 
   // 关联信息 (如果是止盈单，可以关联到建仓单)
   parentOrderId     String?  // 关联的建仓单ID

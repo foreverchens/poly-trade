@@ -7,6 +7,11 @@ import prisma from './client.js';
  */
 export async function saveOrder(orderData) {
     try {
+        const size = parseFloat(orderData.size);
+        // 建仓订单在第一次存储时，matched默认与size字段一致
+        // 如果是止盈订单（有parentOrderId），matched默认为0，后续根据实际撮合情况更新
+        const matched = orderData.parentOrderId ? (orderData.matched !== undefined ? parseFloat(orderData.matched) : 0) : size;
+
         return await prisma.order.create({
             data: {
                 eventSlug: orderData.eventSlug,
@@ -16,7 +21,9 @@ export async function saveOrder(orderData) {
                 outcome: orderData.outcome,
                 orderId: orderData.orderId,
                 price: parseFloat(orderData.price),
-                size: parseFloat(orderData.size),
+                size: size,
+                matched: matched,
+                profit: orderData.profit !== undefined ? parseFloat(orderData.profit) : 0,
 
                 parentOrderId: orderData.parentOrderId || null,
 
@@ -75,6 +82,8 @@ export async function updateOrder(id, data) {
         if (data.size !== undefined) updateData.size = parseFloat(data.size);
         if (data.side !== undefined) updateData.side = data.side;
         if (data.outcome !== undefined) updateData.outcome = data.outcome;
+        if (data.matched !== undefined) updateData.matched = parseFloat(data.matched);
+        if (data.profit !== undefined) updateData.profit = parseFloat(data.profit);
 
         return await prisma.order.update({
             where: { id },
@@ -82,6 +91,44 @@ export async function updateOrder(id, data) {
         });
     } catch (error) {
         console.error('Failed to update order in DB:', error);
+        throw error;
+    }
+}
+
+/**
+ * Find an order by orderId
+ * @param {string} orderId
+ * @returns {Promise<Object|null>}
+ */
+export async function findOrderByOrderId(orderId) {
+    try {
+        return await prisma.order.findUnique({
+            where: { orderId },
+        });
+    } catch (error) {
+        console.error('Failed to find order by orderId:', error);
+        throw error;
+    }
+}
+
+/**
+ * Update an order's matched and profit by orderId
+ * @param {string} orderId
+ * @param {number} matched
+ * @param {number} profit
+ * @returns {Promise<Object>}
+ */
+export async function updateOrderMatchedAndProfit(orderId, matched, profit) {
+    try {
+        return await prisma.order.update({
+            where: { orderId },
+            data: {
+                matched: parseFloat(matched),
+                profit: parseFloat(profit),
+            },
+        });
+    } catch (error) {
+        console.error('Failed to update order matched and profit:', error);
         throw error;
     }
 }

@@ -1,7 +1,7 @@
 import dayjs from "dayjs";
 import cron from "node-cron";
 import { PolySide } from "../../core/PolyClient.js";
-import { saveOrder, updateOrderMatchedAndProfit } from "../../db/repository.js";
+import { updateOrderMatchedAndProfit, updateTakeProfit } from "../../db/repository.js";
 import logger from "../../core/Logger.js";
 
 export class TakeProfitManager {
@@ -206,26 +206,13 @@ export class TakeProfitManager {
             const entryPrice = takeProfitOrder.signal.chosen.price;
             const profit = (bestBidPrice - entryPrice) * size;
 
-            // 保存止盈订单（size是建仓订单的实际撮合数量，也是止盈订单的size）
-            // 止盈订单的matched等于size，profit存储在止盈订单上
-            saveOrder({
-                eventSlug: takeProfitOrder.signal.eventSlug,
-                marketSlug: takeProfitOrder.signal.marketSlug,
-                side: "SELL",
-                outcome: takeProfitOrder.signal.chosen.outcome.toUpperCase(),
-                orderId: takeProfitOrderId,
-                price: bestBidPrice,
-                size: size,
-                matched: size, // 止盈订单的matched等于size
-                parentOrderId: takeProfitOrder.entryOrderId,
-                profit: profit, // 止盈订单的profit
-
-                tokenId: takeProfitOrder.tokenId,
-                zScore: takeProfitOrder.signal.zVal,
-                secondsToEnd: takeProfitOrder.signal.secondsToEnd, // 使用建仓时的信号数据作为上下文
-                priceChange: takeProfitOrder.signal.amp,
-                isLiquiditySignal: takeProfitOrder.signal.liquiditySignal
-            }).catch(err => logger.error("Failed to save TP order to DB", err));
+            // 更新建仓订单的止盈信息（合并到同一条记录）
+            await updateTakeProfit(
+                takeProfitOrder.entryOrderId,
+                takeProfitOrderId,
+                bestBidPrice,
+                profit
+            ).catch(err => logger.error("Failed to update take profit to DB", err));
 
             logger.info(
                 `[止盈] ${orderKey} ✅ 止盈订单已成功提交, 订单号=${takeProfitOrderId}`,

@@ -861,10 +861,9 @@ class TailConvergenceStrategy {
             marketSlug: signal.marketSlug,
             side: "BUY",
             outcome: signal.chosen.outcome.toUpperCase(),
-            orderId: orderId,
-            price: price,
+            entryOrderId: orderId,
+            entryPrice: price,
             size: sizeShares,
-            parentOrderId: null,
 
             tokenId: tokenId,
             zScore: signal.zVal,

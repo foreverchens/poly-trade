@@ -13,23 +13,27 @@ datasource db {
 }
 
 model Order {
-  id                String   @id @default(uuid())
+  id                Int      @id @default(autoincrement())
   eventSlug         String
   marketSlug        String
 
   // 订单基本信息
-  side              String   // BUY / SELL
-  outcome           String   // YES / NO
-  orderId           String   @unique
-  price             Float
-  size              Float
+  side              String   // 订单方向 BUY/SELL
+  outcome           String   // 市场方向 UP/DOWN
+  status            String   // 订单状态、pending->take_profit/cancelled、建仓时为pending、建仓未成交时为cancelled、有成交时为take_profit
+
+  // 建仓订单信息
+  entry_order_id    String   @unique      // 建仓订单Id
+  entry_price       Float                 // 建仓价格
+  size              Float                 // 建仓数量
   matched           Float    @default(0)  // 实际撮合的数量
-  profit            Float    @default(0)  // 该笔订单所获取的利润
 
-  // 关联信息 (如果是止盈单，可以关联到建仓单)
-  parentOrderId     String?  // 关联的建仓单ID
+  // 止盈订单信息
+  profit_order_id   String?  @unique       // 止盈订单Id（可为空）
+  profit_price      Float?                 // 止盈价格、通常为0.999（可为空）
+  profit            Float    @default(0)   // 该笔订单所获取的利润
 
-  // Signal context
+  // 建仓时信号
   tokenId           String?
   zScore            Float?
   secondsToEnd      Int?     // 下单时距离结束/开始的秒数
@@ -41,7 +45,8 @@ model Order {
 
   @@index([eventSlug])
   @@index([marketSlug])
-  @@index([parentOrderId])
+  @@index([entry_order_id])
+  @@index([profit_order_id])
 }
 
 

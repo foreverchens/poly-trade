@@ -35,10 +35,10 @@ async function fetchOrders() {
                 <td>${order.marketSlug}</td>
                 <td>${order.outcome}</td>
                 <td class="${sideClass}">${order.side}</td>
-                <td>${order.price.toFixed(3)}</td>
+                <td>${order.entryPrice.toFixed(3)}</td>
                 <td>${order.size}</td>
-                <td title="${order.orderId}"><small>${truncateId(order.orderId)}</small></td>
-                <td title="${order.parentOrderId || ""}"><small>${truncateId(order.parentOrderId)}</small></td>
+                <td title="${order.entryOrderId}"><small>${truncateId(order.entryOrderId)}</small></td>
+                <td title="${order.profitOrderId || ""}"><small>${truncateId(order.profitOrderId)}</small></td>
                 <td>${order.zScore !== null ? order.zScore.toFixed(2) : "-"}</td>
                 <td>${order.secondsToEnd !== null ? order.secondsToEnd + "s" : "-"}</td>
                 <td>${order.priceChange !== null ? (order.priceChange * 100).toFixed(2) + "%" : "-"}</td>
@@ -79,7 +79,7 @@ async function deleteOrder(id) {
 function openEditModal(index) {
     const order = window.ordersData[index];
     document.getElementById("editId").value = order.id;
-    document.getElementById("editPrice").value = order.price;
+    document.getElementById("editPrice").value = order.entryPrice;
     document.getElementById("editSize").value = order.size;
     document.getElementById("editOutcome").value = order.outcome;
     document.getElementById("editSide").value = order.side;
@@ -92,7 +92,7 @@ function closeModal() {
 
 async function saveOrder() {
     const id = document.getElementById("editId").value;
-    const price = document.getElementById("editPrice").value;
+    const entryPrice = document.getElementById("editPrice").value;
     const size = document.getElementById("editSize").value;
     const outcome = document.getElementById("editOutcome").value;
     const side = document.getElementById("editSide").value;
@@ -101,7 +101,7 @@ async function saveOrder() {
         const res = await fetch(`/api/bot-orders/${id}`, {
             method: "PUT",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ price, size, outcome, side }),
+            body: JSON.stringify({ entry_price: entryPrice, size, outcome, side }),
         });
         const data = await res.json();
 

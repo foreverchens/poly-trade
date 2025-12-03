@@ -108,14 +108,17 @@ export class TakeProfitManager {
                         errorCount++;
                     }
                     // 更新建仓订单的matched字段（建仓订单的profit保持为0）
+                    // 如果matchedSize小于1，未成交、视为订单已取消、修改status为cancelled
                     try {
+                        const status = matchedSize < 1 ? 'cancelled' : undefined;
                         await updateOrderMatchedAndProfit(
                             takeProfitOrder.entryOrderId,
                             matchedSize, // 实际撮合数量
-                            0 // 建仓订单的profit保持为0
+                            0, // 建仓订单的profit保持为0
+                            status // 如果matchedSize小于1，更新status为cancelled
                         );
                         logger.info(
-                            `[止盈] ${orderKey} 已更新建仓订单matched: ${matchedSize}/${originalSize}`,
+                            `[止盈] ${orderKey} 已更新建仓订单matched: ${matchedSize}/${originalSize}${status ? `, 状态已更新为${status}` : ''}`,
                         );
                     } catch (updateErr) {
                         logger.error(

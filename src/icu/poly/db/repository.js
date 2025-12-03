@@ -142,16 +142,21 @@ export async function findOrderByEntryOrderId(entryOrderId) {
  * @param {string} entryOrderId
  * @param {number} matched
  * @param {number} profit
+ * @param {string} [status] - Optional status to update (e.g., 'cancelled')
  * @returns {Promise<Object>}
  */
-export async function updateOrderMatchedAndProfit(entryOrderId, matched, profit) {
+export async function updateOrderMatchedAndProfit(entryOrderId, matched, profit, status) {
     try {
+        const updateData = {
+            matched: parseFloat(matched),
+            profit: parseFloat(profit),
+        };
+        if (status !== undefined) {
+            updateData.status = status;
+        }
         const order = await prisma.order.update({
             where: { entry_order_id: entryOrderId },
-            data: {
-                matched: parseFloat(matched),
-                profit: parseFloat(profit),
-            },
+            data: updateData,
         });
         return formatOrderForAPI(order);
     } catch (error) {

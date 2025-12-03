@@ -18,7 +18,7 @@ model Order {
   marketSlug        String
 
   // 订单基本信息
-  side              String   // 订单方向 BUY/SELL
+  symbol            String?  // 锚定资产
   outcome           String   // 市场方向 UP/DOWN
   status            String   // 订单状态、pending->take_profit/cancelled、建仓时为pending、建仓未成交时为cancelled、有成交时为take_profit
 

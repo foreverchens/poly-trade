@@ -25,7 +25,6 @@ async function fetchOrders() {
         data.forEach((order, index) => {
             const row = document.createElement("tr");
             const date = new Date(order.createdAt).toLocaleString();
-            const sideClass = order.side === "BUY" ? "side-yes" : "side-no";
 
             // Store in global array for edit modal
             window.ordersData = data;
@@ -33,12 +32,15 @@ async function fetchOrders() {
             row.innerHTML = `
                 <td>${date}</td>
                 <td>${order.marketSlug}</td>
+                <td>${order.symbol || "-"}</td>
                 <td>${order.outcome}</td>
-                <td class="${sideClass}">${order.side}</td>
                 <td>${order.entryPrice.toFixed(3)}</td>
                 <td>${order.size}</td>
                 <td title="${order.entryOrderId}"><small>${truncateId(order.entryOrderId)}</small></td>
                 <td title="${order.profitOrderId || ""}"><small>${truncateId(order.profitOrderId)}</small></td>
+                <td>${order.profitPrice !== null ? order.profitPrice.toFixed(3) : "-"}</td>
+                <td>${order.profit !== null && order.profit !== 0 ? order.profit.toFixed(2) : "-"}</td>
+                <td>${order.status || "-"}</td>
                 <td>${order.zScore !== null ? order.zScore.toFixed(2) : "-"}</td>
                 <td>${order.secondsToEnd !== null ? order.secondsToEnd + "s" : "-"}</td>
                 <td>${order.priceChange !== null ? (order.priceChange * 100).toFixed(2) + "%" : "-"}</td>
@@ -82,7 +84,6 @@ function openEditModal(index) {
     document.getElementById("editPrice").value = order.entryPrice;
     document.getElementById("editSize").value = order.size;
     document.getElementById("editOutcome").value = order.outcome;
-    document.getElementById("editSide").value = order.side;
     document.getElementById("editModal").style.display = "block";
 }
 
@@ -95,13 +96,12 @@ async function saveOrder() {
     const entryPrice = document.getElementById("editPrice").value;
     const size = document.getElementById("editSize").value;
     const outcome = document.getElementById("editOutcome").value;
-    const side = document.getElementById("editSide").value;
 
     try {
         const res = await fetch(`/api/bot-orders/${id}`, {
             method: "PUT",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ entry_price: entryPrice, size, outcome, side }),
+            body: JSON.stringify({ entry_price: entryPrice, size, outcome }),
         });
         const data = await res.json();
 

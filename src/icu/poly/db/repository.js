@@ -16,7 +16,7 @@ export async function saveOrder(orderData) {
                 eventSlug: orderData.eventSlug,
                 marketSlug: orderData.marketSlug,
 
-                side: orderData.side,
+                symbol: orderData.symbol,
                 outcome: orderData.outcome,
                 status: 'pending', // 建仓时状态为 pending
 
@@ -103,7 +103,7 @@ export async function updateOrder(id, data) {
             updateData.entry_price = parseFloat(data.entry_price);
         }
         if (data.size !== undefined) updateData.size = parseFloat(data.size);
-        if (data.side !== undefined) updateData.side = data.side;
+        if (data.symbol !== undefined) updateData.symbol = data.symbol;
         if (data.outcome !== undefined) updateData.outcome = data.outcome;
         if (data.matched !== undefined) updateData.matched = parseFloat(data.matched);
         if (data.profit !== undefined) updateData.profit = parseFloat(data.profit);

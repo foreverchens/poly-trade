@@ -454,14 +454,14 @@ class TailConvergenceStrategy {
             if (zVal < this.zMin) {
                 if (topPrice > 0.9) {
                     logger.info(
-                        `[${this.symbol}-${this.currentLoopHour}时] 常规信号-zVal不达标、继续等待、asksLiq=${asksLiq}、zVal=${zVal} < ${this.zMin}`,
+                        `[${this.symbol}-${this.currentLoopHour}时] 常规信号-zVal不达标、asksLiq=${asksLiq}、zVal=${zVal} < ${this.zMin}`,
                     );
                 }
                 return null;
             }
             // Z-Score达标、继续执行 (isLiquiditySignal 保持 false，走正常风控)
             logger.info(
-                    `[${this.symbol}-${this.currentLoopHour}时] 常规信号-zVal达标、继续执行、asksLiq=${asksLiq}、zVal=${zVal} >= ${this.zMin}`,
+                    `[${this.symbol}-${this.currentLoopHour}时] 常规信号-zVal达标、asksLiq=${asksLiq}、zVal=${zVal} >= ${this.zMin}`,
             );
         } else {
             // 流动性不足、触发流动性信号
@@ -478,7 +478,7 @@ class TailConvergenceStrategy {
         if (topPrice > this.triggerPriceGt || topPrice < priceThreshold) {
             if (topPrice > 0.9) {
                 logger.info(
-                    `[${this.symbol}-${this.currentLoopHour}时] 入场价格检查失败-topPrice=${topPrice} not in range [${priceThreshold}, ${this.triggerPriceGt}] 继续等待`,
+                    `[${this.symbol}-${this.currentLoopHour}时] 入场价格检查失败-topPrice=${topPrice} not in range [${priceThreshold}, ${this.triggerPriceGt}]`,
                 );
             }
             return null;
@@ -489,14 +489,14 @@ class TailConvergenceStrategy {
         const amp = await get1HourAmp(this.symbol);
         if (!isLiquiditySignal && amp < this.ampMin) {
             logger.info(
-                `[${this.symbol}-${this.currentLoopHour}时] 常规信号-波动率不达标、继续等待、amp=${amp.toFixed(4)} < ${this.ampMin}`,
+                `[${this.symbol}-${this.currentLoopHour}时] 常规信号-波动率不达标、amp=${amp.toFixed(4)} < ${this.ampMin}`,
             );
             return null;
         }
         if (isLiquiditySignal && zVal < 1) {
             // 即使流动性信号、zVal小于0.5、也继续等待
             logger.info(
-                `[${this.symbol}-${this.currentLoopHour}时] 流动性信号-zVal不达标、继续等待、zVal=${zVal} < 1`,
+                `[${this.symbol}-${this.currentLoopHour}时] 流动性信号-zVal不达标、amp=${amp.toFixed(4)} < ${this.ampMin}、zVal=${zVal} < 1`,
             );
             return null;
         }
@@ -859,7 +859,7 @@ class TailConvergenceStrategy {
         saveOrder({
             eventSlug: signal.eventSlug,
             marketSlug: signal.marketSlug,
-            side: "BUY",
+            symbol: this.symbol,
             outcome: signal.chosen.outcome.toUpperCase(),
             entryOrderId: orderId,
             entryPrice: price,

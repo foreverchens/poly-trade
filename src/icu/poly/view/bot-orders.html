@@ -16,12 +16,15 @@
                 <tr>
                     <th>time</th>
                     <th>market slug</th>
+                    <th>symbol</th>
                     <th>outcome</th>
-                    <th>side</th>
-                    <th>price</th>
+                    <th>entry price</th>
                     <th>size</th>
-                    <th>order id</th>
-                    <th>parent order id</th>
+                    <th>entry order id</th>
+                    <th>profit order id</th>
+                    <th>profit price</th>
+                    <th>profit</th>
+                    <th>status</th>
                     <th>z-score</th>
                     <th>secs left</th>
                     <th>volatility</th>
@@ -49,10 +52,6 @@
                 <div class="form-group">
                     <label>Outcome</label>
                     <input type="text" id="editOutcome" />
-                </div>
-                <div class="form-group">
-                    <label>Side</label>
-                    <input type="text" id="editSide" />
                 </div>
                 <button class="save-btn" onclick="saveOrder()">Save</button>
             </div>

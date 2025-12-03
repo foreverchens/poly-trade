@@ -53,15 +53,14 @@ app.use(express.json());
 const SUPPORTED_TAGS = new Set([21, 235, 39,101267,818]);
 const DEFAULT_TAG_ID = 235;
 const CLIENT_ERROR_PATTERNS = [/market is required/i, /Invalid interval/i];
-const PAGE_ROUTES = [
-    {label: "Crypto Markets", path: "/"},
-    {label: "dashboard", path: "/dashboard"},
-    {label: "Bot Orders", path: "/bot-orders"},
-    {label: "Hour Samples", path: "/hour-minute-samples"},
-    {label: "Convergence Tasks", path: "/convergence-tasks"},
-];
+// 主应用路由（独立页面路由已整合到主应用中，不再单独列出）
+const MAIN_APP_ROUTE = {label: "Polymarket 管理平台", path: "/"};
 const TRADE_LOOKBACK_DAYS = 3;
 const MAX_TRADE_ITEMS = 10;
+
+// ============================================================================
+// API 路由 - 市场数据相关
+// ============================================================================
 
 app.get("/api/crypto-markets", async (req, res) => {
     try {
@@ -125,6 +124,10 @@ app.get("/api/btc-history", async (req, res) => {
     }
 });
 
+// ============================================================================
+// API 路由 - 订单簿与价格
+// ============================================================================
+
 app.get("/api/orderbook/:tokenId", async (req, res) => {
     try {
         const {tokenId} = req.params;
@@ -163,6 +166,10 @@ app.get("/api/hour-minute-samples", async (req, res) => {
         });
     }
 });
+
+// ============================================================================
+// API 路由 - 交易与订单管理
+// ============================================================================
 
 app.get("/api/trades", async (req, res) => {
     try {
@@ -220,6 +227,10 @@ app.get("/api/open-orders", async (req, res) => {
         });
     }
 });
+
+// ============================================================================
+// API 路由 - 收敛任务配置
+// ============================================================================
 
 app.get("/api/convergence-tasks", async (_req, res) => {
     try {
@@ -316,6 +327,10 @@ app.delete("/api/convergence-tasks/:slug", async (req, res) => {
  *   tokenId: string     // token ID
  * }
  */
+// ============================================================================
+// API 路由 - 账户与余额管理
+// ============================================================================
+
 app.get("/api/best-prices/:tokenId", async (req, res) => {
     try {
         const {tokenId} = req.params;
@@ -918,6 +933,10 @@ function buildTaskConfigPayload(body, {slugFromParams = null} = {}) {
 }
 
 
+// ============================================================================
+// API 路由 - 机器人订单管理
+// ============================================================================
+
 app.get("/api/bot-orders", async (req, res) => {
     try {
         const limit = req.query.limit ? parseInt(req.query.limit) : 100;
@@ -961,7 +980,17 @@ app.put("/api/bot-orders/:id", async (req, res) => {
     }
 });
 
+// ============================================================================
+// 页面路由 - 主应用与子页面（供 iframe 加载）
+// ============================================================================
+
+// 主应用路由
 app.get("/", (_req, res) => {
+    res.sendFile(path.join(viewDir, "index.html"));
+});
+
+// 子页面路由（供 iframe 加载使用，不对外暴露）
+app.get("/crypto-markets", (_req, res) => {
     res.sendFile(path.join(viewDir, "crypto-markets.html"));
 });
 
@@ -984,8 +1013,6 @@ app.get("/convergence-tasks", (_req, res) => {
 app.listen(PORT, () => {
     const baseUrl = `http://localhost:${PORT}`;
     console.log(`Poly crypto markets server running at ${baseUrl}`);
-    console.log("Available pages:");
-    PAGE_ROUTES.forEach(({label, path}) => {
-        console.log(` - ${label}: ${baseUrl}${path}`);
-    });
+    console.log(`Main App: ${baseUrl}${MAIN_APP_ROUTE.path}`);
+    console.log("API endpoints available at /api/*");
 });

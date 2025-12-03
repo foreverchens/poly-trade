@@ -603,6 +603,7 @@ class TailConvergenceStrategy {
                 `[${this.symbol}-${this.currentLoopHour}时] 风控-方向稳定性检查失败`,
                 error?.message ?? error,
             );
+            return { allowed: false, reason: "风控-方向稳定性检查失败" };
         }
         try {
             // 检查价格k线、查询最近10根1min级别k线的价格、如果涨跌趋势整体朝反转方向发展、则不进行额外买入
@@ -700,6 +701,7 @@ class TailConvergenceStrategy {
                 `[${this.symbol}-${this.currentLoopHour}时] 风控-价格趋势检查失败`,
                 error?.message ?? error,
             );
+            return { allowed: false, reason: "风控-价格趋势检查失败" };
         }
 
         // 3. 流动性信号：直接通过所有检查

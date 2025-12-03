@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8" />
+    <title>Polymarket 管理平台</title>
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            display: flex;
+            height: 100vh;
+            overflow: hidden;
+        }
+        .sidebar {
+            width: 150px;
+            background: #1a1a1a;
+            color: #fff;
+            padding: 20px 0;
+            flex-shrink: 0;
+            overflow-y: auto;
+            transition: width 0.3s ease;
+            position: relative;
+        }
+        .sidebar.collapsed {
+            width: 50px;
+        }
+        .sidebar-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 15px 20px;
+            border-bottom: 1px solid #333;
+            margin-bottom: 20px;
+        }
+        .sidebar.collapsed .sidebar-header {
+            justify-content: center;
+            padding: 0 10px 20px;
+        }
+        .sidebar h2 {
+            font-size: 16px;
+            white-space: nowrap;
+            opacity: 1;
+            transition: opacity 0.2s;
+        }
+        .sidebar.collapsed h2 {
+            opacity: 0;
+            width: 0;
+            overflow: hidden;
+        }
+        .toggle-btn {
+            background: transparent;
+            border: none;
+            color: #ccc;
+            cursor: pointer;
+            font-size: 18px;
+            padding: 4px 8px;
+            border-radius: 4px;
+            transition: all 0.2s;
+            flex-shrink: 0;
+        }
+        .toggle-btn:hover {
+            background: #2a2a2a;
+            color: #fff;
+        }
+        .sidebar.collapsed .toggle-btn {
+            margin: 0 auto;
+        }
+        .menu-item {
+            display: block;
+            padding: 12px 15px;
+            color: #ccc;
+            text-decoration: none;
+            transition: all 0.2s;
+            cursor: pointer;
+            border-left: 3px solid transparent;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .sidebar.collapsed .menu-item {
+            padding: 12px 0;
+            text-align: center;
+            font-size: 12px;
+        }
+        .sidebar.collapsed .menu-item span {
+            display: none;
+        }
+        .menu-item:hover {
+            background: #2a2a2a;
+            color: #fff;
+        }
+        .menu-item.active {
+            background: #2a2a2a;
+            color: #fff;
+            border-left-color: #4a9eff;
+        }
+        .content-area {
+            flex: 1;
+            overflow: hidden;
+            position: relative;
+            transition: margin-left 0.3s ease;
+        }
+        .content-iframe {
+            width: 100%;
+            height: 100%;
+            border: none;
+            display: block;
+        }
+    </style>
+</head>
+<body>
+    <nav class="sidebar" id="sidebar">
+        <div class="sidebar-header">
+            <h2>导航菜单</h2>
+            <button class="toggle-btn" id="toggleBtn" title="最小化/展开">☰</button>
+        </div>
+        <a href="#" class="menu-item active" data-page="/crypto-markets">
+            <span>加密市场</span>
+        </a>
+        <a href="#" class="menu-item" data-page="/dashboard">
+            <span>数据面板</span>
+        </a>
+        <a href="#" class="menu-item" data-page="/bot-orders">
+            <span>机器人订单</span>
+        </a>
+        <a href="#" class="menu-item" data-page="/hour-minute-samples">
+            <span>小时采样</span>
+        </a>
+        <a href="#" class="menu-item" data-page="/convergence-tasks">
+            <span>收敛任务</span>
+        </a>
+    </nav>
+    <main class="content-area">
+        <iframe id="contentFrame" class="content-iframe" src="/crypto-markets"></iframe>
+    </main>
+    <script>
+        const menuItems = document.querySelectorAll('.menu-item');
+        const contentFrame = document.getElementById('contentFrame');
+        const sidebar = document.getElementById('sidebar');
+        const toggleBtn = document.getElementById('toggleBtn');
+
+        // 从 localStorage 读取菜单状态
+        const isCollapsed = localStorage.getItem('sidebarCollapsed') === 'true';
+        if (isCollapsed) {
+            sidebar.classList.add('collapsed');
+        }
+
+        // 切换菜单栏展开/收起
+        toggleBtn.addEventListener('click', () => {
+            sidebar.classList.toggle('collapsed');
+            localStorage.setItem('sidebarCollapsed', sidebar.classList.contains('collapsed'));
+        });
+
+        // 从 URL hash 读取初始页面
+        const initialPage = window.location.hash.slice(1) || '/crypto-markets';
+        if (initialPage !== '/crypto-markets') {
+            contentFrame.src = initialPage;
+            updateActiveMenu(initialPage);
+        }
+
+        menuItems.forEach(item => {
+            item.addEventListener('click', (e) => {
+                e.preventDefault();
+                const page = item.dataset.page;
+                contentFrame.src = page;
+                updateActiveMenu(page);
+                // 更新 URL hash（可选，支持浏览器前进后退）
+                window.location.hash = page;
+            });
+        });
+
+        function updateActiveMenu(page) {
+            menuItems.forEach(item => {
+                if (item.dataset.page === page) {
+                    item.classList.add('active');
+                } else {
+                    item.classList.remove('active');
+                }
+            });
+        }
+
+        // 监听浏览器前进后退
+        window.addEventListener('hashchange', () => {
+            const page = window.location.hash.slice(1) || '/crypto-markets';
+            contentFrame.src = page;
+            updateActiveMenu(page);
+        });
+    </script>
+</body>
+</html>
+

@@ -584,8 +584,7 @@ class TailConvergenceStrategy {
 
         // 方向稳定性、价格位置、价格趋势检查
         try {
-            // 检查过去30分钟价格p>0.5的次数占比是否位于70%和30%之间、如果不在、则不进行额外买入
-            // 如果位于70%和30%之间、说明市场还在震荡、方向不明确、不进行额外买入
+            // 检查过去30分钟价格p>0.5的次数占比是否高于70%、如果不在、则不进行额外买入
             const priceHistory = await this.client.getPricesHistory(signal.chosen.tokenId);
             const recentPriceHistory = priceHistory.history.filter((price) => price.t > (Date.now() - 30 * 60 * 1000)/1000);
             if (recentPriceHistory.length === 0) {
@@ -630,30 +629,30 @@ class TailConvergenceStrategy {
                     const msg = `风控-价格位置检查不通过、
                         当前价格${curP}
                         在开盘价${openP}
-                        和最高价${highP}之间过于贴近开盘价、反转概率较高、不进行额外买入`;
+                        和最高价${highP}之间位置=${(pricePosition * 100).toFixed(1)}% 偏离开盘价低于20%、反转概率较高、不进行额外买入`;
                     logger.info(`[${this.symbol}-${this.currentLoopHour}时] ${msg}`);
                     return { allowed: false, reason: msg };
                 }
                 logger.info(`[${this.symbol}-${this.currentLoopHour}时] 风控-价格位置检查通过、
                         当前价格${curP}
                         在开盘价${openP}
-                        和最高价${highP}之间位置=${(pricePosition * 100).toFixed(1)}%、大于20%、反转概率较低、进行额外买入`);
+                        和最高价${highP}之间位置=${(pricePosition * 100).toFixed(1)}%、偏离开盘价超过20%、反转概率较低、进行额外买入`);
             }else{
                 // 下跌
                 const lowP = limitKlines.reduce((min, kline) => Math.min(min, kline[3]), limitKlines[0][3]);
-                const pricePosition = (curP - lowP) / (openP - lowP);
-                if(pricePosition > 0.8) {
+                const pricePosition = (openP - curP) / (openP - lowP);
+                if(pricePosition < 0.2) {
                     const msg = `风控-价格位置检查不通过、
                         当前价格${curP}
                         在开盘价${openP}
-                        和最低价${lowP}之间过于贴近开盘价、反转概率较高、不进行额外买入`;
+                        和最低价${lowP}之间位置=${(pricePosition * 100).toFixed(1)}% 偏离开盘价低于20%、反转概率较高、不进行额外买入`;
                     logger.info(`[${this.symbol}-${this.currentLoopHour}时] ${msg}`);
                     return { allowed: false, reason: msg };
                 }
                 logger.info(`[${this.symbol}-${this.currentLoopHour}时] 风控-价格位置检查通过、
                         当前价格${curP}
                         在开盘价${openP}
-                        和最低价${lowP}之间位置=${(pricePosition * 100).toFixed(1)}% 小于80%、反转概率较低、进行额外买入`);
+                        和最低价${lowP}之间位置=${(pricePosition * 100).toFixed(1)}% 偏离开盘价超过20%、反转概率较低、进行额外买入`);
             }
             // 价格趋势检查、检查1min背离强度
             // 获取最近3根k线的最高价和最低价、计算价差、如果价差大于当前价和开盘价的差值、则不进行额外买入

@@ -109,6 +109,32 @@
             width: 100%;
             height: 100%;
             border: none;
+            display: none;
+            position: absolute;
+            top: 0;
+            left: 0;
+        }
+        .content-iframe.active {
+            display: block;
+        }
+        .content-iframe.loading {
+            opacity: 0.5;
+        }
+        .loading-indicator {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(0, 0, 0, 0.8);
+            color: #fff;
+            padding: 12px 24px;
+            border-radius: 8px;
+            font-size: 14px;
+            z-index: 1000;
+            display: none;
+            pointer-events: none;
+        }
+        .loading-indicator.show {
             display: block;
         }
     </style>
@@ -136,13 +162,27 @@
         </a>
     </nav>
     <main class="content-area">
-        <iframe id="contentFrame" class="content-iframe" src="/crypto-markets"></iframe>
+        <div class="loading-indicator">加载中...</div>
+        <iframe id="frame-crypto-markets" class="content-iframe active" data-page="/crypto-markets" src="/crypto-markets"></iframe>
+        <iframe id="frame-dashboard" class="content-iframe" data-page="/dashboard" src="about:blank"></iframe>
+        <iframe id="frame-bot-orders" class="content-iframe" data-page="/bot-orders" src="about:blank"></iframe>
+        <iframe id="frame-hour-minute-samples" class="content-iframe" data-page="/hour-minute-samples" src="about:blank"></iframe>
+        <iframe id="frame-convergence-tasks" class="content-iframe" data-page="/convergence-tasks" src="about:blank"></iframe>
     </main>
     <script>
         const menuItems = document.querySelectorAll('.menu-item');
-        const contentFrame = document.getElementById('contentFrame');
+        const allFrames = document.querySelectorAll('.content-iframe');
         const sidebar = document.getElementById('sidebar');
         const toggleBtn = document.getElementById('toggleBtn');
+
+        // 页面配置：定义哪些页面需要预加载
+        const pageConfig = {
+            '/crypto-markets': { preload: true, loaded: true }, // 默认页面，已加载
+            '/dashboard': { preload: true, loaded: false },
+            '/bot-orders': { preload: true, loaded: false },
+            '/hour-minute-samples': { preload: false, loaded: false }, // 按需加载
+            '/convergence-tasks': { preload: true, loaded: false },
+        };
 
         // 从 localStorage 读取菜单状态
         const isCollapsed = localStorage.getItem('sidebarCollapsed') === 'true';
@@ -156,23 +196,78 @@
             localStorage.setItem('sidebarCollapsed', sidebar.classList.contains('collapsed'));
         });
 
-        // 从 URL hash 读取初始页面
-        const initialPage = window.location.hash.slice(1) || '/crypto-markets';
-        if (initialPage !== '/crypto-markets') {
-            contentFrame.src = initialPage;
-            updateActiveMenu(initialPage);
+        // 获取指定页面的 iframe
+        function getFrameForPage(page) {
+            return Array.from(allFrames).find(frame => frame.dataset.page === page);
         }
 
-        menuItems.forEach(item => {
-            item.addEventListener('click', (e) => {
-                e.preventDefault();
-                const page = item.dataset.page;
-                contentFrame.src = page;
-                updateActiveMenu(page);
-                // 更新 URL hash（可选，支持浏览器前进后退）
-                window.location.hash = page;
+        // 切换显示指定页面
+        function switchToPage(page) {
+            const loadingIndicator = document.querySelector('.loading-indicator');
+
+            // 隐藏所有 iframe
+            allFrames.forEach(frame => {
+                frame.classList.remove('active');
             });
-        });
+
+            // 显示目标 iframe
+            const targetFrame = getFrameForPage(page);
+            if (targetFrame) {
+                // 如果页面未加载，先加载
+                if (!pageConfig[page]?.loaded && targetFrame.src === 'about:blank') {
+                    targetFrame.classList.add('loading');
+                    targetFrame.classList.add('active');
+                    if (loadingIndicator) loadingIndicator.classList.add('show');
+
+                    targetFrame.src = page;
+                    // 设置加载超时处理
+                    const loadTimeout = setTimeout(() => {
+                        if (targetFrame.classList.contains('loading')) {
+                            targetFrame.classList.remove('loading');
+                            if (loadingIndicator) loadingIndicator.classList.remove('show');
+                            console.warn(`页面 ${page} 加载超时`);
+                        }
+                    }, 30000); // 30秒超时
+
+                    targetFrame.onload = () => {
+                        clearTimeout(loadTimeout);
+                        targetFrame.classList.remove('loading');
+                        if (loadingIndicator) loadingIndicator.classList.remove('show');
+                        pageConfig[page].loaded = true;
+                    };
+                } else {
+                    // 页面已加载，立即显示（无延迟）
+                    targetFrame.classList.add('active');
+                    if (loadingIndicator) loadingIndicator.classList.remove('show');
+                }
+            }
+
+            // 更新菜单激活状态
+            updateActiveMenu(page);
+
+            // 更新 URL hash
+            window.location.hash = page;
+        }
+
+        // 预加载配置为预加载的页面
+        function preloadPages() {
+            Object.entries(pageConfig).forEach(([page, config]) => {
+                if (config.preload && !config.loaded && page !== '/crypto-markets') {
+                    const frame = getFrameForPage(page);
+                    if (frame) {
+                        // 延迟预加载，避免阻塞初始页面
+                        setTimeout(() => {
+                            if (!config.loaded) {
+                                frame.src = page;
+                                frame.onload = () => {
+                                    pageConfig[page].loaded = true;
+                                };
+                            }
+                        }, 1000); // 1秒后开始预加载
+                    }
+                }
+            });
+        }
 
         function updateActiveMenu(page) {
             menuItems.forEach(item => {
@@ -184,12 +279,29 @@
             });
         }
 
+        // 初始化：从 URL hash 读取初始页面
+        const initialPage = window.location.hash.slice(1) || '/crypto-markets';
+        if (initialPage !== '/crypto-markets') {
+            switchToPage(initialPage);
+        }
+
+        // 绑定菜单点击事件
+        menuItems.forEach(item => {
+            item.addEventListener('click', (e) => {
+                e.preventDefault();
+                const page = item.dataset.page;
+                switchToPage(page);
+            });
+        });
+
         // 监听浏览器前进后退
         window.addEventListener('hashchange', () => {
             const page = window.location.hash.slice(1) || '/crypto-markets';
-            contentFrame.src = page;
-            updateActiveMenu(page);
+            switchToPage(page);
         });
+
+        // 启动预加载
+        preloadPages();
     </script>
 </body>
 </html>

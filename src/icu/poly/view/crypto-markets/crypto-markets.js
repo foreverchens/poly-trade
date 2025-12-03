@@ -37,7 +37,7 @@ const BTC_INTERVAL_MINUTES = 15;
 const BTC_INTERVAL_MS = BTC_INTERVAL_MINUTES * 60 * 1000;
 const fields = [
     { key: "question", label: "问题", className: "col-question" },
-    { key: "outcomes", label: "结果" },
+    // { key: "outcomes", label: "结果" },
     { key: "endDate", label: "结束时间", className: "col-time" },
     { key: "topPrice", label: "TOP价格" },
     { key: "yesBestAsk", label: "YES最优卖价" },
@@ -47,8 +47,8 @@ const fields = [
     { key: "noBestBid", label: "NO最优买价" },
     { key: "noSpread", label: "NO价差" },
     { key: "topPrice", label: "TOP价格" },
-    { key: "volume", label: "交易量" },
-    { key: "liquidityNum", label: "流动性", compact: true },
+    // { key: "volume", label: "交易量" },
+    // { key: "liquidityNum", label: "流动性", compact: true },
 ];
 const compactNumberKeys = new Set(fields.filter((f) => f.compact).map((f) => f.key));
 const priceMultiplierKeys = new Set(["lastTradePrice"]);

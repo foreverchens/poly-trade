@@ -18,7 +18,7 @@ import {
     upsertConvergenceTaskConfig,
     deleteConvergenceTaskConfig,
 } from "./db/convergence-task-config-repository.js";
-import { log } from "console";
+import logger from "./core/Logger.js";
 
 const PORT = process.env.PORT || 3001;
 const BTC_PRICE_SOURCE = process.env.BTC_PRICE_SOURCE || "https://api.binance.com/api/v3/klines";

@@ -933,5 +933,460 @@ refreshAccountsBtn.addEventListener("click", () => {
     fetchAccounts();
 });
 
+// ========== 余额图表功能 ==========
+
+const SVG_NS = "http://www.w3.org/2000/svg";
+const CHART_COLORS = [
+    "#00c2ff",
+    "#22c55e",
+    "#f87171",
+    "#a78bfa",
+    "#f472b6",
+    "#f97316",
+    "#38bdf8",
+    "#facc15",
+];
+
+const balanceChartContainer = document.getElementById("balance-chart-container");
+const balanceChartDaysSelect = document.getElementById("balance-chart-days");
+const refreshChartBtn = document.getElementById("btn-refresh-chart");
+
+const balanceChartState = {
+    loading: false,
+    data: [],
+    days: 7,
+    allSeries: [], // 保存所有曲线数据
+    selectedSeries: new Set(), // 选中的曲线索引集合
+};
+
+function getChartColor(index) {
+    return CHART_COLORS[index % CHART_COLORS.length];
+}
+
+async function fetchBalanceHistory() {
+    if (balanceChartState.loading) return;
+    balanceChartState.loading = true;
+    setChartLoading();
+    try {
+        const days = balanceChartState.days;
+        const response = await fetch(`/api/balance-history?days=${days}`);
+        if (!response.ok) {
+            const body = await response.json().catch(() => ({}));
+            throw new Error(body.message || "加载余额历史失败");
+        }
+        const payload = await response.json();
+        balanceChartState.data = payload.items || [];
+        renderBalanceChart();
+    } catch (err) {
+        showMessage(err.message, "error");
+        balanceChartState.data = [];
+        renderBalanceChart();
+    } finally {
+        balanceChartState.loading = false;
+    }
+}
+
+function setChartLoading() {
+    balanceChartContainer.innerHTML = '<div class="chart-loading">加载中...</div>';
+}
+
+function renderBalanceChart() {
+    balanceChartContainer.innerHTML = "";
+
+    if (!balanceChartState.data.length) {
+        const empty = document.createElement("div");
+        empty.className = "chart-empty";
+        empty.textContent = "暂无余额数据";
+        balanceChartContainer.appendChild(empty);
+        return;
+    }
+
+    // 按地址分组数据
+    const dataByAddress = new Map();
+    balanceChartState.data.forEach((log) => {
+        const key = `${log.pk_idx}_${log.address}`;
+        if (!dataByAddress.has(key)) {
+            dataByAddress.set(key, {
+                pkIdx: log.pk_idx,
+                address: log.address,
+                points: [],
+            });
+        }
+        const entry = dataByAddress.get(key);
+        entry.points.push({
+            time: new Date(log.log_time).getTime(),
+            balance: log.balance,
+        });
+    });
+
+    // 计算总余额曲线
+    // 方法：将时间点对齐到小时级别，因为一小时内只会记录一次
+    // 1. 按小时对齐所有时间点
+    const alignToHour = (timestamp) => {
+        const date = new Date(timestamp);
+        date.setMinutes(0, 0, 0); // 将分钟、秒和毫秒归零
+        return date.getTime();
+    };
+
+    // 2. 按小时分组所有地址的余额记录
+    const balanceByHour = new Map(); // hourTimestamp -> { addressKey -> balance }
+    dataByAddress.forEach((entry, addressKey) => {
+        entry.points.forEach((point) => {
+            const hourTime = alignToHour(point.time);
+            if (!balanceByHour.has(hourTime)) {
+                balanceByHour.set(hourTime, new Map());
+            }
+            const hourData = balanceByHour.get(hourTime);
+            // 同一小时内，取最新的余额（如果同一小时有多个记录）
+            const existing = hourData.get(addressKey);
+            if (!existing || point.time > existing.time) {
+                hourData.set(addressKey, { time: point.time, balance: point.balance });
+            }
+        });
+    });
+
+    // 3. 计算每个小时时间点的总余额
+    const sortedHours = Array.from(balanceByHour.keys()).sort((a, b) => a - b);
+    const totalPoints = sortedHours.map((hourTime) => {
+        const hourData = balanceByHour.get(hourTime);
+        let total = 0;
+        hourData.forEach(({ balance }) => {
+            total += balance;
+        });
+        return { time: hourTime, balance: total };
+    });
+
+    // 准备所有曲线数据
+    const series = [];
+    let colorIndex = 0;
+
+    // 添加每个地址的曲线（也按小时对齐）
+    dataByAddress.forEach((entry, addressKey) => {
+        // 按小时对齐该地址的点
+        const addressBalanceByHour = new Map(); // hourTimestamp -> { time, balance }
+        entry.points.forEach((point) => {
+            const hourTime = alignToHour(point.time);
+            const existing = addressBalanceByHour.get(hourTime);
+            if (!existing || point.time > existing.time) {
+                addressBalanceByHour.set(hourTime, { time: hourTime, balance: point.balance });
+            }
+        });
+
+        // 转换为排序后的点数组
+        const alignedPoints = Array.from(addressBalanceByHour.values())
+            .sort((a, b) => a.time - b.time);
+
+        if (alignedPoints.length > 0) {
+            series.push({
+                points: alignedPoints,
+                color: getChartColor(colorIndex++),
+                label: `#${entry.pkIdx} ${entry.address.slice(0, 8)}...`,
+                currentValue: alignedPoints[alignedPoints.length - 1].balance,
+            });
+        }
+    });
+
+    // 添加总余额曲线
+    if (totalPoints.length > 0) {
+        series.push({
+            points: totalPoints,
+            color: "#facc15",
+            label: "总余额",
+            currentValue: totalPoints[totalPoints.length - 1].balance,
+            isTotal: true,
+        });
+    }
+
+    if (series.length === 0) {
+        const empty = document.createElement("div");
+        empty.className = "chart-empty";
+        empty.textContent = "暂无数据";
+        balanceChartContainer.appendChild(empty);
+        return;
+    }
+
+    // 保存所有曲线数据
+    balanceChartState.allSeries = series;
+
+    // 初始化选中状态：默认只显示总余额曲线
+    if (balanceChartState.selectedSeries.size === 0) {
+        // 找到总余额曲线的索引（通常是最后一个）
+        const totalIndex = series.findIndex((s) => s.isTotal);
+        if (totalIndex >= 0) {
+            balanceChartState.selectedSeries.add(totalIndex);
+        } else {
+            // 如果没有总余额曲线，默认选中最后一条
+            if (series.length > 0) {
+                balanceChartState.selectedSeries.add(series.length - 1);
+            }
+        }
+    } else {
+        // 如果已有选中状态，确保索引有效
+        const validIndices = new Set();
+        balanceChartState.selectedSeries.forEach((index) => {
+            if (index < series.length) {
+                validIndices.add(index);
+            }
+        });
+        balanceChartState.selectedSeries = validIndices;
+        // 如果所有索引都无效，默认只显示总余额曲线
+        if (validIndices.size === 0) {
+            const totalIndex = series.findIndex((s) => s.isTotal);
+            if (totalIndex >= 0) {
+                balanceChartState.selectedSeries.add(totalIndex);
+            } else if (series.length > 0) {
+                balanceChartState.selectedSeries.add(series.length - 1);
+            }
+        }
+    }
+
+    // 渲染合并图表
+    const chartCard = createCombinedChartCard(series);
+    balanceChartContainer.appendChild(chartCard);
+}
+
+function createCombinedChartCard(series) {
+    const card = document.createElement("div");
+    card.className = "balance-chart-item";
+
+    // 创建图例头部
+    const head = document.createElement("div");
+    head.className = "balance-chart-item-head";
+    const title = document.createElement("strong");
+    title.textContent = "余额曲线";
+    head.appendChild(title);
+
+    // 创建图例
+    const legend = document.createElement("div");
+    legend.className = "balance-chart-legend";
+    series.forEach((s, index) => {
+        const isSelected = balanceChartState.selectedSeries.has(index);
+        const legendItem = document.createElement("div");
+        legendItem.className = "balance-chart-legend-item";
+        legendItem.dataset.seriesIndex = index;
+        if (s.isTotal) {
+            legendItem.classList.add("total-legend");
+        }
+        if (!isSelected) {
+            legendItem.classList.add("legend-item-unselected");
+        }
+
+        // 复选框
+        const checkbox = document.createElement("input");
+        checkbox.type = "checkbox";
+        checkbox.className = "legend-checkbox";
+        checkbox.checked = isSelected;
+        checkbox.dataset.seriesIndex = index;
+        checkbox.addEventListener("change", handleSeriesToggle);
+
+        const dot = document.createElement("span");
+        dot.className = "legend-dot";
+        dot.style.backgroundColor = s.color;
+
+        const label = document.createElement("span");
+        label.className = "legend-label";
+        label.textContent = s.label;
+
+        const value = document.createElement("span");
+        value.className = "legend-value";
+        value.textContent = formatUsdcBalance(s.currentValue);
+
+        legendItem.appendChild(checkbox);
+        legendItem.appendChild(dot);
+        legendItem.appendChild(label);
+        legendItem.appendChild(value);
+        legend.appendChild(legendItem);
+    });
+
+    head.appendChild(legend);
+    card.appendChild(head);
+
+    // 创建合并图表（只显示选中的曲线）
+    const filteredSeries = series.filter((_, index) => balanceChartState.selectedSeries.has(index));
+
+    if (filteredSeries.length === 0) {
+        const emptyMsg = document.createElement("div");
+        emptyMsg.className = "chart-empty";
+        emptyMsg.textContent = "请至少选择一条曲线";
+        card.appendChild(emptyMsg);
+    } else {
+        const svg = buildCombinedBalanceChart(filteredSeries);
+        svg.dataset.chartId = "balance-chart-svg";
+        card.appendChild(svg);
+    }
+
+    return card;
+}
+
+function handleSeriesToggle(event) {
+    const index = parseInt(event.target.dataset.seriesIndex, 10);
+    const legendItem = event.target.closest(".balance-chart-legend-item");
+
+    if (event.target.checked) {
+        balanceChartState.selectedSeries.add(index);
+        legendItem?.classList.remove("legend-item-unselected");
+    } else {
+        // 至少保留一条曲线
+        if (balanceChartState.selectedSeries.size <= 1) {
+            event.target.checked = true;
+            return;
+        }
+        balanceChartState.selectedSeries.delete(index);
+        legendItem?.classList.add("legend-item-unselected");
+    }
+
+    // 重新渲染图表
+    const chartCard = balanceChartContainer.querySelector(".balance-chart-item");
+    if (chartCard) {
+        const filteredSeries = balanceChartState.allSeries.filter(
+            (_, idx) => balanceChartState.selectedSeries.has(idx)
+        );
+
+        const oldSvg = chartCard.querySelector('[data-chart-id="balance-chart-svg"]');
+        const oldEmpty = chartCard.querySelector(".chart-empty");
+
+        if (filteredSeries.length === 0) {
+            if (oldSvg) oldSvg.remove();
+            if (!oldEmpty) {
+                const emptyMsg = document.createElement("div");
+                emptyMsg.className = "chart-empty";
+                emptyMsg.textContent = "请至少选择一条曲线";
+                chartCard.appendChild(emptyMsg);
+            }
+        } else {
+            if (oldEmpty) oldEmpty.remove();
+            if (oldSvg) {
+                const newSvg = buildCombinedBalanceChart(filteredSeries);
+                newSvg.dataset.chartId = "balance-chart-svg";
+                oldSvg.replaceWith(newSvg);
+            } else {
+                const newSvg = buildCombinedBalanceChart(filteredSeries);
+                newSvg.dataset.chartId = "balance-chart-svg";
+                chartCard.appendChild(newSvg);
+            }
+        }
+    }
+}
+
+function buildCombinedBalanceChart(series) {
+    const width = 1200;
+    const height = 500;
+    const padding = { top: 30, right: 20, bottom: 60, left: 80 };
+
+    const svg = document.createElementNS(SVG_NS, "svg");
+    svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+    svg.setAttribute("preserveAspectRatio", "xMidYMid meet");
+    svg.classList.add("balance-chart-svg");
+
+    // 计算所有曲线的统一时间范围和余额范围
+    const allTimes = series.flatMap((s) => s.points.map((p) => p.time));
+    const allBalances = series.flatMap((s) => s.points.map((p) => p.balance));
+    const minX = Math.min(...allTimes);
+    const maxX = Math.max(...allTimes);
+    let minY = Math.min(...allBalances);
+    let maxY = Math.max(...allBalances);
+
+    if (minY === maxY) {
+        const adjust = minY === 0 ? 1 : Math.abs(minY) * 0.1;
+        minY -= adjust;
+        maxY += adjust;
+    }
+
+    const chartWidth = width - padding.left - padding.right;
+    const chartHeight = height - padding.top - padding.bottom;
+
+    const scaleX = (value) => {
+        if (maxX === minX) return padding.left + chartWidth / 2;
+        return padding.left + ((value - minX) / (maxX - minX)) * chartWidth;
+    };
+
+    const scaleY = (value) => {
+        if (maxY === minY) return padding.top + chartHeight / 2;
+        return padding.top + chartHeight - ((value - minY) / (maxY - minY)) * chartHeight;
+    };
+
+    // 绘制网格线
+    for (let i = 0; i <= 4; i++) {
+        const line = document.createElementNS(SVG_NS, "line");
+        const y = padding.top + (chartHeight / 4) * i;
+        line.setAttribute("x1", padding.left);
+        line.setAttribute("x2", padding.left + chartWidth);
+        line.setAttribute("y1", y);
+        line.setAttribute("y2", y);
+        line.setAttribute("stroke", "rgba(255,255,255,0.05)");
+        line.setAttribute("stroke-width", "1");
+        svg.appendChild(line);
+    }
+
+    // 绘制 Y 轴刻度
+    for (let i = 0; i <= 4; i++) {
+        const value = minY + ((maxY - minY) / 4) * i;
+        const y = scaleY(value);
+        const label = document.createElementNS(SVG_NS, "text");
+        label.setAttribute("x", padding.left - 10);
+        label.setAttribute("y", y + 5);
+        label.setAttribute("text-anchor", "end");
+        label.setAttribute("fill", "rgba(255,255,255,0.6)");
+        label.setAttribute("font-size", "12");
+        label.setAttribute("font-family", "system-ui, -apple-system, sans-serif");
+        label.textContent = value.toFixed(2);
+        svg.appendChild(label);
+    }
+
+    // 绘制 X 轴刻度（时间）
+    const timeLabels = [];
+    for (let i = 0; i <= 4; i++) {
+        const time = minX + ((maxX - minX) / 4) * i;
+        timeLabels.push(time);
+    }
+    timeLabels.forEach((time) => {
+        const x = scaleX(time);
+        const date = new Date(time);
+        const label = document.createElementNS(SVG_NS, "text");
+        label.setAttribute("x", x);
+        label.setAttribute("y", height - padding.bottom + 20);
+        label.setAttribute("text-anchor", "middle");
+        label.setAttribute("fill", "rgba(255,255,255,0.6)");
+        label.setAttribute("font-size", "11");
+        label.setAttribute("font-family", "system-ui, -apple-system, sans-serif");
+        label.textContent = `${date.getMonth() + 1}/${date.getDate()} ${date.getHours()}:${String(date.getMinutes()).padStart(2, "0")}`;
+        svg.appendChild(label);
+    });
+
+    // 绘制所有曲线
+    series.forEach((s) => {
+        const path = document.createElementNS(SVG_NS, "path");
+        const d = s.points
+            .map((point, idx) => {
+                const x = scaleX(point.time).toFixed(2);
+                const y = scaleY(point.balance).toFixed(2);
+                return `${idx === 0 ? "M" : "L"}${x} ${y}`;
+            })
+            .join(" ");
+        path.setAttribute("d", d);
+        path.setAttribute("fill", "none");
+        path.setAttribute("stroke", s.color);
+        path.setAttribute("stroke-width", s.isTotal ? "3" : "2");
+        path.setAttribute("stroke-linecap", "round");
+        path.setAttribute("stroke-linejoin", "round");
+        if (s.isTotal) {
+            path.setAttribute("stroke-dasharray", "8,4");
+        }
+        svg.appendChild(path);
+    });
+
+    return svg;
+}
+
+balanceChartDaysSelect.addEventListener("change", (e) => {
+    balanceChartState.days = parseInt(e.target.value, 10);
+    fetchBalanceHistory();
+});
+
+refreshChartBtn.addEventListener("click", () => {
+    fetchBalanceHistory();
+});
+
 fetchTasks();
 fetchAccounts();
+fetchBalanceHistory();

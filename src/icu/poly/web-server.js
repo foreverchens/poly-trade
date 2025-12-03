@@ -10,7 +10,7 @@ import {
     getDefaultClient,
 } from "./core/poly-client-manage.js";
 import {getBalances, transferPOL, transferUSDC} from "./core/ether-client.js";
-import {listOrders, deleteOrder, updateOrder} from "./db/repository.js";
+import {listOrders, deleteOrder, updateOrder, getBalanceHistory} from "./db/repository.js";
 import {getMinuteSamples} from "./db/statisc-repository.js";
 import {
     listConvergenceTaskConfigs,
@@ -531,6 +531,20 @@ app.post("/api/accounts/:pkIdx/transfer-usdc", async (req, res) => {
         console.error("Failed to transfer USDC:", err.message);
         res.status(err.statusCode || err.status || 500).json({
             error: "failed_to_transfer_usdc",
+            message: err.message,
+        });
+    }
+});
+
+app.get("/api/balance-history", async (req, res) => {
+    try {
+        const days = req.query.days ? parseInt(req.query.days, 10) : 7;
+        const balanceLogs = await getBalanceHistory({days});
+        res.json({count: balanceLogs.length, items: balanceLogs});
+    } catch (err) {
+        console.error("Failed to get balance history:", err.message);
+        res.status(err.statusCode || err.status || 500).json({
+            error: "failed_to_get_balance_history",
             message: err.message,
         });
     }

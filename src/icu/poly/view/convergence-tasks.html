@@ -66,6 +66,23 @@
                     </table>
                 </div>
             </section>
+            <section class="balance-chart-card">
+                <div class="balance-chart-header">
+                    <h2>余额曲线</h2>
+                    <div class="balance-chart-controls">
+                        <select id="balance-chart-days" class="chart-select">
+                            <option value="3">最近3天</option>
+                            <option value="7" selected>最近7天</option>
+                            <option value="14">最近14天</option>
+                            <option value="30">最近30天</option>
+                        </select>
+                        <button id="btn-refresh-chart" type="button" class="secondary">刷新图表</button>
+                    </div>
+                </div>
+                <div id="balance-chart-container" class="balance-chart-container">
+                    <div class="chart-loading">加载中...</div>
+                </div>
+            </section>
         </div>
 
         <!-- 划转模态对话框 -->

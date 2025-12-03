@@ -209,3 +209,33 @@ export async function saveBalanceLog(balanceData) {
         throw error;
     }
 }
+
+/**
+ * Get balance history for accounts (获取余额历史)
+ * @param {Object} options
+ * @param {number} options.days - 查询天数，默认7天
+ * @returns {Promise<Array>}
+ */
+export async function getBalanceHistory(options = {}) {
+    try {
+        const days = options.days || 7;
+        const startDate = new Date();
+        startDate.setDate(startDate.getDate() - days);
+
+        const balanceLogs = await prisma.balance_log.findMany({
+            where: {
+                log_time: {
+                    gte: startDate,
+                },
+            },
+            orderBy: {
+                log_time: 'asc',
+            },
+        });
+
+        return balanceLogs;
+    } catch (error) {
+        console.error('Failed to get balance history:', error);
+        throw error;
+    }
+}

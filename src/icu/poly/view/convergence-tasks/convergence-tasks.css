@@ -556,3 +556,174 @@ td.actions button {
     background: rgba(255, 255, 255, 0.05);
     border-color: var(--accent);
 }
+
+/* ========== 余额图表样式 ========== */
+.balance-chart-card {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 16px;
+    box-shadow: 0 12px 48px rgba(0, 0, 0, 0.4);
+}
+
+.balance-chart-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 16px;
+    flex-wrap: wrap;
+    gap: 12px;
+}
+
+.balance-chart-header h2 {
+    margin: 0;
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--text);
+}
+
+.balance-chart-controls {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+}
+
+.chart-select {
+    padding: 8px 12px;
+    background: #152135;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    color: var(--text);
+    font-size: 13px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.chart-select:hover {
+    border-color: var(--accent);
+}
+
+.chart-select:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgba(0, 194, 255, 0.1);
+}
+
+.balance-chart-container {
+    min-height: 400px;
+    padding: 16px 0;
+}
+
+.balance-chart-item {
+    background: rgba(0, 0, 0, 0.2);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 16px;
+}
+
+.balance-chart-item-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 16px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--line);
+    flex-wrap: wrap;
+    gap: 12px;
+}
+
+.balance-chart-item-head strong {
+    color: var(--text);
+    font-size: 16px;
+    font-weight: 600;
+}
+
+.balance-chart-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 16px;
+    align-items: center;
+}
+
+.balance-chart-legend-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 12px;
+    background: rgba(255, 255, 255, 0.03);
+    border-radius: 6px;
+    border: 1px solid var(--line);
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.balance-chart-legend-item:hover {
+    background: rgba(255, 255, 255, 0.06);
+    border-color: var(--accent);
+}
+
+.balance-chart-legend-item.total-legend {
+    border-color: rgba(250, 204, 21, 0.4);
+    background: rgba(250, 204, 21, 0.08);
+}
+
+.balance-chart-legend-item.total-legend:hover {
+    border-color: rgba(250, 204, 21, 0.6);
+    background: rgba(250, 204, 21, 0.12);
+}
+
+.legend-checkbox {
+    width: 16px;
+    height: 16px;
+    cursor: pointer;
+    accent-color: var(--accent);
+    flex-shrink: 0;
+}
+
+.legend-item-unselected {
+    opacity: 0.4;
+}
+
+.legend-item-unselected .legend-dot {
+    opacity: 0.5;
+}
+
+.legend-item-unselected .legend-label,
+.legend-item-unselected .legend-value {
+    opacity: 0.6;
+}
+
+.legend-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+
+.legend-label {
+    color: var(--text);
+    font-size: 13px;
+    font-weight: 500;
+}
+
+.legend-value {
+    color: var(--accent);
+    font-size: 13px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    margin-left: 4px;
+}
+
+.balance-chart-svg {
+    width: 100%;
+    height: auto;
+    max-height: 500px;
+}
+
+.chart-loading,
+.chart-empty {
+    text-align: center;
+    color: var(--muted);
+    padding: 40px 20px;
+    font-size: 14px;
+}

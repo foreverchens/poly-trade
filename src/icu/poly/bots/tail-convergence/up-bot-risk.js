@@ -1,6 +1,5 @@
 import dayjs from "dayjs";
 import { listLimitKlines } from "./common.js";
-import logger from "../../core/Logger.js";
 
 /**
  * 检查方向稳定性（基于价格历史，使用加权平均价格）
@@ -50,8 +49,22 @@ export async function checkDirectionStability({
             return price.p * weight;
         });
         // 计算加权平均价格
-        const weightedAveragePrice =
+        let weightedAveragePrice =
             weightedPrices.reduce((sum, wp) => sum + wp, 0) / recentPriceHistory.length;
+        // 获取当前小数、如果是美国时间 22点和4点
+        const currentHour = dayjs().hour();
+        if (currentHour === 22 || currentHour === 4) {
+            // 美股时间 22点和4点、加权平均价格权重调整为0.95、增加通过难度
+            weightedAveragePrice = weightedAveragePrice * 0.95;
+        }
+        // 获取当前剩余分钟数、对最后三分钟 额外增加权重
+        const currentMinute = dayjs().minute();
+        if (currentMinute >= 57) {
+            // 最后三分钟、额外增加权重、直接增加价格
+            weightedAveragePrice = weightedAveragePrice + (currentMinute - 56);
+        }
+
+
         // 判断是否通过
         if (weightedAveragePrice < weightedThreshold) {
             return {
@@ -73,14 +86,12 @@ export async function checkDirectionStability({
  * @param {Object} params
  * @param {string} params.symbol - 交易对符号
  * @param {string} params.outcome - 信号方向 "UP" 或 "DOWN"
- * @param {number} params.currentLoopHour - 当前循环小时
  * @param {number} params.pricePositionThreshold - 价格位置阈值，默认0.2
  * @returns {Promise<{allowed: boolean, reason: string}>}
  */
 export async function checkPricePositionAndTrend({
     symbol,
     outcome,
-    currentLoopHour,
     pricePositionThreshold = 0.2,
 }) {
     try {
@@ -92,7 +103,6 @@ export async function checkPricePositionAndTrend({
         // 获取当前小时内所有1min级别k线数据
         const limitKlines = await listLimitKlines(symbol, dayjs().minute() + 1);
         if (!limitKlines || limitKlines.length <= 1) {
-            logger.error(`[${symbol}-${currentLoopHour}时] 无法获取k线数据，跳过价格趋势检查`);
             return { allowed: false, reason: "无法获取k线数据，跳过价格趋势检查" };
         }
         // 检查当前价格所在位置
@@ -108,19 +118,9 @@ export async function checkPricePositionAndTrend({
             );
             const pricePosition = (curP - openP) / (highP - openP);
             if (pricePosition < pricePositionThreshold) {
-                const msg = `风控-价格位置检查不通过、
-                        当前价格${curP}
-                        在开盘价${openP}
-                        和最高价${highP}之间位置=${(pricePosition * 100).toFixed(1)}% 偏离开盘价低于${(pricePositionThreshold * 100).toFixed(0)}%、反转概率较高、不进行额外买入`;
-                logger.info(`[${symbol}-${currentLoopHour}时] ${msg}`);
+                const msg = `风控-价格位置检查不通过、当前价格${curP}在开盘价${openP}和最高价${highP}之间位置=${(pricePosition * 100).toFixed(1)}% 偏离开盘价低于${(pricePositionThreshold * 100).toFixed(0)}%、反转概率较高、不进行额外买入`;
                 return { allowed: false, reason: msg };
             }
-            logger.info(
-                `[${symbol}-${currentLoopHour}时] 风控-价格位置检查通过、
-                        当前价格${curP}
-                        在开盘价${openP}
-                        和最高价${highP}之间位置=${(pricePosition * 100).toFixed(1)}%、偏离开盘价超过${(pricePositionThreshold * 100).toFixed(0)}%、反转概率较低、进行额外买入`,
-            );
         } else {
             // 下跌
             const lowP = limitKlines.reduce(
@@ -129,73 +129,40 @@ export async function checkPricePositionAndTrend({
             );
             const pricePosition = (openP - curP) / (openP - lowP);
             if (pricePosition < pricePositionThreshold) {
-                const msg = `风控-价格位置检查不通过、
-                        当前价格${curP}
-                        在开盘价${openP}
-                        和最低价${lowP}之间位置=${(pricePosition * 100).toFixed(1)}% 偏离开盘价低于${(pricePositionThreshold * 100).toFixed(0)}%、反转概率较高、不进行额外买入`;
-                logger.info(`[${symbol}-${currentLoopHour}时] ${msg}`);
+                const msg = `风控-价格位置检查不通过、当前价格${curP}在开盘价${openP}和最低价${lowP}之间位置=${(pricePosition * 100).toFixed(1)}% 偏离开盘价低于${(pricePositionThreshold * 100).toFixed(0)}%、反转概率较高、不进行额外买入`;
                 return { allowed: false, reason: msg };
             }
-            logger.info(
-                `[${symbol}-${currentLoopHour}时] 风控-价格位置检查通过、
-                        当前价格${curP}
-                        在开盘价${openP}
-                        和最低价${lowP}之间位置=${(pricePosition * 100).toFixed(1)}% 偏离开盘价超过${(pricePositionThreshold * 100).toFixed(0)}%、反转概率较低、进行额外买入`,
-            );
         }
         // 价格趋势检查、检查1min背离强度
-        // 获取最近3根k线的最高价和最低价、计算价差、如果价差大于当前价和开盘价的差值、则不进行额外买入
+        // 获取最近3根k线的第一根k线的最高价和最后一根k线的最低价、计算价差、如果价差大于当前价和开盘价的差值、则不进行额外买入
         const recentKlines = limitKlines.slice(-3);
-        const highP = recentKlines.reduce(
-            (max, kline) => Math.max(max, kline[2]),
-            recentKlines[0][2],
-        );
-        const lowP = recentKlines.reduce(
-            (min, kline) => Math.min(min, kline[3]),
-            recentKlines[0][3],
-        );
+        let highP = recentKlines[0][2];
+        let lowP = recentKlines[2][3];
         const priceDiff = highP - lowP;
         const openDiff = openP - curP;
         // 检查最近3分钟趋势是否与信号方向背离，且波动幅度可能带来反转风险
         const lastCloseP = recentKlines[2][4];
         const firstOpenP = recentKlines[0][1];
+        // 获取当前剩余分钟数、值域位 [1, 3]
+        const remainingMinutes = Math.min(3, 60 - dayjs().minute());
+        // 对价格差值进行加权、剩余时间越长、价格差值权重越大
+        const priceWightDiff = priceDiff * remainingMinutes / 3;
+
         if (outcome === "UP") {
             // 信号方向为上涨、最新价格大于开盘价、但是最近3分钟整体方向是下跌、并且下跌预期程度有跌破风险、则不进行额外买入
-            if (curP > openP && firstOpenP > lastCloseP && priceDiff > Math.abs(openDiff)) {
-                const msg = `风控-价格趋势检查不通过、信号方向为上涨、最新价格大于开盘价、但是最近3分钟整体方向是下跌、并且下跌预期程度有跌破风险、则不进行额外买入
-                        lastCloseP:${lastCloseP}
-                        firstOpenP:${firstOpenP}
-                        priceDiff:${priceDiff}
-                        openDiff:${openDiff}
-                        curP:${curP}
-                        openP:${openP}
-                    `;
-                logger.info(`[${symbol}-${currentLoopHour}时] ${msg}`);
+            if (curP > openP && firstOpenP > lastCloseP && priceWightDiff > Math.abs(openDiff)) {
+                const msg = `风控-价格趋势检查不通过、信号方向为上涨、最新价格大于开盘价、但是最近3分钟整体方向是下跌、并且下跌预期程度有跌破风险、则不进行额外买入 lastCloseP:${lastCloseP} firstOpenP:${firstOpenP} priceDiff:${priceWightDiff} openDiff:${openDiff} curP:${curP} openP:${openP}`;
                 return { allowed: false, reason: msg };
             }
         } else {
             // 信号方向为下跌、最新价格小于开盘价、但是最近3分钟整体方向是上涨、并且上涨预期程度有突破风险、则不进行额外买入
-            if (curP < openP && firstOpenP < lastCloseP && priceDiff > Math.abs(openDiff)) {
-                const msg = `风控-价格趋势检查不通过、信号方向为下跌、最新价格小于开盘价、但是最近3分钟整体方向是上涨、并且上涨预期程度有突破风险、则不进行额外买入
-                        lastCloseP:${lastCloseP}
-                        firstOpenP:${firstOpenP}
-                        priceDiff:${priceDiff}
-                        openDiff:${openDiff}
-                        curP:${curP}
-                        openP:${openP}
-                    `;
-                logger.info(`[${symbol}-${currentLoopHour}时] ${msg}`);
+            if (curP < openP && firstOpenP < lastCloseP && priceWightDiff > Math.abs(openDiff)) {
+                const msg = `风控-价格趋势检查不通过、信号方向为下跌、最新价格小于开盘价、但是最近3分钟整体方向是上涨、并且上涨预期程度有突破风险、则不进行额外买入 lastCloseP:${lastCloseP} firstOpenP:${firstOpenP} priceDiff:${priceWightDiff} openDiff:${openDiff} curP:${curP} openP:${openP}`;
                 return { allowed: false, reason: msg };
             }
         }
-        logger.info(`[${symbol}-${currentLoopHour}时] 风控-价格趋势检查通过`);
-
-        return { allowed: true, reason: "价格位置和趋势检查通过" };
+        return { allowed: true, reason: "风控-价格位置和趋势检查通过" };
     } catch (error) {
-        logger.error(
-            `[${symbol}-${currentLoopHour}时] 风控-价格趋势检查失败`,
-            error?.message ?? error,
-        );
-        return { allowed: false, reason: "风控-价格趋势检查失败" };
+        return { allowed: false, reason: `风控-价格趋势检查失败: ${error?.message ?? error}` };
     }
 }

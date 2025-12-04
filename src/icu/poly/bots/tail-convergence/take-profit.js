@@ -59,12 +59,6 @@ export class TakeProfitManager {
         if (pendingOrders.length == errorOrders.length) {
             // pendingOrders 永远包含 errorOrders 中的订单 以及一些新提交的订单
             // 如果当前止盈订单队列 都为异常订单，结束调度、此时待处理止盈订单肯定为0
-            if (this.takeProfitOrders.length) {
-                logger.info(
-                    `[止盈] 无待处理止盈订单、结束调度\n`,
-                );
-                // logger.info(JSON.stringify(this.takeProfitOrders, null, 4));
-            }
             this.takeProfitOrders = errorOrders;
             return;
         }
@@ -154,9 +148,9 @@ export class TakeProfitManager {
             }
         }
 
-        logger.info(
-            `[止盈] 处理完成: 总计=${processedCount}, 已止盈=${takeProfitCount}, 已撤单=${cancelledCount}, 跳过=${skippedCount}, 错误=${errorCount}`,
-        );
+        // logger.info(
+        //     `[止盈] 处理完成: 总计=${processedCount}, 已止盈=${takeProfitCount}, 已撤单=${cancelledCount}, 跳过=${skippedCount}, 错误=${errorCount}`,
+        // );
     }
 
     /**

@@ -95,7 +95,7 @@ export class UpBotCache {
             });
 
             logger.info(
-                `[UpBotCache] 余额记录已保存: pkIdx=${this.pkIdx}, address=${this.client.funderAddress}, day=${day}, hour=${hour}, balance=${balanceNum}`
+                `[UpBotCache] 余额记录已保存: pkIdx=${this.pkIdx}, address=${this.client.funderAddress.slice(0, 6)}...${this.client.funderAddress.slice(-4)}, day=${day}, hour=${hour}, balance=${balanceNum}`
             );
         } catch (err) {
             logger.error('[UpBotCache] 余额记录失败', err?.message ?? err);
@@ -110,7 +110,6 @@ export class UpBotCache {
         this._rotate();
         if (!this.store.targetSlug) {
             this.store.targetSlug = resolveSlugList(this.slugTemplate);
-            logger.info(`[UpBotCache] 重新解析TargetSlug: ${this.store.targetSlug}`);
         }
         // Slug 变化不频繁，不需要每次命中都打印，仅在解析时打印
         return this.store.targetSlug;
@@ -130,7 +129,7 @@ export class UpBotCache {
             if (markets && markets.length > 0) {
                 this.store.market = markets[0];
                 logger.info(
-                    `[UpBotCache] 市场已缓存更新: ${this.store.market.slug} (Slug=${slug})`,
+                    `[UpBotCache] 市场已缓存更新: ${this.store.market.slug}`,
                 );
             } else {
                 logger.info(`[UpBotCache] 未找到市场, 缓存为空: ${slug}`);

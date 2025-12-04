@@ -700,6 +700,9 @@ function renderAccounts() {
     accountsState.items.forEach((account) => {
         const tr = document.createElement("tr");
         tr.dataset.pkIdx = account.pkIdx;
+        // 存储原始余额数据，供最大额度按钮使用
+        tr.dataset.polBalance = account.polBalance != null ? String(account.polBalance) : "0";
+        tr.dataset.usdcBalance = account.usdcBalance != null ? String(account.usdcBalance) : "0";
 
         const pkIdxCell = document.createElement("td");
         pkIdxCell.textContent = account.pkIdx;
@@ -762,6 +765,7 @@ const transferUnit = document.getElementById("transfer-unit");
 const transferFromAddress = document.getElementById("transfer-from-address");
 const transferCancelBtn = document.getElementById("transfer-cancel");
 const transferConfirmBtn = document.getElementById("transfer-confirm");
+const transferMaxBtn = document.getElementById("transfer-max-btn");
 const modalCloseBtn = document.querySelector(".modal-close");
 const modalOverlay = document.querySelector(".modal-overlay");
 
@@ -800,6 +804,44 @@ function showTransferModal(type, pkIdx, fromAddress) {
     setTimeout(() => {
         transferToInput.focus();
     }, 100);
+}
+
+function setMaxAmount() {
+    if (!currentPkIdx || !currentTransferType) return;
+
+    // 直接从表格行读取余额数据
+    const row = accountsTableBody.querySelector(`tr[data-pk-idx="${currentPkIdx}"]`);
+    if (!row) {
+        showMessage("无法找到账户信息", "error");
+        return;
+    }
+
+    let maxAmount = null;
+    if (currentTransferType === "pol") {
+        // 对于POL，读取全额-0.01
+        const polBalance = parseFloat(row.dataset.polBalance || 0);
+        if (polBalance > 0.01) {
+            maxAmount = (polBalance - 0.01).toFixed(6);
+        } else {
+            maxAmount = "0";
+        }
+    } else if (currentTransferType === "usdc") {
+        // 对于USDC.e，读取全额
+        const usdcBalance = parseFloat(row.dataset.usdcBalance || 0);
+        if (usdcBalance > 0) {
+            // 保留6位小数精度
+            maxAmount = usdcBalance.toFixed(6);
+        } else {
+            maxAmount = "0";
+        }
+    }
+
+    if (maxAmount !== null && parseFloat(maxAmount) > 0) {
+        transferAmountInput.value = maxAmount;
+        transferAmountInput.classList.remove("error");
+    } else {
+        showMessage("账户余额不足", "error");
+    }
 }
 
 function hideTransferModal() {
@@ -880,6 +922,7 @@ async function executeTransfer() {
 
 transferConfirmBtn.addEventListener("click", executeTransfer);
 transferCancelBtn.addEventListener("click", hideTransferModal);
+transferMaxBtn.addEventListener("click", setMaxAmount);
 modalCloseBtn.addEventListener("click", hideTransferModal);
 modalOverlay.addEventListener("click", hideTransferModal);
 

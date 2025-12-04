@@ -11,7 +11,7 @@ import { listLimitKlines } from "./common.js";
  * @param {string} params.tokenId - Token ID
  * @param {number} params.lookbackMinutes - 回看时间（分钟），默认30
  * @param {number} params.weightedThreshold - 加权平均价格阈值，默认0.75
- * @returns {Promise<{allowed: boolean, reason: string}>}
+ * @returns {Promise<{allowed: boolean, reason: string, weiAvgPrice: number}>}
  */
 export async function checkDirectionStability({
     client,
@@ -75,6 +75,7 @@ export async function checkDirectionStability({
         return {
             allowed: true,
             reason: `风控-方向稳定性检查通过、加权平均价格=${weightedAveragePrice.toFixed(4)}、大于阈值${weightedThreshold}、可以进行额外买入`,
+            avgWeiPrice: Number(weightedAveragePrice.toFixed(4)),
         };
     } catch (error) {
         return { allowed: false, reason: `风控-方向稳定性检查失败: ${error?.message ?? error}` };

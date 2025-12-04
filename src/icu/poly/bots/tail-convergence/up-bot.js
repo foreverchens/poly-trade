@@ -7,7 +7,7 @@ import { TakeProfitManager } from "./take-profit.js";
 import { UpBotCache } from "./up-bot-cache.js";
 import { saveOrder } from "../../db/repository.js";
 import logger from "../../core/Logger.js";
-import convergenceTaskConfigs from "../../data/convergence-up.config.js";
+import { loadConvergenceTaskConfigs } from "../../data/convergence-up.config.js";
 import { getZ } from "../../core/z-score.js";
 import { PolySide } from "../../core/PolyClient.js";
 import { checkDirectionStability, checkPricePositionAndTrend } from "./up-bot-risk.js";
@@ -69,7 +69,17 @@ class TailConvergenceStrategy {
      * 将嵌套配置展平为一级对象（向后兼容现有代码逻辑）
      */
     flattenConfig(taskConfig) {
-        const { task, schedule, position, riskControl } = taskConfig;
+        const { task, schedule, position, riskControl, extra } = taskConfig;
+
+        // 解析 extra 字段（JSON 字符串）
+        let extraConfig = {};
+        if (extra && typeof extra === 'string' && extra.trim()) {
+            try {
+                extraConfig = JSON.parse(extra);
+            } catch (error) {
+                logger.warn(`[扫尾盘策略] 解析 extra 配置失败: ${error.message}, 使用默认值`);
+            }
+        }
 
         return {
             // 任务基础
@@ -100,6 +110,10 @@ class TailConvergenceStrategy {
             highVolatilityZThreshold: riskControl.statistics.highVolatilityZThreshold,
             liquiditySufficientThreshold: riskControl.liquidity.sufficientThreshold,
             spikeProtectionCount: riskControl.spikeProtection.count,
+
+            // 从 extra 字段提取的风险检查参数
+            weightedThreshold: extraConfig.weightedThreshold,
+            pricePositionThreshold: extraConfig.pricePositionThreshold,
         };
     }
 
@@ -122,6 +136,8 @@ class TailConvergenceStrategy {
          * - highVolatilityZThreshold：判断高波动的 Z-Score 阈值 (默认 3)。
          * - spikeProtectionCount：防止插针的持续性检查计数器阈值 (默认 2)。
          * - liquiditySufficientThreshold：流动性充足的阈值 (默认 2000)。
+         * - weightedThreshold：方向稳定性检查的加权平均价格阈值 (默认 0.75)。
+         * - pricePositionThreshold：价格位置检查的阈值 (默认 0.2)。
          */
         const {
             positionSizeUsdc,
@@ -141,6 +157,8 @@ class TailConvergenceStrategy {
             highVolatilityZThreshold = 3,
             spikeProtectionCount = 2,
             liquiditySufficientThreshold = 2000,
+            weightedThreshold,
+            pricePositionThreshold,
         } = config;
 
         Object.assign(this, {
@@ -160,6 +178,8 @@ class TailConvergenceStrategy {
             highVolatilityZThreshold,
             spikeProtectionCount,
             liquiditySufficientThreshold,
+            weightedThreshold,
+            pricePositionThreshold,
         });
 
         this.httpTimeout = 10000;
@@ -267,12 +287,17 @@ class TailConvergenceStrategy {
         this.currentLoopHour = dayjs().hour();
         logger.info(`[扫尾盘策略] 启动小时循环(${source}),当前小时=${this.currentLoopHour}`);
         // 更新taskConfig
+        // 检查client是否可用
+        if (!this.client) {
+            logger.error(`[扫尾盘策略] client不可用、无法更新任务配置、结束小时循环`);
+            return;
+        }
         await this.updateTaskConfig();
         this.runTickLoop();
     }
 
     async updateTaskConfig() {
-        const taskConfigs = convergenceTaskConfigs;
+        const taskConfigs = await loadConvergenceTaskConfigs({ refresh: true });
         const taskConfig = taskConfigs.find((config) => config.task.slug === this.slugTemplate);
         if (!taskConfig) {
             logger.error(`[扫尾盘策略] 未找到任务配置: ${this.slugTemplate}`);
@@ -527,19 +552,27 @@ class TailConvergenceStrategy {
 
         // 增加风控检查
         // 方向稳定性、价格位置、价格趋势检查
+        let weiAvgPriceThreshold = this.weightedThreshold;
+        // 如果是57分之后的流动性信号、则降低加权平均价格阈值、提高通过率
+        if(isLiquiditySignal) {
+            // 函数内部有对最后三分钟加权、这里仅针对流动性信号、降低加权平均价格阈值、提高通过率、
+            weiAvgPriceThreshold = weiAvgPriceThreshold - 0.02;
+        }
         const directionStabilityCheck = await checkDirectionStability({
             client: this.client,
             tokenId: candidate.tokenId,
+            weightedThreshold: weiAvgPriceThreshold,
         });
         logArr.push(`[${this.symbol}-${this.currentLoopHour}时] 方向稳定性检查-${directionStabilityCheck.reason}`);
         if (!directionStabilityCheck.allowed) {
             return null;
         }
 
-
         const priceCheck = await checkPricePositionAndTrend({
             symbol: this.symbol,
             outcome: candidate.outcome,
+            // 暂不做流动性信号的额外加权处理
+            pricePositionThreshold: this.pricePositionThreshold,
         });
         logArr.push(`[${this.symbol}-${this.currentLoopHour}时] 价格位置和趋势检查-${priceCheck.reason}`);
         if (!priceCheck.allowed) {
@@ -565,6 +598,8 @@ class TailConvergenceStrategy {
             zVal,
             secondsToEnd,
             amp,
+            // 加权平均价格 后续、额外买入时、更高通过门槛、用于风控检查
+            avgWeiPrice: directionStabilityCheck.avgWeiPrice,
             logArr,
         };
     }
@@ -604,15 +639,12 @@ class TailConvergenceStrategy {
 
         // 方向稳定性、价格位置、价格趋势检查
         // 风控已前置、暂时注释、后续在进行严格化
-        // const directionStabilityCheck = await checkDirectionStability({
-        //     client: this.client,
-        //     tokenId: signal.chosen.tokenId,
-        // });
-        // if (!directionStabilityCheck.allowed) {
-        //     logger.info(`[${this.symbol}-${this.currentLoopHour}时] ${directionStabilityCheck.reason}`);
-        //     return directionStabilityCheck;
-        // }
-
+        // 额外买入、对加权平均价格要求更高、需要检查加权平均价格是否大于信号的加权平均价格、
+        // 默认是0.75、额外买入的话 要求高于阈值的1.1倍
+        const weiAvgPriceThreshold = Number((this.weightedThreshold * 1.1).toFixed(4));
+        if (signal.avgWeiPrice && signal.avgWeiPrice < weiAvgPriceThreshold) {
+            return { allowed: false, reason: `加权平均价格${signal.weiAvgPrice}小于阈值${weiAvgPriceThreshold}，不进行额外买入` };
+        }
 
         // const priceCheck = await checkPricePositionAndTrend({
         //     symbol: this.symbol,
@@ -737,7 +769,8 @@ class TailConvergenceStrategy {
                 if (!this.client) {
                     logArr.push(`[${this.symbol}-${this.currentLoopHour}时] 切换到下一个PolyClient实例失败，结束进程`);
                     // 只需要结束当前任务、不需要结束整个进程
-                    process.exit(1);
+                    this.stopHourlyLoop();
+                    return;
                 }
                 this.pkIdx = this.pkIdx + 1;
                 this.tpManager.client = this.client;
@@ -786,6 +819,7 @@ class TailConvergenceStrategy {
             secondsToEnd: signal.secondsToEnd,
             priceChange: signal.amp,
             isLiquiditySignal: signal.liquiditySignal,
+            avgWeiPrice: signal.avgWeiPrice,
         }).catch((err) => {
             logger.error(`[${this.symbol}-${this.currentLoopHour}时] 建仓订单保存失败: ${err?.message ?? err}`);
         });

@@ -39,6 +39,7 @@ model Order {
   secondsToEnd      Int?     // 下单时距离结束/开始的秒数
   priceChange       Float?   // 距离开盘价的涨跌幅
   isLiquiditySignal Boolean? @default(false)
+  avgWeiPrice       Float?   //平均加权价格
 
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt

@@ -34,6 +34,7 @@ export async function saveOrder(orderData) {
                 secondsToEnd: orderData.secondsToEnd ? parseInt(orderData.secondsToEnd) : null,
                 priceChange: orderData.priceChange ? parseFloat(orderData.priceChange) : null,
                 isLiquiditySignal: orderData.isLiquiditySignal || false,
+                avgWeiPrice: orderData.avgWeiPrice ? parseFloat(orderData.avgWeiPrice) : null,
             },
         });
         return formatOrderForAPI(order);

@@ -344,6 +344,10 @@ class TailConvergenceStrategy {
         // 如果信号存在、则处理信号
         if (signal) {
             await this.handleSignal(signal);
+            // 统一在 handleSignal 执行完毕后输出日志
+            if (signal.logArr && signal.logArr.length > 0) {
+                logger.info('\n\t'+signal.logArr.join("\n\t"));
+            }
         }
     }
 
@@ -375,14 +379,19 @@ class TailConvergenceStrategy {
 
         const [yesBid, yesAsk] = await this.cache.getBestPrice(yesTokenId);
         const [noBid, noAsk] = await this.cache.getBestPrice(noTokenId);
-        if (yesAsk === 0 || noAsk === 0) {
-            // todo 流动性为0、可以尝试直接挂99单、
-            logger.info(
-                `[${this.symbol}-${this.currentLoopHour}时] yesAsk=${yesAsk} noAsk=${noAsk} 卖方流动性为0, 结束信号`,
-            );
+        const topPrice = Math.max(yesAsk, noAsk);
+        if (topPrice < 0.5) {
+            // todo top流动性为空、进入流动性争夺阶段
+            // 每10秒输出一次日志
+            if(!this.lastLogTime  || dayjs().unix() - this.lastLogTime > 10) {
+                logger.info(
+                    `[${this.symbol}-${this.currentLoopHour}时] topPrice=${topPrice}、流动性可能为空、进入流动性抢夺阶段`,
+                );
+                this.lastLogTime = dayjs().unix();
+                this.tickIntervalMs = 100;
+            }
             return null;
         }
-        const topPrice = Math.max(yesAsk, noAsk);
         const topTokenId = yesAsk >= noAsk ? yesTokenId : noTokenId;
 
         /**
@@ -446,6 +455,10 @@ class TailConvergenceStrategy {
         // 基于卖方流动性更新下次tick 时间间隔
         this.tickIntervalMs = delay(asksLiq, this.liquiditySufficientThreshold);
 
+        // 日志记录 日志输出
+        let logArr = [];
+        logArr.push(`[${this.symbol}-${this.currentLoopHour}时]卖方流动性=${asksLiq} 下次tick间隔=${this.tickIntervalMs}ms yesAsk=${yesAsk},noAsk=${noAsk} zVal=${zVal}`);
+
         // 检查卖方流动性是否充足
         const isLiquiditySufficient = asksLiq >= this.liquiditySufficientThreshold;
         // 流动性信号标记
@@ -453,22 +466,16 @@ class TailConvergenceStrategy {
         if (isLiquiditySufficient) {
             // 流动性充足、校验Z-Score是否达标
             if (zVal < this.zMin) {
-                // if (topPrice > 0.9) {
-                //     logger.info(
-                //         `[${this.symbol}-${this.currentLoopHour}时] 常规信号-zVal不达标、asksLiq=${asksLiq}、zVal=${zVal} < ${this.zMin}`,
-                //     );
-                // }
+                if (topPrice > 0.9) {
+                    logArr.push(`[${this.symbol}-${this.currentLoopHour}时] 常规信号-zVal不达标、asksLiq=${asksLiq}、zVal=${zVal} < ${this.zMin}`);
+                }
                 return null;
             }
             // Z-Score达标、继续执行 (isLiquiditySignal 保持 false，走正常风控)
-            logger.info(
-                `[${this.symbol}-${this.currentLoopHour}时] 常规信号-zVal达标、asksLiq=${asksLiq}、zVal=${zVal} >= ${this.zMin}`,
-            );
+            logArr.push(`[${this.symbol}-${this.currentLoopHour}时] 常规信号-zVal达标、asksLiq=${asksLiq}、zVal=${zVal} >= ${this.zMin}`);
         } else {
             // 流动性不足、触发流动性信号
-            logger.info(
-                `[${this.symbol}-${this.currentLoopHour}时] 流动性信号触发、Z-Score:${zVal}, 卖方流动性:${asksLiq}, 剩余时间:${secondsToEnd}s 继续执行`,
-            );
+            logArr.push(`[${this.symbol}-${this.currentLoopHour}时] 流动性信号触发、Z-Score:${zVal}, 卖方流动性:${asksLiq}, 剩余时间:${secondsToEnd}s 价格:${topPrice} 继续执行`);
             // 触发流动性信号、设置流动性信号标记
             isLiquiditySignal = true;
         }
@@ -477,31 +484,23 @@ class TailConvergenceStrategy {
         const priceThreshold = threshold(secondsToEnd, 0.1, 0.95, 0.03);
         // 价格不能超出 triggerPriceGt (0.99) 和 priceThreshold 的范围
         if (topPrice > this.triggerPriceGt || topPrice < priceThreshold) {
-            // if (topPrice > 0.9) {
-            //     logger.info(
-            //         `[${this.symbol}-${this.currentLoopHour}时] 入场价格检查失败-topPrice=${topPrice} not in range [${priceThreshold}, ${this.triggerPriceGt}]`,
-            //     );
-            // }
+            if (topPrice > 0.9) {
+                logArr.push(`[${this.symbol}-${this.currentLoopHour}时] 入场价格检查失败-topPrice=${topPrice} not in range [${priceThreshold}, ${this.triggerPriceGt}]`);
+            }
             return null;
         }
-        logger.info(
-            `[${this.symbol}-${this.currentLoopHour}时] 入场价格检查通过-topPrice=${topPrice} in range [${priceThreshold}, ${this.triggerPriceGt}]`,
-        );
+        logArr.push(`[${this.symbol}-${this.currentLoopHour}时] 入场价格检查通过-topPrice=${topPrice} in range [${priceThreshold}, ${this.triggerPriceGt}]`);
 
         // UpDown事件：波动率检查
         // 常规信号、检查波动率是否大于 ampMin、流动性信号则跳过
         const amp = await get1HourAmp(this.symbol);
         if (!isLiquiditySignal && amp < this.ampMin) {
-            logger.info(
-                `[${this.symbol}-${this.currentLoopHour}时] 常规信号-波动率不达标、amp=${amp.toFixed(4)} < ${this.ampMin}`,
-            );
+            logArr.push(`[${this.symbol}-${this.currentLoopHour}时] 常规信号-波动率不达标、amp=${amp.toFixed(4)} < ${this.ampMin}`);
             return null;
         }
         if (isLiquiditySignal && zVal < 1) {
             // 即使流动性信号、zVal小于0.5、也继续等待
-            logger.info(
-                `[${this.symbol}-${this.currentLoopHour}时] 流动性信号-zVal不达标、amp=${amp.toFixed(4)} < ${this.ampMin}、zVal=${zVal} < 1`,
-            );
+            logArr.push(`[${this.symbol}-${this.currentLoopHour}时] 流动性信号-zVal不达标、amp=${amp.toFixed(4)} < ${this.ampMin}、zVal=${zVal} < 1`);
             return null;
         }
         // 如果top方向的askPrice - bidPrice > 0.02、则设置挂单价格为 top方向的askPrice+bidPrice/2、向上取整、保留2位小数
@@ -532,8 +531,8 @@ class TailConvergenceStrategy {
             client: this.client,
             tokenId: candidate.tokenId,
         });
+        logArr.push(`[${this.symbol}-${this.currentLoopHour}时] 方向稳定性检查-${directionStabilityCheck.reason}`);
         if (!directionStabilityCheck.allowed) {
-            logger.info(`[${this.symbol}-${this.currentLoopHour}时] ${directionStabilityCheck.reason}`);
             return null;
         }
 
@@ -542,8 +541,8 @@ class TailConvergenceStrategy {
             symbol: this.symbol,
             outcome: candidate.outcome,
         });
+        logArr.push(`[${this.symbol}-${this.currentLoopHour}时] 价格位置和趋势检查-${priceCheck.reason}`);
         if (!priceCheck.allowed) {
-            logger.info(`[${this.symbol}-${this.currentLoopHour}时] ${priceCheck.reason}`);
             return null;
         }
 
@@ -552,9 +551,7 @@ class TailConvergenceStrategy {
             candidate.outcome === "UP" ? candidate.price !== yesAsk : candidate.price !== noAsk;
         const orderType = isMaker ? "MAKER" : "TAKER";
 
-        logger.info(
-            `[${this.symbol}-${this.currentLoopHour}时] 选择=${candidate.outcome.toUpperCase()}@${candidate.price} [${orderType}] ${isLiquiditySignal ? "流动性信号触发" : "常规信号触发"}`,
-        );
+        logArr.push(`[${this.symbol}-${this.currentLoopHour}时] 选择=${candidate.outcome.toUpperCase()}@${candidate.price} [${orderType}] ${isLiquiditySignal ? "流动性信号触发" : "常规信号触发"}`);
 
         // 返回交易信号
         return {
@@ -568,6 +565,7 @@ class TailConvergenceStrategy {
             zVal,
             secondsToEnd,
             amp,
+            logArr,
         };
     }
 
@@ -593,7 +591,6 @@ class TailConvergenceStrategy {
         // 只要流动性尚且充沛或者价格未抵达最高触发价格、就不进行额外买入
         const chosenAsksLiq = await this.cache.getAsksLiq(signal.chosen.tokenId);
         if (chosenAsksLiq < 1) {
-            logger.error(`[${this.symbol}-${this.currentLoopHour}时] 卖方流动性为0,结束信号`);
             return { allowed: false, reason: "卖方流动性为0,结束信号" };
         }
         if (price < this.triggerPriceGt || chosenAsksLiq > this.liquiditySufficientThreshold) {
@@ -628,19 +625,14 @@ class TailConvergenceStrategy {
 
         // 3. 流动性信号：直接通过所有检查
         if (signal.liquiditySignal) {
-            logger.info(
-                `[${this.symbol}-${this.currentLoopHour}时] 流动性信号触发，跳过常规风控检查`,
-            );
-            return { allowed: true, reason: "流动性信号触发" };
+            return { allowed: true, reason: "流动性信号触发,跳过常规风控检查" };
         }
 
-        logger.info(
-            `[${this.symbol}-${this.currentLoopHour}时] 风控检查通过: 价格${price}>=0.99 或流动性已经不足(chosenAsksLiq=${chosenAsksLiq} <= ${this.liquiditySufficientThreshold})`,
-        );
+        signal.logArr.push(`[${this.symbol}-${this.currentLoopHour}时] 风控检查通过: 价格${price}>=0.99 或流动性已经不足(chosenAsksLiq=${chosenAsksLiq} <= ${this.liquiditySufficientThreshold})`);
 
         return {
             allowed: true,
-            reason: `价格>=0.99 或流动性已经不足(chosenAsksLiq=${chosenAsksLiq} <= ${this.liquiditySufficientThreshold})  风控通过`,
+            reason: `价格>=0.99 或流动性已经不足(chosenAsksLiq=${chosenAsksLiq} <= ${this.liquiditySufficientThreshold})  风控检查通过`,
         };
     }
 
@@ -649,6 +641,7 @@ class TailConvergenceStrategy {
      * @param {Object} signal
      */
     async handleSignal(signal) {
+        let logArr = signal.logArr;
         // 二次检查价格、如果最新价格 小于信号价格、直接返回
         const [yesBid, yesAsk] = await this.cache.getBestPrice(signal.chosen.tokenId);
         if (yesAsk < signal.chosen.price) {
@@ -656,9 +649,7 @@ class TailConvergenceStrategy {
             // 如果是尾部反转、则可避免风险
             // 如果价格相等、则无影响
             // 如果价格大于信号价格、则可能错过机会、需要修改为最新价格
-            logger.info(
-                `[${this.symbol}-${this.currentLoopHour}时] 最新价格${yesAsk}小于信号价格${signal.chosen.price}，直接返回`,
-            );
+            logArr.push(`[${this.symbol}-${this.currentLoopHour}时] 最新价格${yesAsk}小于信号价格${signal.chosen.price}，直接返回`);
             return;
         }
         signal.chosen.price = yesAsk;
@@ -683,18 +674,14 @@ class TailConvergenceStrategy {
         // 已建仓、执行额外买入逻辑
         const extraEntryCheck = await this.checkExtraEntry(signal);
         if (!extraEntryCheck.allowed) {
-            logger.info(
-                `[${this.symbol}-${this.currentLoopHour}时] 额外买入:${signal.chosen.outcome.toUpperCase()}@${signal.chosen.price} ${extraEntryCheck.reason}，结束处理`,
-            );
+            logArr.push(`[${this.symbol}-${this.currentLoopHour}时] 额外买入:${signal.chosen.outcome.toUpperCase()}@${signal.chosen.price} ${extraEntryCheck.reason}，结束处理`);
             return;
         }
 
         // 额外买入金额
         const sizeUsd = this.extraSizeUsdc;
         // 执行额外买入
-        logger.info(
-            `[${this.symbol}-${this.currentLoopHour}时] 额外买入 --> ${signal.chosen.outcome.toUpperCase()}@${signal.chosen.price} ${sizeUsd}USDC`,
-        );
+        logArr.push(`[${this.symbol}-${this.currentLoopHour}时] 额外买入 --> ${signal.chosen.outcome.toUpperCase()}@${signal.chosen.price} ${sizeUsd}USDC`);
         // 必须等待额外买入完成、再进行下一轮tick
         await this.openPosition({
             tokenId: signal.chosen.tokenId,
@@ -716,22 +703,18 @@ class TailConvergenceStrategy {
      * @returns
      */
     async openPosition({ tokenId, price, sizeUsd, signal, isExtra }) {
+        let logArr = signal.logArr;
         const sizeShares = Math.floor(sizeUsd / price);
-        logger.info(
-            `[${this.symbol}-${this.currentLoopHour}时] 建仓 ->
-                方向->${signal.chosen.outcome.toUpperCase()}
-                price->${price}
-                数量->${sizeShares}
-                sizeUsd->${sizeUsd}
-                tokenId->${tokenId}`,
-        );
+        logArr.push(`[${this.symbol}-${this.currentLoopHour}时] 建仓 ->
+            方向->${signal.chosen.outcome.toUpperCase()}
+            price->${price}
+            数量->${sizeShares}
+            sizeUsd->${sizeUsd}
+            tokenId->${tokenId}`);
         const entryOrder = await this.client
             .placeOrder(price, sizeShares, PolySide.BUY, tokenId)
             .catch((err) => {
-                logger.error(
-                    `[${this.symbol}-${this.currentLoopHour}时] 建仓订单失败`,
-                    err?.message ?? err,
-                );
+                logArr.push(`[${this.symbol}-${this.currentLoopHour}时] 建仓订单失败: ${err?.message ?? err}`);
                 return null;
             });
         if (!entryOrder?.success) {
@@ -741,24 +724,19 @@ class TailConvergenceStrategy {
                     ? entryOrder.error
                     : entryOrder.error?.message || "";
             if (errorMsg.includes("not enough balance / allowance")) {
-                logger.error(
-                    `[${this.symbol}-${this.currentLoopHour}时] 建仓被拒绝: not enough balance / allowance`,
-                );
+                logArr.push(`[${this.symbol}-${this.currentLoopHour}时] 建仓被拒绝: not enough balance / allowance`);
                 // 暂停任务
                 this.stopHourlyLoop();
                 return;
             }
             // 建仓被拒绝:address in closed only mode
             if (errorMsg.includes("address in closed only mode")) {
-                logger.error(
-                    `[${this.symbol}-${this.currentLoopHour}时] 建仓被拒绝: address in closed only mode`,
-                );
+                logArr.push(`[${this.symbol}-${this.currentLoopHour}时] 建仓被拒绝: address in closed only mode`);
                 // 切换到下一个PolyClient实例
                 this.client = await nextClient(this.pkIdx, this.client);
                 if (!this.client) {
-                    logger.error(
-                        `[${this.symbol}-${this.currentLoopHour}时] 切换到下一个PolyClient实例失败，结束进程`,
-                    );
+                    logArr.push(`[${this.symbol}-${this.currentLoopHour}时] 切换到下一个PolyClient实例失败，结束进程`);
+                    // 只需要结束当前任务、不需要结束整个进程
                     process.exit(1);
                 }
                 this.pkIdx = this.pkIdx + 1;
@@ -768,13 +746,11 @@ class TailConvergenceStrategy {
                 await this.openPosition({ tokenId, price, sizeUsd, signal, isExtra });
                 return;
             }
-            logger.info(
-                `[${this.symbol}-${this.currentLoopHour}时] 建仓被拒绝:${entryOrder.error}`,
-            );
+            logArr.push(`[${this.symbol}-${this.currentLoopHour}时] 建仓被拒绝:${entryOrder.error}`);
             return null;
         }
         const orderId = entryOrder.orderID;
-        logger.info(`[${this.symbol}-${this.currentLoopHour}时] ✅ 建仓成功,订单号=${orderId}`);
+        logArr.push(`[${this.symbol}-${this.currentLoopHour}时] ✅ 建仓成功,订单号=${orderId}`);
 
         // 建仓后进入止盈队列、由止盈cron在事件结束后处理
         const takeProfitOrder = {
@@ -810,7 +786,10 @@ class TailConvergenceStrategy {
             secondsToEnd: signal.secondsToEnd,
             priceChange: signal.amp,
             isLiquiditySignal: signal.liquiditySignal,
-        }).catch((err) => logger.error("Failed to save entry order to DB", err));
+        }).catch((err) => {
+            logger.error(`[${this.symbol}-${this.currentLoopHour}时] 建仓订单保存失败: ${err?.message ?? err}`);
+        });
+
     }
 }
 

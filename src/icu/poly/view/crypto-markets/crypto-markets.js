@@ -64,7 +64,7 @@ const PRICE_FIELD_KEYS = new Set([
     "noSpread",
     "topPrice",
 ]);
-const TOP_PRICE_THRESHOLD = 0.99;
+const TOP_PRICE_THRESHOLD = 0.998;
 const TAG_OPTIONS = [
     { id: 21, label: "Crypto" },
     { id: 235, label: "Bitcoin" },
@@ -681,6 +681,22 @@ function setTokenBestBid(tokenId, price, version) {
     if (!tokenId || version !== orderBookVersion) return;
     const normalized = Number.isFinite(price) ? price : null;
     tokenBestBidCache.set(tokenId, normalized);
+    if (orderTokenGroup) {
+        const radios = Array.from(
+            orderTokenGroup.querySelectorAll("input[name='orderTokenChoice']"),
+        );
+        const radio = radios.find((input) => input.value === tokenId);
+        if (radio) {
+            if (Number.isFinite(normalized)) {
+                radio.dataset.bestBid = String(normalized);
+            } else {
+                delete radio.dataset.bestBid;
+            }
+            if (radio.checked) {
+                updateOrderBestAskDisplay({ writeToInput: true });
+            }
+        }
+    }
 }
 
 function extractBestAskFromOrderBook(payload) {
@@ -2118,11 +2134,12 @@ function getTokenOptions(item) {
     return tokens.map((tokenId, idx) => {
         const fallbackBestAsk = getBestAskFromItem(item, idx);
         const fallbackOutcomePrice = extractOutcomePrice(item, idx);
+        const fallbackBestBid = getBestBidFromItem(item, idx);
         return {
             tokenId,
             label: outcomes && outcomes[idx] ? outcomes[idx] : idx === 0 ? "YES" : "NO",
             bestAsk: resolveBestAskForToken(tokenId, fallbackBestAsk ?? fallbackOutcomePrice),
-            bestBid: getBestBidFromItem(item, idx),
+            bestBid: resolveBestBidForToken(tokenId, fallbackBestBid),
         };
     });
 }
@@ -2131,6 +2148,15 @@ function updateOrderTokenOptions(item) {
     if (!orderTokenGroup) return;
     const options = getTokenOptions(item);
     orderTokenGroup.innerHTML = "";
+
+    // 找到高概率侧的token（bestAsk更高的那个）
+    let highProbabilityIdx = 0;
+    if (options.length >= 2) {
+        const ask0 = Number.isFinite(options[0]?.bestAsk) ? options[0].bestAsk : 0;
+        const ask1 = Number.isFinite(options[1]?.bestAsk) ? options[1].bestAsk : 0;
+        highProbabilityIdx = ask1 > ask0 ? 1 : 0;
+    }
+
     options.forEach((opt, idx) => {
         const wrapper = document.createElement("label");
         wrapper.className = "order-token-option";
@@ -2141,8 +2167,12 @@ function updateOrderTokenOptions(item) {
         if (opt.bestAsk !== null && opt.bestAsk !== undefined) {
             radio.dataset.bestAsk = String(opt.bestAsk);
         }
+        if (opt.bestBid !== null && opt.bestBid !== undefined) {
+            radio.dataset.bestBid = String(opt.bestBid);
+        }
         radio.dataset.label = opt.label;
-        if (idx === 1 || (idx === 0 && options.length === 1)) {
+        // 默认选择高概率侧的token
+        if (idx === highProbabilityIdx) {
             radio.checked = true;
         }
         radio.addEventListener("change", () => updateOrderBestAskDisplay({ writeToInput: true }));
@@ -2177,10 +2207,16 @@ function updateOrderBestAskDisplay({ writeToInput = false } = {}) {
         return;
     }
     const bestAsk = Number(selected.dataset.bestAsk);
-    const display = Number.isFinite(bestAsk) ? formatBestAsk(bestAsk) : "—";
+    const bestBid = Number(selected.dataset.bestBid);
+
+    // 如果最优卖价为0或无效，则使用最优买价
+    const priceToUse = Number.isFinite(bestAsk) && bestAsk > 0 ? bestAsk :
+                       (Number.isFinite(bestBid) && bestBid > 0 ? bestBid : null);
+
+    const display = Number.isFinite(priceToUse) ? formatBestAsk(priceToUse) : "—";
     if (orderBestAskEl) orderBestAskEl.textContent = display;
     if (writeToInput && orderBuyPriceInput) {
-        orderBuyPriceInput.value = Number.isFinite(bestAsk) ? formatPriceInput(bestAsk) : "";
+        orderBuyPriceInput.value = Number.isFinite(priceToUse) ? formatPriceInput(priceToUse) : "";
     }
 }
 
@@ -2461,12 +2497,12 @@ if (orderForm) {
             setOrderStatus("请选择客户端", true);
             return;
         }
-        const bestAskAttr = tokenInput?.dataset?.bestAsk;
-        const currentBestAsk = Number(bestAskAttr);
-        if (Number.isFinite(currentBestAsk) && price > currentBestAsk) {
-            setOrderStatus(`买单价格需≤当前最优卖价 ${formatBestAsk(currentBestAsk)}`, true);
-            return;
-        }
+        // const bestAskAttr = tokenInput?.dataset?.bestAsk;
+        // const currentBestAsk = Number(bestAskAttr);
+        // if (Number.isFinite(currentBestAsk) && price > currentBestAsk) {
+        //     setOrderStatus(`买单价格需≤当前最优卖价 ${formatBestAsk(currentBestAsk)}`, true);
+        //     return;
+        // }
 
         const finalize = (success = false) => {
             orderSubmitBtn.disabled = false;

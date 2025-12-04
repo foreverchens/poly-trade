@@ -61,7 +61,7 @@ export async function checkDirectionStability({
         const currentMinute = dayjs().minute();
         if (currentMinute >= 57) {
             // 最后三分钟、额外增加权重、直接增加价格
-            weightedAveragePrice = weightedAveragePrice + (currentMinute - 56);
+            weightedAveragePrice = weightedAveragePrice + ((currentMinute - 56) * 2)/100;
         }
 
 

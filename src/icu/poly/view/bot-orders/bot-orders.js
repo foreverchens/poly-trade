@@ -78,30 +78,75 @@ async function deleteOrder(id) {
     }
 }
 
+// Store current order data for profit calculation
+let currentOrderData = null;
+
+function calculateProfit() {
+    if (!currentOrderData) return;
+
+    const entryPrice = parseFloat(currentOrderData.entryPrice) || 0;
+    const profitPrice = parseFloat(document.getElementById("editProfitPrice").value) || 0;
+    const size = parseFloat(currentOrderData.size) || 0;
+
+    let profit = "";
+    if (profitPrice > 0 && entryPrice > 0 && size > 0) {
+        profit = ((profitPrice - entryPrice) * size).toFixed(2);
+    }
+
+    document.getElementById("editProfit").value = profit || "-";
+}
+
 function openEditModal(index) {
     const order = window.ordersData[index];
+    currentOrderData = order; // Store order data for profit calculation
+
     document.getElementById("editId").value = order.id;
-    document.getElementById("editPrice").value = order.entryPrice;
-    document.getElementById("editSize").value = order.size;
-    document.getElementById("editOutcome").value = order.outcome;
+    document.getElementById("editStatus").value = order.status || "pending";
+    document.getElementById("editProfitPrice").value = order.profitPrice || "";
+    document.getElementById("editProfitOrderId").value = order.profitOrderId || "";
+
+    // Calculate and display profit
+    calculateProfit();
+
     document.getElementById("editModal").style.display = "block";
 }
 
+// Add event listener for auto-calculation when page loads
+(function setupProfitCalculation() {
+    const profitPriceInput = document.getElementById("editProfitPrice");
+
+    if (profitPriceInput) {
+        profitPriceInput.addEventListener("input", calculateProfit);
+    }
+})();
+
 function closeModal() {
     document.getElementById("editModal").style.display = "none";
+    currentOrderData = null; // Clear stored order data when closing
 }
 
 async function saveOrder() {
     const id = document.getElementById("editId").value;
-    const entryPrice = document.getElementById("editPrice").value;
-    const size = document.getElementById("editSize").value;
-    const outcome = document.getElementById("editOutcome").value;
+    const status = document.getElementById("editStatus").value;
+    const profitPrice = document.getElementById("editProfitPrice").value;
+    const profitOrderId = document.getElementById("editProfitOrderId").value.trim();
+
+    const updateData = {};
+    if (status) updateData.status = status;
+    if (profitPrice) updateData.profit_price = profitPrice;
+    // If profitOrderId is empty string, set to null; otherwise use the value
+    if (profitOrderId === "") {
+        updateData.profit_order_id = null;
+    } else if (profitOrderId) {
+        updateData.profit_order_id = profitOrderId;
+    }
+    // If profit_price is provided, backend will auto-calculate profit
 
     try {
         const res = await fetch(`/api/bot-orders/${id}`, {
             method: "PUT",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ entry_price: entryPrice, size, outcome }),
+            body: JSON.stringify(updateData),
         });
         const data = await res.json();
 
@@ -109,6 +154,7 @@ async function saveOrder() {
             alert("Failed to update: " + data.message);
         } else {
             closeModal();
+            currentOrderData = null; // Clear stored order data
             fetchOrders();
         }
     } catch (err) {

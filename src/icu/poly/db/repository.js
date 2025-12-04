@@ -97,6 +97,15 @@ export async function deleteOrder(id) {
  */
 export async function updateOrder(id, data) {
     try {
+        // First, get the current order to use existing values for profit calculation
+        const currentOrder = await prisma.order.findUnique({
+            where: { id: parseInt(id) },
+        });
+
+        if (!currentOrder) {
+            throw new Error('Order not found');
+        }
+
         const updateData = {};
         // Only allow updating specific fields to avoid accidental overwrites
         if (data.entry_price !== undefined) {
@@ -106,8 +115,37 @@ export async function updateOrder(id, data) {
         if (data.symbol !== undefined) updateData.symbol = data.symbol;
         if (data.outcome !== undefined) updateData.outcome = data.outcome;
         if (data.matched !== undefined) updateData.matched = parseFloat(data.matched);
-        if (data.profit !== undefined) updateData.profit = parseFloat(data.profit);
         if (data.status !== undefined) updateData.status = data.status;
+        if (data.profit_price !== undefined) {
+            updateData.profit_price = parseFloat(data.profit_price);
+        }
+        if (data.profit_order_id !== undefined) {
+            updateData.profit_order_id = data.profit_order_id || null;
+        }
+
+        // Auto-calculate profit if profit_price is provided and size is available
+        // profit = (profit_price - entry_price) * size
+        if (updateData.profit_price !== undefined) {
+            // Use updated values if provided, otherwise use current values from DB
+            const profitPrice = updateData.profit_price;
+            const entryPrice = updateData.entry_price !== undefined
+                ? updateData.entry_price
+                : currentOrder.entry_price;
+            const size = updateData.size !== undefined
+                ? updateData.size
+                : currentOrder.size;
+
+            if (profitPrice !== null && profitPrice !== undefined &&
+                entryPrice !== null && entryPrice !== undefined &&
+                size !== null && size !== undefined) {
+                updateData.profit = (profitPrice - entryPrice) * size;
+            }
+        }
+
+        // If profit is explicitly provided, use it (overrides auto-calculation)
+        if (data.profit !== undefined) {
+            updateData.profit = parseFloat(data.profit);
+        }
 
         const order = await prisma.order.update({
             where: { id: parseInt(id) },

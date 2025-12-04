@@ -10,7 +10,7 @@ import logger from "../../core/Logger.js";
 import convergenceTaskConfigs from "../../data/convergence-up.config.js";
 import { getZ } from "../../core/z-score.js";
 import { PolySide } from "../../core/PolyClient.js";
-import { checkDirectionStability, checkPricePositionAndTrend } from "./up-risk.js";
+import { checkDirectionStability, checkPricePositionAndTrend } from "./up-bot-risk.js";
 // 基于流动性计算下次tick 时间间隔
 const delay = (liq, t = 100) => {
     const m = liq / t;
@@ -528,21 +528,20 @@ class TailConvergenceStrategy {
         const directionStabilityCheck = await checkDirectionStability({
             client: this.client,
             tokenId: candidate.tokenId,
-            symbol: this.symbol,
-            currentLoopHour: this.currentLoopHour,
         });
+        logger.info(`[${this.symbol}-${this.currentLoopHour}时] ${directionStabilityCheck.reason}`);
         if (!directionStabilityCheck.allowed) {
-            logger.info(directionStabilityCheck.reason);
             return null;
         }
+
 
         const priceCheck = await checkPricePositionAndTrend({
             symbol: this.symbol,
             outcome: candidate.outcome,
             currentLoopHour: this.currentLoopHour,
         });
+        logger.info(`[${this.symbol}-${this.currentLoopHour}时] ${priceCheck.reason}`);
         if (!priceCheck.allowed) {
-            logger.info(priceCheck.reason);
             return null;
         }
 
@@ -608,12 +607,12 @@ class TailConvergenceStrategy {
         const directionStabilityCheck = await checkDirectionStability({
             client: this.client,
             tokenId: signal.chosen.tokenId,
-            symbol: this.symbol,
-            currentLoopHour: this.currentLoopHour,
         });
         if (!directionStabilityCheck.allowed) {
+            logger.info(`[${this.symbol}-${this.currentLoopHour}时] ${directionStabilityCheck.reason}`);
             return directionStabilityCheck;
         }
+
 
         const priceCheck = await checkPricePositionAndTrend({
             symbol: this.symbol,

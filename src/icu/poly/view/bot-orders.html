@@ -7,11 +7,14 @@
         <link rel="stylesheet" href="/bot-orders/bot-orders.css" />
     </head>
     <body>
-        <button class="refresh-btn" onclick="fetchOrders()">Refresh</button>
-        <h1>Bot Orders</h1>
-        <div id="loading" class="loading">Loading...</div>
+        <div class="wrap">
+            <div class="header-bar">
+                <h1>Bot Orders</h1>
+                <button class="refresh-btn" onclick="fetchOrders()">Refresh</button>
+            </div>
+            <div id="loading" class="loading">Loading...</div>
 
-        <table id="ordersTable" style="display: none">
+            <table id="ordersTable" style="display: none">
             <thead>
                 <tr>
                     <th>time</th>
@@ -33,7 +36,8 @@
                 </tr>
             </thead>
             <tbody id="ordersBody"> </tbody>
-        </table>
+            </table>
+        </div>
 
         <!-- Edit Modal -->
         <div id="editModal" class="modal">
@@ -42,16 +46,24 @@
                 <h2>Edit Order</h2>
                 <input type="hidden" id="editId" />
                 <div class="form-group">
-                    <label>Price</label>
-                    <input type="number" id="editPrice" step="0.001" />
+                    <label>Status</label>
+                    <select id="editStatus">
+                        <option value="pending">pending</option>
+                        <option value="take_profit">take_profit</option>
+                        <option value="cancelled">cancelled</option>
+                    </select>
                 </div>
                 <div class="form-group">
-                    <label>Size</label>
-                    <input type="number" id="editSize" step="1" />
+                    <label>Profit Price (止盈价格)</label>
+                    <input type="number" id="editProfitPrice" step="0.001" placeholder="例如: 0.999" />
                 </div>
                 <div class="form-group">
-                    <label>Outcome</label>
-                    <input type="text" id="editOutcome" />
+                    <label>Profit Order ID (止盈订单ID)</label>
+                    <input type="text" id="editProfitOrderId" placeholder="止盈订单ID" />
+                </div>
+                <div class="form-group">
+                    <label>Calculated Profit (自动计算)</label>
+                    <input type="text" id="editProfit" readonly style="background: rgba(255,255,255,0.1);" />
                 </div>
                 <button class="save-btn" onclick="saveOrder()">Save</button>
             </div>

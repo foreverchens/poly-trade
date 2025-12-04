@@ -3,52 +3,68 @@ import { listLimitKlines } from "./common.js";
 import logger from "../../core/Logger.js";
 
 /**
- * 检查方向稳定性（基于价格历史）
+ * 检查方向稳定性（基于价格历史，使用加权平均价格）
+ * 使用非线性权重：价格越接近0或1，权重调整越大（使用平方函数）
+ * 权重范围：[0.9, 1.1]，价格>0.5时权重更高，价格<0.5时权重更低
+ * 市场价格已包含时间因素，因此不添加时间权重
  * @param {Object} params
  * @param {Object} params.client - PolyClient实例
  * @param {string} params.tokenId - Token ID
- * @param {string} params.symbol - 交易对符号
- * @param {number} params.currentLoopHour - 当前循环小时
- * @param {number} params.priceThreshold - 价格阈值，默认0.5
- * @param {number} params.upPriceRatioThreshold - 上涨价格占比阈值，默认0.7
+ * @param {number} params.lookbackMinutes - 回看时间（分钟），默认30
+ * @param {number} params.weightedThreshold - 加权平均价格阈值，默认0.75
  * @returns {Promise<{allowed: boolean, reason: string}>}
  */
 export async function checkDirectionStability({
     client,
     tokenId,
-    symbol,
-    currentLoopHour,
-    priceThreshold = 0.5,
-    upPriceRatioThreshold = 0.7,
+    lookbackMinutes = 30,
+    weightedThreshold = 0.75,
 }) {
     try {
-        // 检查过去30分钟价格p>priceThreshold的次数占比是否高于upPriceRatioThreshold、如果不在、则不进行额外买入
         const priceHistory = await client.getPricesHistory(tokenId);
-        const recentPriceHistory = priceHistory.history.filter(
-            (price) => price.t > (Date.now() - 30 * 60 * 1000) / 1000,
-        );
+        const now = Date.now() / 1000;
+        const cutoffTime = now - lookbackMinutes * 60;
+        // 过滤掉时间小于cutoffTime的价格
+        const recentPriceHistory = priceHistory.history.filter((price) => price.t > cutoffTime);
         if (recentPriceHistory.length === 0) {
-            return { allowed: false, reason: "最近30分钟价格数据为空，无法进行价格趋势判断" };
-        }
-        const upPriceCount = recentPriceHistory.filter((price) => price.p > priceThreshold).length;
-        const totalCount = recentPriceHistory.length;
-        const upPriceRatio = upPriceCount / totalCount;
-        if (upPriceRatio < upPriceRatioThreshold) {
             return {
                 allowed: false,
-                reason: `风控-方向稳定性检查不通过、最近30分钟价格p>${priceThreshold}的次数占比(${(upPriceRatio * 100).toFixed(1)}%)小于${(upPriceRatioThreshold * 100).toFixed(0)}%，方向不明确，不进行额外买入`,
+                reason: `风控-方向稳定性检查不通过、最近${lookbackMinutes}分钟价格数据为空，无法进行价格趋势判断`,
             };
         }
-        logger.info(
-            `[${symbol}-${currentLoopHour}时] 风控-方向稳定性检查通过: 最近30分钟价格p>${priceThreshold}的次数占比=${(upPriceRatio * 100).toFixed(1)}%、可以进行额外买入、upPriceRatio=${upPriceRatio.toFixed(4)}`,
-        );
-        return { allowed: true, reason: "方向稳定性检查通过" };
+
+        // 计算加权价格数组：每个价格乘以对应权重
+        const weightedPrices = recentPriceHistory.map((price) => {
+            // 计算距离0.5的距离
+            const distance = Math.abs(price.p - 0.5);
+            const direction = price.p > 0.5 ? 1 : -1;
+
+            // 归一化距离到[0, 1]并平方，让极端价格的影响更大
+            const normalizedDistance = distance / 0.5;
+            const squaredDistance = normalizedDistance * normalizedDistance;
+
+            // 权重调整：基础1.0 ± 0.1 * squaredDistance
+            // 价格>0.5时：权重在[1.0, 1.1]范围，价格<0.5时：权重在[0.9, 1.0]范围
+            const weight = 1.0 + direction * 0.1 * squaredDistance;
+
+            return price.p * weight;
+        });
+        // 计算加权平均价格
+        const weightedAveragePrice =
+            weightedPrices.reduce((sum, wp) => sum + wp, 0) / recentPriceHistory.length;
+        // 判断是否通过
+        if (weightedAveragePrice < weightedThreshold) {
+            return {
+                allowed: false,
+                reason: `风控-方向稳定性检查不通过、加权平均价格(${weightedAveragePrice.toFixed(4)})小于阈值(${weightedThreshold})，方向不明确，不进行额外买入`,
+            };
+        }
+        return {
+            allowed: true,
+            reason: `风控-方向稳定性检查通过、加权平均价格=${weightedAveragePrice.toFixed(4)}、大于阈值${weightedThreshold}、可以进行额外买入`,
+        };
     } catch (error) {
-        logger.error(
-            `[${symbol}-${currentLoopHour}时] 风控-方向稳定性检查失败`,
-            error?.message ?? error,
-        );
-        return { allowed: false, reason: "风控-方向稳定性检查失败" };
+        return { allowed: false, reason: `风控-方向稳定性检查失败: ${error?.message ?? error}` };
     }
 }
 
@@ -86,7 +102,10 @@ export async function checkPricePositionAndTrend({
         const openP = limitKlines[0][1];
         if (curP > openP) {
             // 上涨
-            const highP = limitKlines.reduce((max, kline) => Math.max(max, kline[2]), limitKlines[0][2]);
+            const highP = limitKlines.reduce(
+                (max, kline) => Math.max(max, kline[2]),
+                limitKlines[0][2],
+            );
             const pricePosition = (curP - openP) / (highP - openP);
             if (pricePosition < pricePositionThreshold) {
                 const msg = `风控-价格位置检查不通过、
@@ -104,7 +123,10 @@ export async function checkPricePositionAndTrend({
             );
         } else {
             // 下跌
-            const lowP = limitKlines.reduce((min, kline) => Math.min(min, kline[3]), limitKlines[0][3]);
+            const lowP = limitKlines.reduce(
+                (min, kline) => Math.min(min, kline[3]),
+                limitKlines[0][3],
+            );
             const pricePosition = (openP - curP) / (openP - lowP);
             if (pricePosition < pricePositionThreshold) {
                 const msg = `风控-价格位置检查不通过、
@@ -124,8 +146,14 @@ export async function checkPricePositionAndTrend({
         // 价格趋势检查、检查1min背离强度
         // 获取最近3根k线的最高价和最低价、计算价差、如果价差大于当前价和开盘价的差值、则不进行额外买入
         const recentKlines = limitKlines.slice(-3);
-        const highP = recentKlines.reduce((max, kline) => Math.max(max, kline[2]), recentKlines[0][2]);
-        const lowP = recentKlines.reduce((min, kline) => Math.min(min, kline[3]), recentKlines[0][3]);
+        const highP = recentKlines.reduce(
+            (max, kline) => Math.max(max, kline[2]),
+            recentKlines[0][2],
+        );
+        const lowP = recentKlines.reduce(
+            (min, kline) => Math.min(min, kline[3]),
+            recentKlines[0][3],
+        );
         const priceDiff = highP - lowP;
         const openDiff = openP - curP;
         // 检查最近3分钟趋势是否与信号方向背离，且波动幅度可能带来反转风险
@@ -171,4 +199,3 @@ export async function checkPricePositionAndTrend({
         return { allowed: false, reason: "风控-价格趋势检查失败" };
     }
 }
-

@@ -1001,21 +1001,31 @@ function renderBalanceChart() {
         return;
     }
 
-    // 按地址分组数据
-    const dataByAddress = new Map();
+    // 按业务地址组分组数据（每100个pkIdx为一个业务地址）
+    // 当同一小时内同一组有多个pkIdx时，选择最大pkIdx的余额
+    const dataByGroup = new Map(); // groupId -> { maxPkIdx, address, points: [{time, balance, pkIdx}] }
     balanceChartState.data.forEach((log) => {
-        const key = `${log.pk_idx}_${log.address}`;
-        if (!dataByAddress.has(key)) {
-            dataByAddress.set(key, {
-                pkIdx: log.pk_idx,
+        const groupId = Math.floor(log.pk_idx / 100);
+
+        if (!dataByGroup.has(groupId)) {
+            dataByGroup.set(groupId, {
+                groupId,
+                maxPkIdx: log.pk_idx,
                 address: log.address,
                 points: [],
             });
         }
-        const entry = dataByAddress.get(key);
+        const entry = dataByGroup.get(groupId);
+        // 更新最大pkIdx和对应的地址
+        if (log.pk_idx > entry.maxPkIdx) {
+            entry.maxPkIdx = log.pk_idx;
+            entry.address = log.address;
+        }
+        // 保存所有数据点，包含pkIdx信息
         entry.points.push({
             time: new Date(log.log_time).getTime(),
             balance: log.balance,
+            pkIdx: log.pk_idx,
         });
     });
 
@@ -1028,19 +1038,25 @@ function renderBalanceChart() {
         return date.getTime();
     };
 
-    // 2. 按小时分组所有地址的余额记录
-    const balanceByHour = new Map(); // hourTimestamp -> { addressKey -> balance }
-    dataByAddress.forEach((entry, addressKey) => {
+    // 2. 按小时分组所有业务地址组的余额记录
+    // 对于每个组，如果同一小时内有多条记录（不同pkIdx），选择最大pkIdx的
+    const balanceByHour = new Map(); // hourTimestamp -> { groupId -> { time, balance, pkIdx } }
+    dataByGroup.forEach((entry, groupId) => {
         entry.points.forEach((point) => {
             const hourTime = alignToHour(point.time);
             if (!balanceByHour.has(hourTime)) {
                 balanceByHour.set(hourTime, new Map());
             }
             const hourData = balanceByHour.get(hourTime);
-            // 同一小时内，取最新的余额（如果同一小时有多个记录）
-            const existing = hourData.get(addressKey);
-            if (!existing || point.time > existing.time) {
-                hourData.set(addressKey, { time: point.time, balance: point.balance });
+            const existing = hourData.get(groupId);
+            // 如果同一小时内同一组有多个pkIdx，选择最大pkIdx的
+            if (!existing || point.pkIdx > existing.pkIdx ||
+                (point.pkIdx === existing.pkIdx && point.time > existing.time)) {
+                hourData.set(groupId, {
+                    time: point.time,
+                    balance: point.balance,
+                    pkIdx: point.pkIdx,
+                });
             }
         });
     });
@@ -1060,27 +1076,34 @@ function renderBalanceChart() {
     const series = [];
     let colorIndex = 0;
 
-    // 添加每个地址的曲线（也按小时对齐）
-    dataByAddress.forEach((entry, addressKey) => {
-        // 按小时对齐该地址的点
-        const addressBalanceByHour = new Map(); // hourTimestamp -> { time, balance }
+    // 添加每个业务地址组的曲线（按小时对齐，同一小时内选择最大pkIdx的余额）
+    dataByGroup.forEach((entry) => {
+        // 按小时对齐该组的点，同一小时内选择最大pkIdx的
+        const addressBalanceByHour = new Map(); // hourTimestamp -> { time, balance, pkIdx }
         entry.points.forEach((point) => {
             const hourTime = alignToHour(point.time);
             const existing = addressBalanceByHour.get(hourTime);
-            if (!existing || point.time > existing.time) {
-                addressBalanceByHour.set(hourTime, { time: hourTime, balance: point.balance });
+            // 如果同一小时内有多条记录（不同pkIdx），选择最大pkIdx的
+            if (!existing || point.pkIdx > existing.pkIdx ||
+                (point.pkIdx === existing.pkIdx && point.time > existing.time)) {
+                addressBalanceByHour.set(hourTime, {
+                    time: hourTime,
+                    balance: point.balance,
+                    pkIdx: point.pkIdx,
+                });
             }
         });
 
         // 转换为排序后的点数组
         const alignedPoints = Array.from(addressBalanceByHour.values())
+            .map(({ time, balance }) => ({ time, balance }))
             .sort((a, b) => a.time - b.time);
 
         if (alignedPoints.length > 0) {
             series.push({
                 points: alignedPoints,
                 color: getChartColor(colorIndex++),
-                label: `#${entry.pkIdx} ${entry.address.slice(0, 8)}...`,
+                label: `#${entry.maxPkIdx} ${entry.address.slice(0, 8)}...`,
                 currentValue: alignedPoints[alignedPoints.length - 1].balance,
             });
         }

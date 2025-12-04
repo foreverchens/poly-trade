@@ -386,8 +386,8 @@ export class PolyClient {
     async listCryptoMarketSortedByEndDate(tagId = 21) {
         const url = `${this.marketHost}/markets`;
         const endDateMin = new Date().toISOString();
-        const endDateMax = new Date(new Date().getTime() + 1000 * 60 * 60 * 24 * 2).toISOString();
-        const startDateMax = new Date(new Date().getTime() - 1000 * 60 * 60 * 24).toISOString();
+        const endDateMax = new Date(new Date().getTime() + 1000 * 60 * 60 * 24).toISOString();
+        // const startDateMax = new Date(new Date().getTime() - 1000 * 60 * 60 * 24).toISOString();
         const params = {
             tag_id: tagId,
             closed: false,
@@ -398,7 +398,7 @@ export class PolyClient {
             ascending: true,
             end_date_min: endDateMin,
             end_date_max: endDateMax,
-            start_date_max: startDateMax,
+            // start_date_max: startDateMax,
             limit: 200,
         };
         // 仅发送有值的查询参数，避免污染默认查询
@@ -415,6 +415,10 @@ export class PolyClient {
         });
         let dataArr = response?.data;
         dataArr = dataArr.filter((ele) => {
+            // 过滤掉15min和4h级别的数据
+            if(ele.slug.includes('15m') || ele.slug.includes('4h')) {
+                return false;
+            }
             return (
                 ele.lastTradePrice >= 0.01 &&
                 ele.lastTradePrice <= 0.99 &&
@@ -422,14 +426,6 @@ export class PolyClient {
                 ele.bestAsk <= 0.99
             );
         });
-        // for (let market of dataArr) {
-        //     const [yesId, noId] = JSON.parse(market.clobTokenIds);
-        //     let yseAsks = (await this.getOrderBook(yesId)).asks;
-        //     let noAsks = (await this.getOrderBook(noId)).asks;
-        //     const bestYesAskPrice = yseAsks.length ? yseAsks[yseAsks.length - 1].price : 0;
-        //     const bestNoAskPrice = noAsks.length ? noAsks[noAsks.length - 1].price : 0;
-        //     market.bestAsks = [bestYesAskPrice, bestNoAskPrice]
-        // }
         return dataArr;
     }
 

@@ -38,7 +38,7 @@ module.exports = {
         // 禁止随便 _xxx 命名（更 Java 风）
         "no-underscore-dangle": "error",
 
-        // ===== 换行风格（尽量接近 Java 的“规整感”） =====
+        // ===== 换行风格（尽量接近 Java 的"规整感"） =====
 
         // 对象：多行时属性对齐
         "object-curly-newline": [
@@ -80,3 +80,4 @@ module.exports = {
         semi: ["error", "always"]
     }
 };
+

@@ -31,7 +31,7 @@ export class TakeProfitManager {
         }
 
         // Cron表达式：每小时0-20分钟，每3分钟执行一次 (0-20/3 * * * *)
-        const takeProfitCronExpression = "0-20/3 * * * *";
+        const takeProfitCronExpression = "0-20/2 * * * *";
         logger.info(
             `[扫尾盘策略] 止盈任务已启动，Cron表达式=${takeProfitCronExpression} (时区: ${this.cronTimeZone})`,
         );
@@ -96,7 +96,7 @@ export class TakeProfitManager {
                 const originalSize = Number(order.original_size) || 0;
 
                 logger.info(
-                    `[止盈] ${orderKey} 成交情况: ${order.side.toUpperCase()}@${matchedSize}/${originalSize}`,
+                    `[止盈] ${orderKey} 成交情况: ${order.outcome.toUpperCase()}@${matchedSize}/${originalSize}`,
                 );
 
                 if (matchedSize === 0 || matchedSize < originalSize) {

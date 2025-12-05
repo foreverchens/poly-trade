@@ -28,7 +28,7 @@ const shorten = (text = "", head = 6, tail = 4) => {
     return text.length <= head + tail ? text : `${text.slice(0, head)}…${text.slice(-tail)}`;
 };
 const POLY_EVENT_BASE_URL = "https://polymarket.com/event/";
-const MIN_CURRENT_VALUE = 0.1;
+const MIN_CURRENT_VALUE = 1;
 let cachedPositions = []; // 保存已加载的原始持仓数据
 const accountMetaByAddress = new Map();
 let selectedAccountAddresses = new Set();
@@ -365,7 +365,12 @@ async function renderPositions(rows, { accountMetaMap = accountMetaByAddress } =
         // 注意：盈亏计算已在 nonSmallRows 中完成，这里只用于显示单行数据
 
         const tr = document.createElement("tr");
-        const rowId = `row-${tokenId || Math.random().toString(36).slice(2, 9)}`;
+        // 在 rowId 中包含地址信息，确保不同地址的同一资产有唯一标识
+        // 使用地址的前8个字符（去掉0x前缀）作为后缀
+        const addressSuffix = accountAddress
+            ? `-${accountAddress.replace(/^0x/i, "").slice(0, 8)}`
+            : "";
+        const rowId = `row-${tokenId || Math.random().toString(36).slice(2, 9)}${addressSuffix}`;
         tr.id = rowId;
 
         tr.innerHTML = `

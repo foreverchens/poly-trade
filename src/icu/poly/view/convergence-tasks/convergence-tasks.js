@@ -1358,6 +1358,43 @@ function buildCombinedBalanceChart(series) {
         maxY += adjust;
     }
 
+    // 计算整数刻度
+    function calculateIntegerTicks(min, max) {
+        const range = max - min;
+        if (range <= 0) {
+            return { ticks: [Math.round(min)], minTick: Math.round(min), maxTick: Math.round(max), interval: 1 };
+        }
+        // 计算合适的刻度间隔（100, 200, 500, 1000等）
+        const magnitude = Math.pow(10, Math.floor(Math.log10(range)));
+        let interval = magnitude;
+        if (range / magnitude > 5) {
+            interval = magnitude * 2;
+        }
+        if (range / magnitude > 10) {
+            interval = magnitude * 5;
+        }
+        if (range / magnitude > 20) {
+            interval = magnitude * 10;
+        }
+
+        // 计算起始和结束的整数刻度
+        const startTick = Math.floor(min / interval) * interval;
+        const endTick = Math.ceil(max / interval) * interval;
+
+        // 生成整数刻度数组
+        const ticks = [];
+        for (let tick = startTick; tick <= endTick; tick += interval) {
+            ticks.push(tick);
+        }
+
+        return { ticks, minTick: startTick, maxTick: endTick, interval };
+    }
+
+    const { ticks, minTick, maxTick } = calculateIntegerTicks(minY, maxY);
+    // 使用整数刻度范围更新 minY 和 maxY
+    minY = minTick;
+    maxY = maxTick;
+
     const chartWidth = width - padding.left - padding.right;
     const chartHeight = height - padding.top - padding.bottom;
 
@@ -1371,10 +1408,10 @@ function buildCombinedBalanceChart(series) {
         return padding.top + chartHeight - ((value - minY) / (maxY - minY)) * chartHeight;
     };
 
-    // 绘制网格线
-    for (let i = 0; i <= 4; i++) {
+    // 绘制网格线（基于整数刻度）
+    ticks.forEach((tick) => {
         const line = document.createElementNS(SVG_NS, "line");
-        const y = padding.top + (chartHeight / 4) * i;
+        const y = scaleY(tick);
         line.setAttribute("x1", padding.left);
         line.setAttribute("x2", padding.left + chartWidth);
         line.setAttribute("y1", y);
@@ -1382,12 +1419,11 @@ function buildCombinedBalanceChart(series) {
         line.setAttribute("stroke", "rgba(255,255,255,0.05)");
         line.setAttribute("stroke-width", "1");
         svg.appendChild(line);
-    }
+    });
 
-    // 绘制 Y 轴刻度（右侧）
-    for (let i = 0; i <= 4; i++) {
-        const value = minY + ((maxY - minY) / 4) * i;
-        const y = scaleY(value);
+    // 绘制 Y 轴刻度（右侧）- 只显示整数刻度
+    ticks.forEach((tick) => {
+        const y = scaleY(tick);
         const label = document.createElementNS(SVG_NS, "text");
         label.setAttribute("x", width - padding.right + 10);
         label.setAttribute("y", y + 5);
@@ -1395,16 +1431,45 @@ function buildCombinedBalanceChart(series) {
         label.setAttribute("fill", "rgba(255,255,255,0.6)");
         label.setAttribute("font-size", "12");
         label.setAttribute("font-family", "system-ui, -apple-system, sans-serif");
-        label.textContent = value.toFixed(2);
+        label.textContent = Math.round(tick);
         svg.appendChild(label);
+    });
+
+    // 绘制 X 轴刻度（时间）- 最小间隔1天，最多显示7个刻度
+    function getDateTicks(startTime, endTime) {
+        const startDate = new Date(startTime);
+        const endDate = new Date(endTime);
+
+        // 获取起始日期的0点
+        const firstMidnight = new Date(startDate);
+        firstMidnight.setHours(0, 0, 0, 0);
+
+        // 如果起始时间不是0点，从下一天的0点开始
+        let currentMidnight = new Date(firstMidnight);
+        if (startTime > firstMidnight.getTime()) {
+            currentMidnight.setDate(currentMidnight.getDate() + 1);
+        }
+
+        // 计算总天数
+        const totalDays = Math.ceil((endTime - currentMidnight.getTime()) / (24 * 60 * 60 * 1000)) + 1;
+
+        // 计算间隔天数（最多7个刻度）
+        let dayInterval = 1;
+        if (totalDays > 7) {
+            dayInterval = Math.ceil(totalDays / 7);
+        }
+
+        // 生成时间戳数组
+        const timestamps = [];
+        while (currentMidnight.getTime() <= endTime) {
+            timestamps.push(currentMidnight.getTime());
+            currentMidnight.setDate(currentMidnight.getDate() + dayInterval);
+        }
+
+        return timestamps;
     }
 
-    // 绘制 X 轴刻度（时间）
-    const timeLabels = [];
-    for (let i = 0; i <= 4; i++) {
-        const time = minX + ((maxX - minX) / 4) * i;
-        timeLabels.push(time);
-    }
+    const timeLabels = getDateTicks(minX, maxX);
     timeLabels.forEach((time) => {
         const x = scaleX(time);
         const date = new Date(time);
@@ -1415,7 +1480,7 @@ function buildCombinedBalanceChart(series) {
         label.setAttribute("fill", "rgba(255,255,255,0.6)");
         label.setAttribute("font-size", "11");
         label.setAttribute("font-family", "system-ui, -apple-system, sans-serif");
-        label.textContent = `${date.getMonth() + 1}/${date.getDate()} ${date.getHours()}:${String(date.getMinutes()).padStart(2, "0")}`;
+        label.textContent = `${date.getMonth() + 1}/${date.getDate()}`;
         svg.appendChild(label);
     });
 
@@ -1473,19 +1538,46 @@ function buildCombinedBalanceChart(series) {
         // 移除虚线样式，改为实线
         svg.appendChild(path);
 
+        // 绘制最高点数值
+        if (s.points.length > 0) {
+            // 找到最高点
+            const maxPoint = s.points.reduce((max, point) =>
+                point.balance > max.balance ? point : max
+            );
+
+            const maxX = scaleX(maxPoint.time);
+            const maxY = scaleY(maxPoint.balance);
+
+            // 显示在顶点正上方
+            const labelX = maxX;
+            const labelY = maxY - 15;
+
+            // 创建文本标签
+            const label = document.createElementNS(SVG_NS, "text");
+            label.setAttribute("x", labelX);
+            label.setAttribute("y", labelY);
+            label.setAttribute("text-anchor", "middle");
+            label.setAttribute("fill", "#00c2ff");
+            label.setAttribute("font-size", "12");
+            label.setAttribute("font-weight", "600");
+            label.setAttribute("font-family", "system-ui, -apple-system, sans-serif");
+            label.textContent = Math.round(maxPoint.balance);
+            svg.appendChild(label);
+        }
+
         // 绘制数据点标记
-        s.points.forEach((point) => {
-            const circle = document.createElementNS(SVG_NS, "circle");
-            const x = scaleX(point.time);
-            const y = scaleY(point.balance);
-            circle.setAttribute("cx", x.toFixed(2));
-            circle.setAttribute("cy", y.toFixed(2));
-            circle.setAttribute("r", s.isTotal ? "4" : "3");
-            circle.setAttribute("fill", s.color);
-            circle.setAttribute("stroke", "#000");
-            circle.setAttribute("stroke-width", "1");
-            svg.appendChild(circle);
-        });
+        // s.points.forEach((point) => {
+        //     const circle = document.createElementNS(SVG_NS, "circle");
+        //     const x = scaleX(point.time);
+        //     const y = scaleY(point.balance);
+        //     circle.setAttribute("cx", x.toFixed(2));
+        //     circle.setAttribute("cy", y.toFixed(2));
+        //     circle.setAttribute("r", s.isTotal ? "4" : "3");
+        //     circle.setAttribute("fill", s.color);
+        //     circle.setAttribute("stroke", "#000");
+        //     circle.setAttribute("stroke-width", "1");
+        //     svg.appendChild(circle);
+        // });
     });
 
     return svg;

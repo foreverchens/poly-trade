@@ -50,7 +50,7 @@ export async function fetchMarkets(slug, maxMinutesToEnd, shouldFilterTime = tru
     const event = await getPolyClient().getEventBySlug(slug);
     if (!event) {
         logger.info(`[${slug}] 事件获取失败`);
-        return [];
+        return [];``
     }
     const markets = event.markets || [];
     if (!markets.length) {

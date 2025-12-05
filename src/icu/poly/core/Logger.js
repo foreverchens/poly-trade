@@ -20,6 +20,52 @@ const dateStr = (d = new Date()) => `${d.getFullYear()}${pad(d.getMonth() + 1)}$
 const nowISO = () => new Date().toISOString().replace("T", " ").replace("Z", "");
 const TODAY = () => dateStr(new Date()); // 用于初始化与换日检测
 
+// === 清理旧日志文件（保留最近3天） ===
+function cleanOldLogs() {
+    try {
+        const files = fs.readdirSync(LOG_DIR);
+        const today = new Date();
+        const threeDaysAgo = new Date(today);
+        threeDaysAgo.setDate(today.getDate() - 3);
+        threeDaysAgo.setHours(0, 0, 0, 0); // 设置为当天的开始时间
+
+        // 解析日期字符串 YYYYMMDD 为 Date 对象
+        function parseDateStr(dateStr) {
+            const year = parseInt(dateStr.substring(0, 4), 10);
+            const month = parseInt(dateStr.substring(4, 6), 10) - 1; // 月份从0开始
+            const day = parseInt(dateStr.substring(6, 8), 10);
+            return new Date(year, month, day);
+        }
+
+        let deletedCount = 0;
+        for (const file of files) {
+            // 匹配格式：YYYYMMDD-error.log 或 YYYYMMDD-info.log
+            const match = file.match(/^(\d{8})-(error|info)\.log$/);
+            if (!match) continue;
+
+            const fileDateStr = match[1];
+            const fileDate = parseDateStr(fileDateStr);
+
+            // 如果文件日期早于3天前，删除它
+            if (fileDate < threeDaysAgo) {
+                const filePath = path.join(LOG_DIR, file);
+                try {
+                    fs.unlinkSync(filePath);
+                    deletedCount++;
+                } catch (err) {
+                    console.error(`[Logger] 删除旧日志文件失败: ${file}`, err.message);
+                }
+            }
+        }
+
+        if (deletedCount > 0) {
+            console.log(`[Logger] 已清理 ${deletedCount} 个超过3天的旧日志文件`);
+        }
+    } catch (err) {
+        console.error("[Logger] 清理旧日志文件时出错:", err.message);
+    }
+}
+
 function normalizePath(p) {
     if (!p) return "";
     return p.replace(/^file:\/\//, "").replace(/\\/g, "/");
@@ -112,7 +158,7 @@ function configure(dateYmd) {
 // === 初始化 ===
 let currentDate = TODAY();
 configure(currentDate);
-const base = log4js.getLogger(' '); // 基础 logger（不直接暴露）
+const base = log4js.getLogger('-'); // 基础 logger（不直接暴露）
 
 // 2) 在调用点拼装“Java风格”的消息体： file:line [func] - message
 function wrapWithCaller(level) {
@@ -152,9 +198,14 @@ setInterval(() => {
             configure(currentDate);
             // 记录一次换日
             logger.info("log rotated to new day");
+            // 换日时清理旧日志
+            cleanOldLogs();
         });
     }
 }, 30 * 1000);
+
+// === 启动时清理一次旧日志 ===
+cleanOldLogs();
 
 // === 捕获未处理异常 ===
 process.on("uncaughtException", (err) => {

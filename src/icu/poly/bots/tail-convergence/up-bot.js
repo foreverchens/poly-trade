@@ -405,7 +405,9 @@ class TailConvergenceStrategy {
         const [yesBid, yesAsk] = await this.cache.getBestPrice(yesTokenId);
         const [noBid, noAsk] = await this.cache.getBestPrice(noTokenId);
         const topPrice = Math.max(yesAsk, noAsk);
-        if (topPrice < 0.5) {
+        if (topPrice < 0.5 || topPrice > 0.99) {
+            // 缺乏卖方流动性时、topPrice会选择低概率侧价格 导致小于0.5、
+            // 极度确定性事件时、高概率侧会突破tickSize、产生大于0.99的价格、不进场
             // todo top流动性为空、进入流动性争夺阶段
             // 每10秒输出一次日志
             if(!this.lastLogTime  || dayjs().unix() - this.lastLogTime > 10) {
@@ -439,7 +441,7 @@ class TailConvergenceStrategy {
             // 指定分钟之前、价格未触发、zVal小于高波动阈值、继续等待
             if (isBeforeMonitorThreshold && isPriceNotTriggered && isZValBelowHighVolatility) {
                 // 非高波动场合、价格未触发、继续等待
-                if (topPrice > 0.9) {
+                if (topPrice > 0.95) {
                     logger.info(
                         `[${this.symbol}-${this.currentLoopHour}时] yesAsk=${yesAsk} noAsk=${noAsk} zVal=${zVal} pending... `,
                     );
@@ -491,8 +493,9 @@ class TailConvergenceStrategy {
         if (isLiquiditySufficient) {
             // 流动性充足、校验Z-Score是否达标
             if (zVal < this.zMin) {
-                if (topPrice > 0.9) {
+                if (topPrice > 0.97 && zVal > this.zMin * 0.8) {
                     logArr.push(`[${this.symbol}-${this.currentLoopHour}时] 常规信号-zVal不达标、asksLiq=${asksLiq}、zVal=${zVal} < ${this.zMin}`);
+                    logger.info('\n\t'+logArr.join("\n\t"));
                 }
                 return null;
             }
@@ -509,8 +512,9 @@ class TailConvergenceStrategy {
         const priceThreshold = threshold(secondsToEnd, 0.1, 0.95, 0.03);
         // 价格不能超出 triggerPriceGt (0.99) 和 priceThreshold 的范围
         if (topPrice > this.triggerPriceGt || topPrice < priceThreshold) {
-            if (topPrice > 0.9) {
+            if (topPrice > 0.97) {
                 logArr.push(`[${this.symbol}-${this.currentLoopHour}时] 入场价格检查失败-topPrice=${topPrice} not in range [${priceThreshold}, ${this.triggerPriceGt}]`);
+                logger.info('\n\t'+logArr.join("\n\t"));
             }
             return null;
         }
@@ -521,11 +525,13 @@ class TailConvergenceStrategy {
         const amp = await get1HourAmp(this.symbol);
         if (!isLiquiditySignal && amp < this.ampMin) {
             logArr.push(`[${this.symbol}-${this.currentLoopHour}时] 常规信号-波动率不达标、amp=${amp.toFixed(4)} < ${this.ampMin}`);
+            logger.info(logArr.join("\n\t"));
             return null;
         }
         if (isLiquiditySignal && zVal < 1) {
             // 即使流动性信号、zVal小于0.5、也继续等待
             logArr.push(`[${this.symbol}-${this.currentLoopHour}时] 流动性信号-zVal不达标、amp=${amp.toFixed(4)} < ${this.ampMin}、zVal=${zVal} < 1`);
+            logger.info(logArr.join("\n\t"));
             return null;
         }
         // 如果top方向的askPrice - bidPrice > 0.02、则设置挂单价格为 top方向的askPrice+bidPrice/2、向上取整、保留2位小数
@@ -552,19 +558,35 @@ class TailConvergenceStrategy {
 
         // 增加风控检查
         // 方向稳定性、价格位置、价格趋势检查
-        let weiAvgPriceThreshold = this.weightedThreshold;
-        // 如果是57分之后的流动性信号、则降低加权平均价格阈值、提高通过率
-        if(isLiquiditySignal) {
-            // 函数内部有对最后三分钟加权、这里仅针对流动性信号、降低加权平均价格阈值、提高通过率、
-            weiAvgPriceThreshold = weiAvgPriceThreshold - 0.02;
-        }
-        const directionStabilityCheck = await checkDirectionStability({
+        let avgWeiPrice = await checkDirectionStability({
             client: this.client,
             tokenId: candidate.tokenId,
-            weightedThreshold: weiAvgPriceThreshold,
+            secondsToEnd: secondsToEnd,
         });
-        logArr.push(`[${this.symbol}-${this.currentLoopHour}时] 方向稳定性检查-${directionStabilityCheck.reason}`);
-        if (!directionStabilityCheck.allowed) {
+        logArr.push(`[${this.symbol}-${this.currentLoopHour}时] 方向稳定性检查-avgWeiPrice=${avgWeiPrice}`);
+        if (avgWeiPrice === 0) {
+            logger.info('\n\t'+logArr.join("\n\t"));
+            return null;
+        }
+            // 基于剩余时间进行非线性加权
+        // 最后3分钟（180秒）时加权系数为0.03，最后1分钟（60秒）时加权系数为0.1
+        // 60秒之后保持0.1不再增加
+        if (secondsToEnd > 0 && secondsToEnd < 180) {
+            const minWeight = 0.03;
+            const maxWeight = 0.1;
+            const x = (180 - secondsToEnd) / 120;
+            // 最后60秒时、加权系数为0.1、其他时间、使用平方函数非线性增长
+            const timeWeight =
+                secondsToEnd <= 60 ? maxWeight : minWeight + x * x * (maxWeight - minWeight);
+            avgWeiPrice = avgWeiPrice + timeWeight;
+        }
+        // 针对流动性信号进行加权（提高通过率）
+        if(isLiquiditySignal) {
+            avgWeiPrice = avgWeiPrice + 0.05;
+        }
+        if(avgWeiPrice < this.weightedThreshold) {
+            logArr.push(`[${this.symbol}-${this.currentLoopHour}时] 方向稳定性检查不通过-avgWeiPrice=${avgWeiPrice} < ${this.weightedThreshold}`);
+            logger.info('\n\t'+logArr.join("\n\t"));
             return null;
         }
 
@@ -576,6 +598,7 @@ class TailConvergenceStrategy {
         });
         logArr.push(`[${this.symbol}-${this.currentLoopHour}时] 价格位置和趋势检查-${priceCheck.reason}`);
         if (!priceCheck.allowed) {
+            logger.info('\n\t'+logArr.join("\n\t"));
             return null;
         }
 
@@ -599,7 +622,7 @@ class TailConvergenceStrategy {
             secondsToEnd,
             amp,
             // 加权平均价格 后续、额外买入时、更高通过门槛、用于风控检查
-            avgWeiPrice: directionStabilityCheck.avgWeiPrice,
+            avgWeiPrice: avgWeiPrice,
             logArr,
         };
     }
@@ -628,12 +651,14 @@ class TailConvergenceStrategy {
         if (chosenAsksLiq < 1) {
             return { allowed: false, reason: "卖方流动性为0,结束信号" };
         }
-        if (price < this.triggerPriceGt || chosenAsksLiq > this.liquiditySufficientThreshold) {
-            // price < 0.99
+        // 美盘时间 为0.99、其他时间为0.98、美盘时间范围为22:00-05:00
+        const isAmericanTime = dayjs().hour() >= 22 || dayjs().hour() <= 5;
+        const triggerPriceGt = isAmericanTime ? 0.99 : 0.98;
+        if (price < triggerPriceGt || chosenAsksLiq > this.liquiditySufficientThreshold) {
             // 流动性大于阈值、就还能再等等
             return {
                 allowed: false,
-                reason: `价格${price}<0.99 或流动性充足(${chosenAsksLiq}>${this.liquiditySufficientThreshold})，等待更佳时机`,
+                reason: `价格${price}<${triggerPriceGt} 或流动性充足(${chosenAsksLiq}>${this.liquiditySufficientThreshold})，等待更佳时机`,
             };
         }
 
@@ -643,7 +668,7 @@ class TailConvergenceStrategy {
         // 默认是0.75、额外买入的话 要求高于阈值的1.1倍
         const weiAvgPriceThreshold = Number((this.weightedThreshold * 1.1).toFixed(4));
         if (signal.avgWeiPrice && signal.avgWeiPrice < weiAvgPriceThreshold) {
-            return { allowed: false, reason: `加权平均价格${signal.weiAvgPrice}小于阈值${weiAvgPriceThreshold}，不进行额外买入` };
+            return { allowed: false, reason: `加权平均价格${signal.avgWeiPrice}小于阈值${weiAvgPriceThreshold}，不进行额外买入` };
         }
 
         // const priceCheck = await checkPricePositionAndTrend({
@@ -660,7 +685,7 @@ class TailConvergenceStrategy {
             return { allowed: true, reason: "流动性信号触发,跳过常规风控检查" };
         }
 
-        signal.logArr.push(`[${this.symbol}-${this.currentLoopHour}时] 风控检查通过: 价格${price}>=0.99 或流动性已经不足(chosenAsksLiq=${chosenAsksLiq} <= ${this.liquiditySufficientThreshold})`);
+        signal.logArr.push(`[${this.symbol}-${this.currentLoopHour}时] 风控检查通过: 价格${price}>=${triggerPriceGt} 或流动性已经不足(chosenAsksLiq=${chosenAsksLiq} <= ${this.liquiditySufficientThreshold})`);
 
         return {
             allowed: true,
@@ -767,8 +792,8 @@ class TailConvergenceStrategy {
                 // 切换到下一个PolyClient实例
                 this.client = await nextClient(this.pkIdx, this.client);
                 if (!this.client) {
-                    logArr.push(`[${this.symbol}-${this.currentLoopHour}时] 切换到下一个PolyClient实例失败，结束进程`);
-                    // 只需要结束当前任务、不需要结束整个进程
+                    logArr.push(`[${this.symbol}-${this.currentLoopHour}时] 切换到下一个PolyClient实例失败，结束任务`);
+                    logger.info('\n\t'+logArr.join("\n\t"));
                     this.stopHourlyLoop();
                     return;
                 }

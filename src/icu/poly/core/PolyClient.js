@@ -419,12 +419,7 @@ export class PolyClient {
             if(ele.slug.includes('15m') || ele.slug.includes('4h')) {
                 return false;
             }
-            return (
-                ele.lastTradePrice >= 0.01 &&
-                ele.lastTradePrice <= 0.99 &&
-                ele.bestAsk >= 0.01 &&
-                ele.bestAsk <= 0.99
-            );
+            return true;
         });
         return dataArr;
     }
@@ -788,14 +783,14 @@ export class PolyClient {
      * 获取 USDC.e 余额（ERC20 代币）
      * @returns {Promise<string>}
      */
-    async getUsdcEBalance() {
+    async getUsdcEBalance(address = null) {
         const provider = new JsonRpcProvider(DEFAULT_RPC_URL, this.chainId);
         const usdcContract = new ethers.Contract(USDC_E_ADDRESS, ERC20_ABI, provider);
-        const address = this.funderAddress || this.signer.address;
+        const resolvedAddress = address || this.funderAddress || this.signer.address;
 
         try {
             const [balance, decimals] = await Promise.all([
-                usdcContract.balanceOf(address),
+                usdcContract.balanceOf(resolvedAddress),
                 usdcContract.decimals(),
             ]);
 

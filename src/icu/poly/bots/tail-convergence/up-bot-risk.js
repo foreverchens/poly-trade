@@ -5,19 +5,19 @@ import { listLimitKlines } from "./common.js";
  * 检查方向稳定性（基于价格历史，使用加权平均价格）
  * 使用非线性权重：价格越接近0或1，权重调整越大（使用平方函数）
  * 权重范围：[0.9, 1.1]，价格>0.5时权重更高，价格<0.5时权重更低
- * 市场价格已包含时间因素，因此不添加时间权重
+ * 基于剩余时间进行非线性加权：剩余时间越少，加权越大
  * @param {Object} params
  * @param {Object} params.client - PolyClient实例
  * @param {string} params.tokenId - Token ID
+ * @param {number} params.secondsToEnd - 剩余时间（秒）
  * @param {number} params.lookbackMinutes - 回看时间（分钟），默认30
- * @param {number} params.weightedThreshold - 加权平均价格阈值，默认0.75
- * @returns {Promise<{allowed: boolean, reason: string, weiAvgPrice: number}>}
+ * @returns {Promise<number>} 返回加权后的评价价格
  */
 export async function checkDirectionStability({
     client,
     tokenId,
+    secondsToEnd = 0,
     lookbackMinutes = 30,
-    weightedThreshold = 0.75,
 }) {
     try {
         const priceHistory = await client.getPricesHistory(tokenId);
@@ -26,10 +26,7 @@ export async function checkDirectionStability({
         // 过滤掉时间小于cutoffTime的价格
         const recentPriceHistory = priceHistory.history.filter((price) => price.t > cutoffTime);
         if (recentPriceHistory.length === 0) {
-            return {
-                allowed: false,
-                reason: `风控-方向稳定性检查不通过、最近${lookbackMinutes}分钟价格数据为空，无法进行价格趋势判断`,
-            };
+            return 0;
         }
 
         // 计算加权价格数组：每个价格乘以对应权重
@@ -51,34 +48,30 @@ export async function checkDirectionStability({
         // 计算加权平均价格
         let weightedAveragePrice =
             weightedPrices.reduce((sum, wp) => sum + wp, 0) / recentPriceHistory.length;
-        // 获取当前小数、如果是美国时间 22点和4点
+
+        // 获取当前小时、如果是美国时间 22点和4点
         const currentHour = dayjs().hour();
-        if (currentHour === 22 || currentHour === 4) {
+        if (currentHour === 22 || currentHour === 4 || currentHour === 23) {
             // 美股时间 22点和4点、加权平均价格权重调整为0.95、增加通过难度
-            weightedAveragePrice = weightedAveragePrice * 0.95;
-        }
-        // 获取当前剩余分钟数、对最后三分钟 额外增加权重
-        const currentMinute = dayjs().minute();
-        if (currentMinute >= 57) {
-            // 最后三分钟、额外增加权重、直接增加价格
-            weightedAveragePrice = weightedAveragePrice + ((currentMinute - 56) * 2)/100;
+            weightedAveragePrice = weightedAveragePrice - 0.1;
         }
 
+        // // 基于剩余时间进行非线性加权
+        // // 最后3分钟（180秒）时加权系数为0.03，最后1分钟（60秒）时加权系数为0.1
+        // // 60秒之后保持0.1不再增加
+        // if (secondsToEnd > 0 && secondsToEnd < 180) {
+        //     const minWeight = 0.03;
+        //     const maxWeight = 0.1;
+        //     const x = (180 - secondsToEnd) / 120;
+        //     // 最后60秒时、加权系数为0.1、其他时间、使用平方函数非线性增长
+        //     const timeWeight =
+        //         secondsToEnd <= 60 ? maxWeight : minWeight + x * x * (maxWeight - minWeight);
+        //     weightedAveragePrice = weightedAveragePrice + timeWeight;
+        // }
 
-        // 判断是否通过
-        if (weightedAveragePrice < weightedThreshold) {
-            return {
-                allowed: false,
-                reason: `风控-方向稳定性检查不通过、加权平均价格(${weightedAveragePrice.toFixed(4)})小于阈值(${weightedThreshold})，方向不明确，不进行额外买入`,
-            };
-        }
-        return {
-            allowed: true,
-            reason: `风控-方向稳定性检查通过、加权平均价格=${weightedAveragePrice.toFixed(4)}、大于阈值${weightedThreshold}、可以进行额外买入`,
-            avgWeiPrice: Number(weightedAveragePrice.toFixed(4)),
-        };
+        return Number(weightedAveragePrice.toFixed(4));
     } catch (error) {
-        return { allowed: false, reason: `风控-方向稳定性检查失败: ${error?.message ?? error}` };
+        return 0;
     }
 }
 
@@ -96,13 +89,19 @@ export async function checkPricePositionAndTrend({
     pricePositionThreshold = 0.2,
 }) {
     try {
+        const curMinute = dayjs().minute();
+        // 针对pricePositionThreshold 配置、根据剩余分钟的不同、需要不同的值、
+        // 比如还剩余20分钟、要求需要高于0.5的位置、如果只剩余5分钟及以下、则需要高于0.2的位置、
+        // 剩余时间越短、价格位置阈值越高
+        // 实现一个基于剩余分钟数的函数、定义域为 5-20、值域为 0.2-0.5
+
         // 检查价格k线、查询最近10根1min级别k线的价格、如果涨跌趋势整体朝反转方向发展、则不进行额外买入
         // 需要避免的情况、比如
         // 1.上涨1%后、回踩到+0.2%、且仍有向下的趋势、此时可能UP方向概率仍然在90%以上、但实际具备反转可能、不进行额外买入
         // 2.下跌1%后、反弹到-0.2%、且仍有向上的趋势、此时可能DOWN方向概率仍然在90%以上、但实际具备反转可能、不进行额外买入
         //
         // 获取当前小时内所有1min级别k线数据
-        const limitKlines = await listLimitKlines(symbol, dayjs().minute() + 1);
+        const limitKlines = await listLimitKlines(symbol, curMinute + 1);
         if (!limitKlines || limitKlines.length <= 1) {
             return { allowed: false, reason: "无法获取k线数据，跳过价格趋势检查" };
         }
@@ -147,7 +146,7 @@ export async function checkPricePositionAndTrend({
         // 获取当前剩余分钟数、值域位 [1, 3]
         const remainingMinutes = Math.min(3, 60 - dayjs().minute());
         // 对价格差值进行加权、剩余时间越长、价格差值权重越大
-        const priceWightDiff = priceDiff * remainingMinutes / 3;
+        const priceWightDiff = (priceDiff * remainingMinutes) / 3;
 
         if (outcome === "UP") {
             // 信号方向为上涨、最新价格大于开盘价、但是最近3分钟整体方向是下跌、并且下跌预期程度有跌破风险、则不进行额外买入

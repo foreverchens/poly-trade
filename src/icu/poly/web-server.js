@@ -457,12 +457,12 @@ app.get("/api/accounts", async (_req, res) => {
             uniqueIndices.map(async (idx) => {
                 try {
                     const account = getAccount(idx);
-                    const balances = await getBalances(account.address);
+                    const usdcBalance = await polyClient.getUsdcEBalance(account.address);
                     return {
                         pkIdx: idx,
                         address: account.address,
-                        polBalance: balances.pol,
-                        usdcBalance: balances.usdc,
+                        polBalance: 0,
+                        usdcBalance: usdcBalance,
                     };
                 } catch (err) {
                     console.error(`[accounts] Failed to fetch account #${idx}:`, err.message);

@@ -74,15 +74,29 @@ async function addrInitV5(privateKey) {
         // v5 使用 BigNumber 比较：allowance < MaxUint256 / 2
         if (curAllowance.lt(ethers.constants.MaxUint256.div(2))) {
             console.log("发送 USDC approve(MaxUint256) 交易...");
+
+            // 估算 gas limit 并上浮 20%
+            let gasLimit;
+            try {
+                const estimatedGas = await usdc.estimateGas.approve(t.addr, ethers.constants.MaxUint256);
+                gasLimit = estimatedGas.mul(120).div(100); // 上浮 20%
+                console.log(`[Gas Limit] 估算值: ${estimatedGas.toString()}, 使用值(上浮20%): ${gasLimit.toString()}`);
+            } catch (error) {
+                console.warn(`⚠️ Gas 估算失败，使用默认值: ${error.message}`);
+                gasLimit = ethers.BigNumber.from(100000); // 备用默认值
+                console.log(`[Gas Limit] 使用默认值: ${gasLimit.toString()}`);
+            }
+
             // 发送授权，添加 gas 参数
             const tx = await usdc.approve(t.addr, ethers.constants.MaxUint256, {
                 maxFeePerGas: gasPrice.maxFeePerGas,
                 maxPriorityFeePerGas: gasPrice.maxPriorityFeePerGas,
+                gasLimit: gasLimit,
                 type: 2  // EIP-1559 transaction
             });
             console.log(`提交 tx: ${tx.hash}`);
             const rcpt = await tx.wait();
-            console.log(`USDC approve 成功，区块: ${rcpt.blockNumber}`);
+            console.log(`USDC approve 成功，区块: ${rcpt.blockNumber}, Gas 使用: ${rcpt.gasUsed.toString()}`);
         } else {
             console.log("已是大额度授权，跳过 USDC approve。");
         }
@@ -93,15 +107,29 @@ async function addrInitV5(privateKey) {
 
         if (!approved) {
             console.log("发送 setApprovalForAll(true) 交易...");
+
+            // 估算 gas limit 并上浮 20%
+            let gasLimit;
+            try {
+                const estimatedGas = await ctf.estimateGas.setApprovalForAll(t.addr, true);
+                gasLimit = estimatedGas.mul(120).div(100); // 上浮 20%
+                console.log(`[Gas Limit] 估算值: ${estimatedGas.toString()}, 使用值(上浮20%): ${gasLimit.toString()}`);
+            } catch (error) {
+                console.warn(`⚠️ Gas 估算失败，使用默认值: ${error.message}`);
+                gasLimit = ethers.BigNumber.from(50000); // 备用默认值
+                console.log(`[Gas Limit] 使用默认值: ${gasLimit.toString()}`);
+            }
+
             // 添加 gas 参数
             const tx2 = await ctf.setApprovalForAll(t.addr, true, {
                 maxFeePerGas: gasPrice.maxFeePerGas,
                 maxPriorityFeePerGas: gasPrice.maxPriorityFeePerGas,
+                gasLimit: gasLimit,
                 type: 2  // EIP-1559 transaction
             });
             console.log(`提交 tx: ${tx2.hash}`);
             const rcpt2 = await tx2.wait();
-            console.log(`setApprovalForAll 成功，区块: ${rcpt2.blockNumber}`);
+            console.log(`setApprovalForAll 成功，区块: ${rcpt2.blockNumber}, Gas 使用: ${rcpt2.gasUsed.toString()}`);
         } else {
             console.log("已是 ERC1155 批准状态，跳过 setApprovalForAll。");
         }

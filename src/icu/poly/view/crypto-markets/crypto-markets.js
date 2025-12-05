@@ -39,14 +39,11 @@ const fields = [
     { key: "question", label: "问题", className: "col-question" },
     // { key: "outcomes", label: "结果" },
     { key: "endDate", label: "结束时间", className: "col-time" },
+    { key: "topSide", label: "TOP方向" },
     { key: "topPrice", label: "TOP价格" },
-    { key: "yesBestAsk", label: "YES最优卖价" },
-    { key: "yesBestBid", label: "YES最优买价" },
-    { key: "yesSpread", label: "YES价差" },
-    { key: "noBestAsk", label: "NO最优卖价" },
-    { key: "noBestBid", label: "NO最优买价" },
-    { key: "noSpread", label: "NO价差" },
-    { key: "topPrice", label: "TOP价格" },
+    { key: "topBestAsk", label: "TOP最优卖价", dynamic: true },
+    { key: "topBestBid", label: "TOP最优买价", dynamic: true },
+    { key: "topSpread", label: "TOP价差", dynamic: true },
     // { key: "volume", label: "交易量" },
     // { key: "liquidityNum", label: "流动性", compact: true },
 ];
@@ -63,6 +60,9 @@ const PRICE_FIELD_KEYS = new Set([
     "noBestBid",
     "noSpread",
     "topPrice",
+    "topBestAsk",
+    "topBestBid",
+    "topSpread",
 ]);
 const TOP_PRICE_THRESHOLD = 0.998;
 const TAG_OPTIONS = [
@@ -566,16 +566,19 @@ function collectYesTokens(list) {
     const map = new Map();
     list.forEach((item) => {
         const tokens = getTokenIds(item);
-        const yesTokenId = tokens[0];
-        if (!yesTokenId || map.has(yesTokenId)) return;
+        // 根据 topSide 选择对应的 token：0=第一个token，1=第二个token
+        const topSide = typeof item?.topSide === "number" ? item.topSide : 0;
+        const tokenIndex = topSide === 1 ? 1 : 0;
+        const topTokenId = tokens[tokenIndex];
+        if (!topTokenId || map.has(topTokenId)) return;
         const question = typeof item.question === "string" ? item.question.trim() : "";
         const labelSource = getMarketLabelSource(item);
-        const fallbackPrice = extractOutcomePrice(item, 0);
-        map.set(yesTokenId, {
-            tokenId: yesTokenId,
+        const fallbackPrice = extractOutcomePrice(item, tokenIndex);
+        map.set(topTokenId, {
+            tokenId: topTokenId,
             ticker: labelSource,
             question,
-            bestAsk: resolveBestAskForToken(yesTokenId, fallbackPrice),
+            bestAsk: resolveBestAskForToken(topTokenId, fallbackPrice),
         });
     });
     const tokens = [...map.values()];
@@ -604,8 +607,20 @@ function calculateTopPrice(quotes) {
     const normalized = quotes
         .map((value) => (typeof value === "number" ? value : Number(value)))
         .filter((value) => Number.isFinite(value) && value > 0);
-    if (!normalized.length) return null;
-    return Math.max(...normalized);
+    if (!normalized.length) return { topPrice: null, topSide: null };
+    const maxPrice = Math.max(...normalized);
+    // 找到最高价格对应的索引：0=yesAsk, 1=yesBid, 2=noAsk, 3=noBid
+    const maxIndex = quotes.findIndex((q) => {
+        const num = typeof q === "number" ? q : Number(q);
+        return Number.isFinite(num) && num > 0 && num === maxPrice;
+    });
+    // 确定 topSide: 0 或 1 (0=YES侧, 1=NO侧)
+    let topSide = null;
+    if (maxIndex >= 0) {
+        // 0或1表示YES侧，2或3表示NO侧
+        topSide = maxIndex < 2 ? 0 : 1;
+    }
+    return { topPrice: maxPrice, topSide };
 }
 
 function enrichMarketStats(list) {
@@ -619,7 +634,7 @@ function enrichMarketStats(list) {
         const noBid = resolveBestBidForToken(noTokenId);
         const yesSpread = calculateSpread(yesAsk, yesBid);
         const noSpread = calculateSpread(noAsk, noBid);
-        const topPrice = calculateTopPrice([yesAsk, yesBid, noAsk, noBid]);
+        const { topPrice, topSide } = calculateTopPrice([yesAsk, yesBid, noAsk, noBid]);
         return {
             ...item,
             yesBestAsk: yesAsk,
@@ -629,6 +644,7 @@ function enrichMarketStats(list) {
             yesSpread,
             noSpread,
             topPrice,
+            topSide,
         };
     });
 }
@@ -899,7 +915,7 @@ function renderChartTokenList() {
     if (!chartTokens.length) {
         const empty = document.createElement("div");
         empty.className = "chart-token-empty";
-        empty.textContent = "暂无 YES token";
+        empty.textContent = "暂无 TOP token";
         chartTokenList.appendChild(empty);
         return;
     }
@@ -984,9 +1000,9 @@ function renderChartFromCache({ failureCount = 0, btcFailed = false } = {}) {
     const { datasets, totalCount, selectedCount } = buildDatasetsFromCache();
     let message;
     if (!totalCount) {
-        message = "当前筛选下没有 YES token";
+        message = "当前筛选下没有 TOP token";
     } else if (!selectedCount) {
-        message = `共 ${totalCount} 个 YES token，请至少选择 1 个`;
+        message = `共 ${totalCount} 个 TOP token，请至少选择 1 个`;
     } else if (!datasets.length) {
         message = `已选 ${selectedCount} 个，但暂无价格数据`;
     } else {
@@ -1013,7 +1029,7 @@ async function refreshYesTokenChart(markets = lastRenderedMarkets) {
     const tokens = collectYesTokens(markets);
     syncChartTokens(tokens);
     if (!tokens.length) {
-        setChartStatus("当前筛选下没有 YES token");
+        setChartStatus("当前筛选下没有 TOP token");
         renderChart([]);
         renderChartLegend([]);
         return;
@@ -1024,7 +1040,7 @@ async function refreshYesTokenChart(markets = lastRenderedMarkets) {
     chartAbortController = new AbortController();
     const { signal } = chartAbortController;
     const requestId = ++chartRequestId;
-    setChartStatus(`共 ${tokens.length} 个 YES token，加载价格数据…`);
+    setChartStatus(`共 ${tokens.length} 个 TOP token，加载价格数据…`);
     try {
         const { failureCount } = await loadHistoriesForTokens(tokens, chartInterval, signal);
         const cachedBounds = getCachedIntervalBounds(chartInterval);
@@ -1060,7 +1076,7 @@ async function loadHistoriesForTokens(tokens, interval, signal) {
         if (result.failed) {
             failureCount++;
             console.error(
-                `加载 YES token ${result.token.tokenId} 价格失败:`,
+                `加载 TOP token ${result.token.tokenId} 价格失败:`,
                 result.error?.message || result.error,
             );
             return;
@@ -1664,20 +1680,71 @@ function computeSecondaryScale(series) {
 
 function drawLineSeries(ctx, series, xFor, yFor, padding, chartHeight, renderedSeries) {
     const pixelPoints = [];
+    const points = series.points;
+    if (points.length === 0) return;
+
     ctx.beginPath();
     ctx.strokeStyle = series.color;
     ctx.lineWidth = 2;
-    series.points.forEach((point, idx) => {
+
+    // 保存当前上下文状态
+    ctx.save();
+
+    // 设置平滑曲线样式
+    ctx.lineJoin = "round";
+    ctx.lineCap = "round";
+
+    // 计算所有像素点
+    points.forEach((point) => {
         const x = xFor(point.time);
         const y = yFor(point.price);
         pixelPoints.push({ time: point.time, price: point.price, x, y });
-        if (idx === 0) {
-            ctx.moveTo(x, y);
-        } else {
-            ctx.lineTo(x, y);
-        }
     });
+
+    if (pixelPoints.length === 1) {
+        // 只有一个点，直接绘制
+        ctx.moveTo(pixelPoints[0].x, pixelPoints[0].y);
+        ctx.lineTo(pixelPoints[0].x, pixelPoints[0].y);
+    } else if (pixelPoints.length === 2) {
+        // 两个点，直接连线
+        ctx.moveTo(pixelPoints[0].x, pixelPoints[0].y);
+        ctx.lineTo(pixelPoints[1].x, pixelPoints[1].y);
+    } else {
+        // 多个点，使用三次贝塞尔曲线绘制平滑曲线
+        ctx.moveTo(pixelPoints[0].x, pixelPoints[0].y);
+
+        for (let i = 0; i < pixelPoints.length - 1; i++) {
+            const p0 = i > 0 ? pixelPoints[i - 1] : pixelPoints[i];
+            const p1 = pixelPoints[i];
+            const p2 = pixelPoints[i + 1];
+            const p3 = i < pixelPoints.length - 2 ? pixelPoints[i + 2] : pixelPoints[i + 1];
+
+            // 计算控制点，使用 Catmull-Rom 样条算法生成平滑曲线
+            const tension = 0.5; // 张力系数，控制曲线平滑度 (0-1)
+
+            // 计算切线方向
+            const dx1 = p1.x - p0.x;
+            const dy1 = p1.y - p0.y;
+            const dx2 = p2.x - p1.x;
+            const dy2 = p2.y - p1.y;
+            const dx3 = p3.x - p2.x;
+            const dy3 = p3.y - p2.y;
+
+            // 计算控制点位置，基于相邻点的方向
+            const cp1x = p1.x + (dx2 * tension);
+            const cp1y = p1.y + (dy2 * tension);
+            const cp2x = p2.x - (dx2 * tension);
+            const cp2y = p2.y - (dy2 * tension);
+
+            // 使用三次贝塞尔曲线连接，创建更平滑的曲线效果
+            ctx.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, p2.x, p2.y);
+        }
+    }
+
     ctx.stroke();
+
+    // 恢复上下文状态
+    ctx.restore();
     drawSeriesLabel(ctx, series, xFor, yFor, padding, chartHeight);
     if (renderedSeries) {
         renderedSeries.push({
@@ -2028,12 +2095,37 @@ function render(data) {
             if (f.className) td.classList.add(f.className);
             const span = document.createElement("span");
             span.className = "cell-value";
-            const value = formatValue(item[f.key], f);
-            span.textContent = value;
-            if (f.key === "question" && typeof value === "string") {
-                span.title = value;
-            } else if (dateFieldRegex.test(f.key) && typeof value === "string") {
-                span.title = value;
+            let value;
+            if (f.key === "topSide") {
+                // topSide 字段：从 outcomes 中解析对应的 outcome 名称
+                const topSide = typeof item?.topSide === "number" ? item.topSide : null;
+                const outcomes = parseOutcomes(item?.outcomes);
+                if (Number.isFinite(topSide) && Array.isArray(outcomes) && outcomes.length > topSide) {
+                    value = outcomes[topSide];
+                } else {
+                    value = null;
+                }
+            } else if (f.dynamic) {
+                // 动态字段：根据topSide选择对应的值
+                const topSide = typeof item?.topSide === "number" ? item.topSide : null;
+                if (f.key === "topBestAsk") {
+                    value = topSide === 0 ? item.yesBestAsk : topSide === 1 ? item.noBestAsk : null;
+                } else if (f.key === "topBestBid") {
+                    value = topSide === 0 ? item.yesBestBid : topSide === 1 ? item.noBestBid : null;
+                } else if (f.key === "topSpread") {
+                    value = topSide === 0 ? item.yesSpread : topSide === 1 ? item.noSpread : null;
+                } else {
+                    value = item[f.key];
+                }
+            } else {
+                value = item[f.key];
+            }
+            const formattedValue = formatValue(value, f);
+            span.textContent = formattedValue;
+            if (f.key === "question" && typeof formattedValue === "string") {
+                span.title = formattedValue;
+            } else if (dateFieldRegex.test(f.key) && typeof formattedValue === "string") {
+                span.title = formattedValue;
             } else if (f.key === "outcomes") {
                 const parsed = parseOutcomes(item[f.key]);
                 if (parsed) {
@@ -2149,12 +2241,18 @@ function updateOrderTokenOptions(item) {
     const options = getTokenOptions(item);
     orderTokenGroup.innerHTML = "";
 
-    // 找到高概率侧的token（bestAsk更高的那个）
-    let highProbabilityIdx = 0;
+    // 优先使用 topSide，如果没有则使用高概率侧（bestAsk更高的那个）
+    let selectedIdx = 0;
     if (options.length >= 2) {
-        const ask0 = Number.isFinite(options[0]?.bestAsk) ? options[0].bestAsk : 0;
-        const ask1 = Number.isFinite(options[1]?.bestAsk) ? options[1].bestAsk : 0;
-        highProbabilityIdx = ask1 > ask0 ? 1 : 0;
+        // 如果 item 有 topSide，优先使用它
+        if (typeof item?.topSide === "number" && (item.topSide === 0 || item.topSide === 1)) {
+            selectedIdx = item.topSide;
+        } else {
+            // 否则使用原来的逻辑：找到高概率侧的token（bestAsk更高的那个）
+            const ask0 = Number.isFinite(options[0]?.bestAsk) ? options[0].bestAsk : 0;
+            const ask1 = Number.isFinite(options[1]?.bestAsk) ? options[1].bestAsk : 0;
+            selectedIdx = ask1 > ask0 ? 1 : 0;
+        }
     }
 
     options.forEach((opt, idx) => {
@@ -2171,8 +2269,8 @@ function updateOrderTokenOptions(item) {
             radio.dataset.bestBid = String(opt.bestBid);
         }
         radio.dataset.label = opt.label;
-        // 默认选择高概率侧的token
-        if (idx === highProbabilityIdx) {
+        // 根据 topSide 或高概率侧选择 token
+        if (idx === selectedIdx) {
             radio.checked = true;
         }
         radio.addEventListener("change", () => updateOrderBestAskDisplay({ writeToInput: true }));
@@ -2209,7 +2307,7 @@ function updateOrderBestAskDisplay({ writeToInput = false } = {}) {
     const bestAsk = Number(selected.dataset.bestAsk);
     const bestBid = Number(selected.dataset.bestBid);
 
-    // 如果最优卖价为0或无效，则使用最优买价
+    // 买单价格：先取最优卖（bestAsk），如果没有数据，再取最优买（bestBid）
     const priceToUse = Number.isFinite(bestAsk) && bestAsk > 0 ? bestAsk :
                        (Number.isFinite(bestBid) && bestBid > 0 ? bestBid : null);
 
@@ -2229,7 +2327,7 @@ async function loadAvailableClients() {
             console.error("Failed to load clients:", data?.message || "Unknown error");
             return;
         }
-        orderPkIdxSelect.innerHTML = '<option value="">请选择客户端</option>';
+        orderPkIdxSelect.innerHTML = '';
         if (Array.isArray(data) && data.length > 0) {
             data.forEach(({ pkIdx }) => {
                 const option = document.createElement("option");
@@ -2237,9 +2335,9 @@ async function loadAvailableClients() {
                 option.textContent = `pkIdx: ${pkIdx}`;
                 orderPkIdxSelect.appendChild(option);
             });
-            // 默认选择索引为1的客户端（数组第二个元素）
-            if (data.length > 1 && data[1]?.pkIdx) {
-                orderPkIdxSelect.value = data[1].pkIdx;
+            // 默认选择索引为0的客户端（数组第一个元素）
+            if (data.length > 0 && data[0]?.pkIdx) {
+                orderPkIdxSelect.value = data[0].pkIdx;
             }
         }
     } catch (err) {

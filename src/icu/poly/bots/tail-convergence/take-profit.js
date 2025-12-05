@@ -165,7 +165,7 @@ export class TakeProfitManager {
             // 先检查价格是否有效
             if (bestBidPrice <= 0) {
                 logger.info(
-                    `[止盈] ${orderKey} 最优买价=${bestBidPrice} 小于等于0、跳过`,
+                    `[止盈] ${orderKey} \t======== GG =======\t`,
                 );
                 return false;
             }

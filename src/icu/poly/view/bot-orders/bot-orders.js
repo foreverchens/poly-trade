@@ -35,6 +35,7 @@ async function fetchOrders() {
                 <td>${order.symbol || "-"}</td>
                 <td>${order.outcome}</td>
                 <td>${order.entryPrice.toFixed(3)}</td>
+                <td>${order.avgWeiPrice !== null && order.avgWeiPrice !== undefined ? order.avgWeiPrice.toFixed(3) : "-"}</td>
                 <td>${order.size}</td>
                 <td title="${order.entryOrderId}"><small>${truncateId(order.entryOrderId)}</small></td>
                 <td title="${order.profitOrderId || ""}"><small>${truncateId(order.profitOrderId)}</small></td>

@@ -8,6 +8,7 @@ import { ethers } from "ethers";
 const RPC_URL = process.env.RPC_URL || "https://polygon-rpc.com";
 const CHAIN_ID = 137; // Polygon
 const USDC_E_ADDRESS = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"; // Polygon USDC.e
+const CTF_ADDRESS = "0x4D97DCd97eC945f40cF65F87097ACe5EA0476045"; // CTF(ERC1155)
 const GAS_STATION_API = "https://gasstation.polygon.technology/v2";
 
 // ERC20 ABI - 仅包含需要的方法
@@ -15,6 +16,11 @@ const ERC20_ABI = [
     "function transfer(address to, uint256 value) external returns (bool)",
     "function balanceOf(address owner) view returns (uint256)",
     "function decimals() view returns (uint8)",
+];
+
+// CTF ABI - Polymarket Conditional Tokens Framework
+const CTF_ABI = [
+    "function redeemPositions(address collateralToken, bytes32 parentCollectionId, bytes32 conditionId, uint256[] indexSets) external",
 ];
 
 // ========== 工具函数 ==========
@@ -417,7 +423,184 @@ export async function transferUSDC(privateKeyFrom, addressTo, amount, options = 
     }
 }
 
+/**
+ * 未调通
+ * 赎回 Polymarket CTF 合约的仓位
+ * @param {string} privateKey - 私钥
+ * @param {string} conditionId - 市场ID (marketId)
+ * @param {object} options - 可选配置
+ * @param {string} options.rpcUrl - RPC节点
+ * @param {number} options.nonce - 指定nonce
+ * @param {string} options.maxFeePerGas - Max Fee Per Gas (Gwei)
+ * @param {string} options.maxPriorityFeePerGas - Max Priority Fee Per Gas (Gwei)
+ * @param {number} options.gasLimit - Gas Limit
+ * @param {number} options.confirmations - 等待的确认数（默认1）
+ * @param {number} options.timeout - 等待超时时间（毫秒，默认120000即2分钟）
+ * @returns {Promise<{hash: string, receipt: any, from: string, conditionId: string}>}
+ */
+export async function redeemPositions(privateKey, conditionId, options = {}) {
+    const {
+        rpcUrl = RPC_URL,
+        nonce = null,
+        maxFeePerGas = null,
+        maxPriorityFeePerGas = null,
+        gasLimit = null,
+        confirmations = 1,
+        timeout = 120000, // 默认2分钟超时
+    } = options;
 
+    // 验证私钥
+    if (!privateKey || privateKey.trim() === '') {
+        throw new Error('私钥不能为空');
+    }
+
+    // 验证 conditionId
+    if (!conditionId || conditionId.trim() === '') {
+        throw new Error('conditionId (marketId) 不能为空');
+    }
+
+    // 初始化provider和wallet (v5)
+    const provider = new ethers.providers.JsonRpcProvider(rpcUrl, CHAIN_ID);
+    const pk = privateKey.startsWith('0x') ? privateKey : '0x' + privateKey;
+    const wallet = new ethers.Wallet(pk, provider);
+
+    console.log(`[发送方地址]: ${wallet.address}`);
+    console.log(`[ConditionId (MarketId)]: ${conditionId}`);
+
+    // 初始化CTF合约
+    const ctfContract = new ethers.Contract(CTF_ADDRESS, CTF_ABI, wallet);
+
+    // 固定参数
+    const collateralToken = USDC_E_ADDRESS;
+    const parentCollectionId = "0x0000000000000000000000000000000000000000000000000000000000000000";
+    const indexSets = [1, 2];
+
+    console.log(`[CollateralToken]: ${collateralToken}`);
+    console.log(`[ParentCollectionId]: ${parentCollectionId}`);
+    console.log(`[IndexSets]: [${indexSets.join(', ')}]`);
+
+    // 检查POL余额（用于支付gas）
+    const polBalance = await provider.getBalance(wallet.address);
+    const polBalanceFormatted = ethers.utils.formatEther(polBalance);
+    console.log(`[POL余额(Gas费)]: ${polBalanceFormatted}`);
+
+    if (polBalance.lt(ethers.utils.parseEther("0.001"))) {
+        console.warn('⚠️ 警告: POL余额可能不足以支付Gas费');
+    }
+
+    // 获取当前nonce
+    let currentNonce;
+    if (nonce !== null) {
+        currentNonce = nonce;
+        console.log(`[手动指定Nonce]: ${currentNonce}`);
+    } else {
+        const latestNonce = await provider.getTransactionCount(wallet.address, "latest");
+        const pendingNonce = await provider.getTransactionCount(wallet.address, "pending");
+        if (pendingNonce > latestNonce) {
+            console.warn(`⚠️ 检测到 ${pendingNonce - latestNonce} 笔 pending 交易，先清理或手动指定 nonce`);
+            throw new Error(`有 pending 交易，请手动指定 nonce 参数`);
+        }
+        currentNonce = latestNonce;
+        console.log(`[使用Nonce]: ${currentNonce}`);
+    }
+
+    // 估算Gas Limit
+    let finalGasLimit;
+    if (gasLimit !== null) {
+        finalGasLimit = gasLimit;
+    } else {
+        try {
+            const estimatedGas = await ctfContract.estimateGas.redeemPositions(
+                collateralToken,
+                parentCollectionId,
+                conditionId,
+                indexSets
+            );
+            finalGasLimit = Math.floor(estimatedGas.toNumber() * 1.2); // 增加20% buffer
+            console.log(`[估算Gas Limit]: ${estimatedGas.toString()} (使用: ${finalGasLimit})`);
+        } catch (error) {
+            console.warn('⚠️ Gas估算失败，使用默认值:', error.message);
+            finalGasLimit = 200000; // 默认值
+        }
+    }
+
+    // 获取或设置gas费用
+    let finalMaxFeePerGas, finalMaxPriorityFeePerGas;
+    if (maxFeePerGas !== null && maxPriorityFeePerGas !== null) {
+        finalMaxFeePerGas = ethers.utils.parseUnits(maxFeePerGas, "gwei");
+        finalMaxPriorityFeePerGas = ethers.utils.parseUnits(maxPriorityFeePerGas, "gwei");
+        console.log(`[手动指定Gas]`);
+    } else {
+        // 使用 Polygon Gas Station API
+        const gasPrice = await getGasPrice();
+        finalMaxFeePerGas = gasPrice.maxFeePerGas;
+        finalMaxPriorityFeePerGas = gasPrice.maxPriorityFeePerGas;
+    }
+
+    console.log(`[MaxFeePerGas]: ${ethers.utils.formatUnits(finalMaxFeePerGas, "gwei")} Gwei`);
+    console.log(`[MaxPriorityFeePerGas]: ${ethers.utils.formatUnits(finalMaxPriorityFeePerGas, "gwei")} Gwei`);
+    console.log(`[Gas Limit]: ${finalGasLimit}`);
+
+    // 构建交易参数
+    const txParams = {
+        gasLimit: finalGasLimit,
+        nonce: currentNonce,
+        maxFeePerGas: finalMaxFeePerGas,
+        maxPriorityFeePerGas: finalMaxPriorityFeePerGas,
+        type: 2, // EIP-1559 transaction
+    };
+
+    console.log(`[准备发送交易...]`);
+
+    // 发送交易
+    const tx = await ctfContract.redeemPositions(
+        collateralToken,
+        parentCollectionId,
+        conditionId,
+        indexSets,
+        txParams
+    );
+    console.log(`[交易已提交]`);
+    console.log(`[交易Hash]: ${tx.hash}`);
+    console.log(`[PolygonScan]: https://polygonscan.com/tx/${tx.hash}`);
+
+    // 立即验证交易是否存在
+    try {
+        const checkTx = await provider.getTransaction(tx.hash);
+        if (!checkTx) {
+            console.warn('⚠️ 警告: 交易hash在RPC节点中未找到，可能存在问题');
+        } else {
+            console.log(`✓ 交易已在RPC节点确认`);
+        }
+    } catch (checkError) {
+        console.warn('⚠️ 无法验证交易是否存在:', checkError.message);
+    }
+
+    console.log(`[等待交易确认...] (最多等待 ${timeout/1000} 秒)`);
+
+    try {
+        // 等待确认，设置超时
+        const receipt = await tx.wait(confirmations, timeout);
+        console.log(`✓ CTF仓位赎回成功!`);
+        console.log(`[区块号]: ${receipt.blockNumber}`);
+        console.log(`[Gas使用]: ${receipt.gasUsed.toString()}`);
+        console.log(`[交易状态]: ${receipt.status === 1 ? '成功' : '失败'}`);
+
+        return {
+            hash: tx.hash,
+            receipt,
+            from: wallet.address,
+            conditionId: conditionId,
+        };
+    } catch (error) {
+        if (error.code === 'TIMEOUT') {
+            console.error(`✗ CTF仓位赎回超时 (${timeout}ms)`);
+            console.error(`交易可能仍在处理中，请查看: https://polygonscan.com/tx/${tx.hash}`);
+            throw new Error(`Transaction timeout after ${timeout}ms. Hash: ${tx.hash}`);
+        }
+        throw error;
+    }
+}
 
 /**
  * 查询余额
@@ -602,6 +785,7 @@ export default {
     getUSDCeBalance,
     transferPOL,
     transferUSDC,
+    redeemPositions,
     getBalances,
     getNonce,
     getConfirmedNonce,

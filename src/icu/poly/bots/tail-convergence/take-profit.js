@@ -12,6 +12,7 @@ export class TakeProfitManager {
 
         this.takeProfitOrders = [];
         this.takeProfitCronTask = null;
+        this.takeProfitTimeoutId = null;
     }
 
     addOrder(order) {
@@ -22,7 +23,7 @@ export class TakeProfitManager {
     }
 
     /**
-     * 启动止盈监控：每小时0-20分钟，每分钟执行一次
+     * 启动止盈监控：每小时0分和1分启动一次，之后改为setTimeout调度（30秒），直到没有待止盈任务
      */
     startTakeProfitMonitor() {
         if (this.takeProfitCronTask) {
@@ -30,8 +31,8 @@ export class TakeProfitManager {
             return; // 已启动
         }
 
-        // Cron表达式：每小时0-20分钟，每3分钟执行一次 (0-20/3 * * * *)
-        const takeProfitCronExpression = "0-20/2 * * * *";
+        // Cron表达式：每小时0分和1分执行一次
+        const takeProfitCronExpression = "0,1 * * * *";
         logger.info(
             `[扫尾盘策略] 止盈任务已启动，Cron表达式=${takeProfitCronExpression} (时区: ${this.cronTimeZone})`,
         );
@@ -40,8 +41,11 @@ export class TakeProfitManager {
             takeProfitCronExpression,
             async () => {
                 try {
-                    await this.processTakeProfitOrders();
-                } catch (err) {}
+                    // Cron触发后，启动setTimeout循环调度
+                    this.startTakeProfitLoop();
+                } catch (err) {
+                    logger.error(`[扫尾盘策略] Cron触发异常`, err?.message ?? err);
+                }
             },
             {
                 timezone: this.cronTimeZone,
@@ -50,8 +54,44 @@ export class TakeProfitManager {
     }
 
     /**
+     * 启动setTimeout循环调度：每30秒执行一次，直到没有待止盈任务
+     */
+    startTakeProfitLoop() {
+        // 如果已有循环在运行，直接返回
+        if (this.takeProfitTimeoutId) {
+            logger.info(`[扫尾盘策略] 止盈循环调度已在运行，跳过重复启动`);
+            return;
+        }
+
+        logger.info(`[扫尾盘策略] 启动止盈循环调度（30秒间隔）`);
+
+        const scheduleNext = async () => {
+            try {
+                const hasPendingOrders = await this.processTakeProfitOrders();
+
+                if (hasPendingOrders) {
+                    // 还有待处理订单，30秒后继续
+                    this.takeProfitTimeoutId = setTimeout(scheduleNext, 30000);
+                } else {
+                    // 没有待处理订单，停止调度
+                    this.takeProfitTimeoutId = null;
+                    logger.info(`[扫尾盘策略] 无待止盈任务，停止循环调度`);
+                }
+            } catch (err) {
+                logger.error(`[扫尾盘策略] 止盈循环调度异常`, err?.message ?? err);
+                // 即使出错也继续调度，避免遗漏
+                this.takeProfitTimeoutId = setTimeout(scheduleNext, 30000);
+            }
+        };
+
+        // 立即执行一次
+        scheduleNext();
+    }
+
+    /**
      * 简化止盈逻辑：事件结束后，直接查询订单成交情况，成交多少止盈多少
      * 使用最优bid价格直接成交，不做其他多余处理
+     * @returns {Promise<boolean>} 返回是否有待处理的订单
      */
     async processTakeProfitOrders() {
         const pendingOrders = this.takeProfitOrders.filter((order) => !order.takeProfitOrderId);
@@ -60,7 +100,7 @@ export class TakeProfitManager {
             // pendingOrders 永远包含 errorOrders 中的订单 以及一些新提交的订单
             // 如果当前止盈订单队列 都为异常订单，结束调度、此时待处理止盈订单肯定为0
             this.takeProfitOrders = errorOrders;
-            return;
+            return false; // 没有待处理订单
         }
         let processedCount = 0;
         let cancelledCount = 0;
@@ -151,6 +191,12 @@ export class TakeProfitManager {
         // logger.info(
         //     `[止盈] 处理完成: 总计=${processedCount}, 已止盈=${takeProfitCount}, 已撤单=${cancelledCount}, 跳过=${skippedCount}, 错误=${errorCount}`,
         // );
+
+        // 检查是否还有待处理的订单（排除已有错误的订单）
+        const remainingPendingOrders = this.takeProfitOrders.filter(
+            (order) => !order.takeProfitOrderId && !order.error
+        );
+        return remainingPendingOrders.length > 0;
     }
 
     /**

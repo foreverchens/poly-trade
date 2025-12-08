@@ -2329,16 +2329,36 @@ async function loadAvailableClients() {
         }
         orderPkIdxSelect.innerHTML = '';
         if (Array.isArray(data) && data.length > 0) {
-            data.forEach(({ pkIdx }) => {
-                const option = document.createElement("option");
-                option.value = pkIdx;
-                option.textContent = `pkIdx: ${pkIdx}`;
-                orderPkIdxSelect.appendChild(option);
+            data.forEach(({ pkIdx }, idx) => {
+                const wrapper = document.createElement("label");
+                wrapper.className = "order-pkidx-option";
+                const radio = document.createElement("input");
+                radio.type = "radio";
+                radio.name = "orderPkIdxChoice";
+                radio.value = pkIdx;
+                // 默认选择索引为0的客户端（数组第一个元素）
+                if (idx === 0) {
+                    radio.checked = true;
+                }
+                // 监听变化，更新样式
+                radio.addEventListener("change", () => {
+                    document.querySelectorAll(".order-pkidx-option").forEach((opt) => {
+                        opt.classList.remove("checked");
+                    });
+                    if (radio.checked) {
+                        wrapper.classList.add("checked");
+                    }
+                });
+                const span = document.createElement("span");
+                span.textContent = pkIdx;
+                wrapper.appendChild(radio);
+                wrapper.appendChild(span);
+                orderPkIdxSelect.appendChild(wrapper);
+                // 初始化选中状态
+                if (radio.checked) {
+                    wrapper.classList.add("checked");
+                }
             });
-            // 默认选择索引为0的客户端（数组第一个元素）
-            if (data.length > 0 && data[0]?.pkIdx) {
-                orderPkIdxSelect.value = data[0].pkIdx;
-            }
         }
     } catch (err) {
         console.error("Error loading available clients:", err);
@@ -2590,7 +2610,8 @@ if (orderForm) {
             setOrderStatus("请选择 token", true);
             return;
         }
-        const pkIdx = orderPkIdxSelect?.value;
+        const pkIdxInput = orderPkIdxSelect?.querySelector("input[name='orderPkIdxChoice']:checked");
+        const pkIdx = pkIdxInput?.value;
         if (!pkIdx) {
             setOrderStatus("请选择客户端", true);
             return;

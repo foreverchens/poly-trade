@@ -59,11 +59,8 @@ export class TakeProfitManager {
     startTakeProfitLoop() {
         // 如果已有循环在运行，直接返回
         if (this.takeProfitTimeoutId) {
-            logger.info(`[扫尾盘策略] 止盈循环调度已在运行，跳过重复启动`);
             return;
         }
-
-        logger.info(`[扫尾盘策略] 启动止盈循环调度（30秒间隔）`);
 
         const scheduleNext = async () => {
             try {
@@ -75,7 +72,6 @@ export class TakeProfitManager {
                 } else {
                     // 没有待处理订单，停止调度
                     this.takeProfitTimeoutId = null;
-                    logger.info(`[扫尾盘策略] 无待止盈任务，停止循环调度`);
                 }
             } catch (err) {
                 logger.error(`[扫尾盘策略] 止盈循环调度异常`, err?.message ?? err);
@@ -223,7 +219,7 @@ export class TakeProfitManager {
             }
 
             logger.info(
-                `[止盈] ${orderKey} 提交止盈: SELL --> ${bestBidPrice}@${size}`,
+                `[止盈] ${orderKey} 提交止盈: --> ${bestBidPrice}@${size}`,
             );
 
             const takeProfitOrderResp = await this.client.placeOrder(

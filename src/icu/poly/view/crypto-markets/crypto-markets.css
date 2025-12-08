@@ -265,6 +265,45 @@ td.col-time {
 .order-token-option input {
     accent-color: var(--accent);
 }
+.order-pkidx-group {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: wrap;
+}
+.order-pkidx-option {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 8px 16px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--bg);
+    color: var(--muted);
+    font-size: 13px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    min-width: 60px;
+}
+.order-pkidx-option:hover {
+    border-color: var(--accent);
+    color: var(--text);
+}
+.order-pkidx-option input {
+    position: absolute;
+    opacity: 0;
+    pointer-events: none;
+}
+.order-pkidx-option.checked {
+    background: var(--accent);
+    color: #021018;
+    border-color: var(--accent);
+    font-weight: 600;
+}
+.order-pkidx-option span {
+    display: block;
+}
 .toast-container {
     position: fixed;
     right: 24px;

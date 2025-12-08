@@ -404,22 +404,26 @@ class TailConvergenceStrategy {
 
         const [yesBid, yesAsk] = await this.cache.getBestPrice(yesTokenId);
         const [noBid, noAsk] = await this.cache.getBestPrice(noTokenId);
-        const topPrice = Math.max(yesAsk, noAsk);
-        if (topPrice < 0.5 || topPrice > 0.99) {
-            // 缺乏卖方流动性时、topPrice会选择低概率侧价格 导致小于0.5、
-            // 极度确定性事件时、高概率侧会突破tickSize、产生大于0.99的价格、不进场
-            // todo top流动性为空、进入流动性争夺阶段
-            // 每10秒输出一次日志
-            if(!this.lastLogTime  || dayjs().unix() - this.lastLogTime > 10) {
-                logger.info(
-                    `[${this.symbol}-${this.currentLoopHour}时] topPrice=${topPrice}、流动性可能为空、进入流动性抢夺阶段`,
-                );
-                this.lastLogTime = dayjs().unix();
-                this.tickIntervalMs = 100;
+        // 先默认yes方向为top方向
+        // 如果yesAsk大于0.99、或者 yesAsk为0、且yesBid>=0.98 表明高确定事件、以maker单入场
+        const isMakerSignal = (bid,ask,outcome,tokenId) =>{
+            if(ask > 0.99 || (ask === 0 && bid >= 0.98)) {
+                return {
+                    isMaker: true
+                };
             }
             return null;
         }
-        const topTokenId = yesAsk >= noAsk ? yesTokenId : noTokenId;
+        // 先检查maker单信号
+        const  makerSignal = isMakerSignal(yesBid,yesAsk,"UP",yesTokenId) || isMakerSignal(noBid, noAsk,"DOWN",noTokenId);
+        if(makerSignal) {
+            // 如果是maker单、兼容度影响、暂还是通过高频tick处理、直接返回
+            this.tickIntervalMs = 100;
+            return null;
+        }
+        // 如果都不是、和0.5比较、高于0.5则yes方向、低于0.5则no方向
+        const topPrice = yesAsk >= 0.5 ? yesAsk : noAsk;
+        const topTokenId = yesAsk >= 0.5 ? yesTokenId : noTokenId;
 
         /**
          *  正常情况下、时间超过50分钟、会进入监控模式、提高tick频率

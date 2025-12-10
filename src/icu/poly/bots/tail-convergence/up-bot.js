@@ -343,7 +343,8 @@ class TailConvergenceStrategy {
         if (!this.loopActive) {
             return;
         }
-        if (dayjs().hour() !== this.currentLoopHour) {
+        if (dayjs().hour() !== this.currentLoopHour && dayjs().hour != 4) {
+            // 美股闭盘时间不做
             this.stopHourlyLoop();
             return;
         }
@@ -396,6 +397,9 @@ class TailConvergenceStrategy {
     async processSlug(slug) {
         const market = await this.cache.getMarket();
         if (!market) {
+            // 市场为空、结束小时循环
+            logger.error(`[${this.symbol}-${this.currentLoopHour}时] 市场为空、结束小时循环`);
+            this.stopHourlyLoop();
             return null;
         }
         // 构建交易信号

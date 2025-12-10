@@ -46,8 +46,8 @@ export async function submitMakerSignal(signal) {
 
 async function handleMakerOrder(signal) {
     const { tokenId, price, outcome, client, orderId, currentLoopHour, symbol } = signal;
-    const order = await client.getOrder(orderId);
-    do {
+    while (true) {
+        const order = await client.getOrder(orderId);
         // 如果订单不存在、直接结束
         if (!order) {
             logger.info(`[handleMakerOrder] ${symbol}挂单不存在`);
@@ -57,8 +57,13 @@ async function handleMakerOrder(signal) {
         const matchedSize = Number(order.size_matched) || 0;
         const originalSize = Number(order.original_size) || 0;
         if (matchedSize === originalSize) {
-            logger.info(`[handleMakerOrder] ${symbol}挂单已完全成交、结束处理`);
-            return;
+            logger.info(`[handleMakerOrder] ${symbol}挂单已完全成交、提交止盈`);
+            // 异步处理止盈
+            signal.matchedSize = matchedSize;
+            handleTakeProfit(signal).catch((err) => {
+                logger.error(`[handleMakerOrder] ${symbol}提交止盈失败、error=${err?.message ?? err}`);
+            });
+            break;
         }
         if (matchedSize > 0) {
             logger.info(`[handleMakerOrder] ${symbol}挂单部分成交、${matchedSize}/${originalSize}`);
@@ -69,6 +74,12 @@ async function handleMakerOrder(signal) {
         if (yesBid > price + 0.002) {
             logger.info(`[handleMakerOrder] ${symbol}落后最优bid超过0.002、取消挂单`);
             await client.cancelOrder(orderId);
+            if(matchedSize > 0) {
+                signal.matchedSize = matchedSize;
+                handleTakeProfit(signal).catch((err) => {
+                    logger.error(`[handleMakerOrder] ${symbol}提交止盈失败、error=${err?.message ?? err}`);
+                });
+            }
             return;
         }
         // 如果挂单时间即将抵达次时20分钟、取消挂单
@@ -83,9 +94,33 @@ async function handleMakerOrder(signal) {
             await client.cancelOrder(orderId);
             return;
         }
-    } while (false);
-    logger.info(`[handleMakerOrder] ${symbol}挂单未完全成交、继续查询`);
-    setTimeout(() => {
-        handleMakerOrder(signal);
-    }, 30000);
+        // 挂单未完全成交、继续查询
+        logger.info(`[handleMakerOrder] ${symbol}挂单未完全成交、继续查询`);
+        await new Promise((resolve) => setTimeout(resolve, 30000));
+    }
+}
+
+async function handleTakeProfit(signal) {
+    const { tokenId, price, outcome, client, orderId, currentLoopHour, symbol, matchedSize } = signal;
+    while (true) {
+        const [yesBid] = await client.getBestPrice(tokenId);
+        if (yesBid < 0.997) {
+            logger.info(
+                `[handleTakeProfit] ${symbol}最优bid价格低于0.997、等待最优bid价格高于0.997、才提交止盈`,
+            );
+            await new Promise((resolve) => setTimeout(resolve, 30000));
+            continue;
+        }
+        const takeProfitOrder = await client.placeOrder("0.999", matchedSize, PolySide.SELL, tokenId);
+        if (!takeProfitOrder?.success) {
+            logger.error(
+                `[handleTakeProfit] ${symbol}提交止盈单失败、error=${takeProfitOrder?.error?.message ?? takeProfitOrder.errorMsg}`,
+            );
+            continue;
+        }
+        logger.info(
+            `[handleTakeProfit] ${symbol}提交止盈单成功、orderId=${takeProfitOrder.orderID}`,
+        );
+        return;
+    }
 }

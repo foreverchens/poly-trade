@@ -340,7 +340,7 @@ async function renderPositions(rows, { accountMetaMap = accountMetaByAddress } =
 
     // 基于过滤后的列表显示持仓（根据复选框状态）
     filteredRows.forEach((r) => {
-        const title = r.eventSlug || r.title || r.slug || r.asset || "—";
+        const title = r.slug || r.title || r.eventSlug || r.asset || "—";
         const outcome = r.outcome ? `（${r.outcome}）` : "";
         const icon = r.icon || "";
         const size = Number(r.size ?? 0);
@@ -937,7 +937,6 @@ async function handleCloseOrder(tokenId, rowId, side, pkIdx) {
                 title: "平仓成功",
                 message: `订单 ${shorten(result.orderID || "")} 状态 ${result.status}`,
             });
-            load();
         }
     } catch (err) {
         if (

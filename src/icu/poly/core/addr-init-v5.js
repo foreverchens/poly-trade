@@ -79,8 +79,8 @@ async function addrInitV5(privateKey) {
             let gasLimit;
             try {
                 const estimatedGas = await usdc.estimateGas.approve(t.addr, ethers.constants.MaxUint256);
-                gasLimit = estimatedGas.mul(120).div(100); // 上浮 20%
-                console.log(`[Gas Limit] 估算值: ${estimatedGas.toString()}, 使用值(上浮20%): ${gasLimit.toString()}`);
+                gasLimit = estimatedGas.mul(180).div(100); // 上浮 20%
+                console.log(`[Gas Limit] 估算值: ${estimatedGas.toString()}, 使用值(上浮50%): ${gasLimit.toString()}`);
             } catch (error) {
                 console.warn(`⚠️ Gas 估算失败，使用默认值: ${error.message}`);
                 gasLimit = ethers.BigNumber.from(100000); // 备用默认值
@@ -112,8 +112,8 @@ async function addrInitV5(privateKey) {
             let gasLimit;
             try {
                 const estimatedGas = await ctf.estimateGas.setApprovalForAll(t.addr, true);
-                gasLimit = estimatedGas.mul(120).div(100); // 上浮 20%
-                console.log(`[Gas Limit] 估算值: ${estimatedGas.toString()}, 使用值(上浮20%): ${gasLimit.toString()}`);
+                gasLimit = estimatedGas.mul(180).div(100); // 上浮 20%
+                console.log(`[Gas Limit] 估算值: ${estimatedGas.toString()}, 使用值(上浮80%): ${gasLimit.toString()}`);
             } catch (error) {
                 console.warn(`⚠️ Gas 估算失败，使用默认值: ${error.message}`);
                 gasLimit = ethers.BigNumber.from(50000); // 备用默认值

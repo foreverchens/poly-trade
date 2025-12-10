@@ -64,7 +64,7 @@ const PRICE_FIELD_KEYS = new Set([
     "topBestBid",
     "topSpread",
 ]);
-const TOP_PRICE_THRESHOLD = 0.998;
+const TOP_PRICE_THRESHOLD = 0.99;
 const TAG_OPTIONS = [
     { id: 21, label: "Crypto" },
     { id: 235, label: "Bitcoin" },
@@ -343,7 +343,17 @@ function filterExcludedMarkets(list) {
     return list.filter((item) => !shouldExcludeMarket(item));
 }
 
-function isTopPriceTooHigh(value) {
+function getTopBestBid(item) {
+    const topSide = typeof item?.topSide === "number" ? item.topSide : null;
+    if (topSide === 0) {
+        return item.yesBestBid;
+    } else if (topSide === 1) {
+        return item.noBestBid;
+    }
+    return null;
+}
+
+function isTopBestBidTooHigh(value) {
     const numeric = typeof value === "number" ? value : Number(value);
     return Number.isFinite(numeric) && numeric > TOP_PRICE_THRESHOLD;
 }
@@ -353,7 +363,9 @@ function filterMarketsByTopPrice(list) {
         const category = getOutcomeCategory(item.outcomes);
         // 只有 YesNo 类型才过滤，UpDown 类型不过滤
         if (category === "yesno") {
-            return !isTopPriceTooHigh(item.topPrice);
+            const topBestBid = getTopBestBid(item);
+            // 只显示 topBestBid <= 0.99 的市场（过滤掉 > 0.99 的市场）
+            return !isTopBestBidTooHigh(topBestBid);
         }
         // UpDown 或其他类型直接通过
         return true;

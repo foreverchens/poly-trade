@@ -169,37 +169,39 @@ export async function checkPricePositionAndTrend({
 }
 
 /**
- *  获取乖离率
+ *  获取乖离率、
+ *  乖离率 = (快速EMA - 慢速EMA) / 慢速EMA * 100
+ *  返回0.1、则表明快速EMA比慢速EMA高0.1%、如果返回-0.1、则表明快速EMA比慢速EMA低0.1%
  * @param {string} symbol - 交易对符号
- * @returns
+ * @returns {number} 乖离率
  */
 export async function getBias(
     symbol,
     options = {
-        fastPeriod: 20,
+        fastPeriod: 10,
         slowPeriod: 40,
-        signalPeriod: 15,
+        signalPeriod: 8,
         period: "3m",
         limit: 40,
     },
 ) {
-    // 获取最近2小时的3min级别k线
-    const limitKlines = await listLimitKlines(symbol, options.limit, options.period);
-    if (!limitKlines || limitKlines.length <= 1) {
+    try {
+        // 获取最近2小时的3min级别k线
+        const limitKlines = await listLimitKlines(symbol, options.limit, options.period);
+        if (!limitKlines || limitKlines.length <= 1) {
+            return 0;
+        }
+        const fastEMA = new EMA(options.fastPeriod);
+        const slowEMA = new EMA(options.slowPeriod);
+        const signalEMA = new EMA(options.signalPeriod);
+        const macd = new MACD(fastEMA, slowEMA, signalEMA);
+        for (const kline of limitKlines) {
+            macd.update(Number(kline[4]), false);
+        }
+        const fastVal = fastEMA.getResult();
+        const slowVal = slowEMA.getResult();
+        return Number((((fastVal - slowVal) / slowVal) * 100).toFixed(2));
+    } catch (error) {
         return 0;
     }
-    const fastEMA = new EMA(options.fastPeriod);
-    const slowEMA = new EMA(options.slowPeriod);
-    const signalEMA = new EMA(options.signalPeriod);
-    const macd = new MACD(fastEMA, slowEMA, signalEMA);
-    for (const kline of limitKlines) {
-        macd.update(Number(kline[4]), false);
-    }
-    const fastVal = fastEMA.getResult();
-    const slowVal = slowEMA.getResult();
-    const macdVal = macd.getResult();
-    console.log(`fast[${fastVal}] - slow[${slowVal}] = ${fastVal - slowVal}`);
-    console.log(macdVal);
-    return 0;
 }
-

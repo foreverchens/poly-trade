@@ -10,7 +10,7 @@ import logger from "../../core/Logger.js";
 import { loadConvergenceTaskConfigs } from "../../data/convergence-up.config.js";
 import { getZ } from "../../core/z-score.js";
 import { PolySide } from "../../core/PolyClient.js";
-import { checkDirectionStability, checkPricePositionAndTrend } from "./up-bot-risk.js";
+import { checkDirectionStability, checkPricePositionAndTrend, getBias } from "./up-bot-risk.js";
 import { submitMakerSignal } from "./up-bot-maker.js";
 // 基于流动性计算下次tick 时间间隔
 const delay = (liq, t = 100) => {
@@ -377,8 +377,8 @@ class TailConvergenceStrategy {
             await this.handleSignal(signal);
             // 统一在 handleSignal 执行完毕后输出日志
             if (signal.logArr && signal.logArr.length > 0) {
-                if(this.lastLogTime && dayjs().unix() - this.lastLogTime < 10) {
-                    // 10秒内不重复输出日志
+                if(!signal.completed && this.lastLogTime && dayjs().unix() - this.lastLogTime < 10) {
+                    // 10秒内不重复输出日志、如果信号已完成、则不输出日志
                     return;
                 }
                 this.lastLogTime = dayjs().unix();
@@ -627,6 +627,19 @@ class TailConvergenceStrategy {
             return null;
         }
 
+        // 乖离率检查
+        const bias = await getBias(this.symbol);
+        const biasThreshold = 0.05;
+        const isBiasApproved = candidate.outcome === "UP"
+                    ? bias > biasThreshold  // UP信号要求正乖离率
+                    : bias < -biasThreshold; // DOWN信号要求负乖离率
+        if (bias !== 0 && !isBiasApproved) {
+            logArr.push(`[${this.symbol}-${this.currentLoopHour}时] 乖离率检查不通过-bias=${bias} < ${biasThreshold}`);
+            logger.info('\n\t'+logArr.join("\n\t"));
+            return null;
+        }
+        logArr.push(`[${this.symbol}-${this.currentLoopHour}时] 乖离率检查通过-bias=${bias} >= ${biasThreshold}`);
+
         // 判断是否使用了maker价格（价格与ask不同说明是maker单）
         const isMaker =
             candidate.outcome === "UP" ? candidate.price !== yesAsk : candidate.price !== noAsk;
@@ -834,6 +847,7 @@ class TailConvergenceStrategy {
         }
         const orderId = entryOrder.orderID;
         logArr.push(`[${this.symbol}-${this.currentLoopHour}时] ✅ 建仓成功,订单号=${orderId}`);
+        signal.completed = true;
 
         // 建仓后进入止盈队列、由止盈cron在事件结束后处理
         const takeProfitOrder = {

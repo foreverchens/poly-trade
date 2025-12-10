@@ -32,7 +32,7 @@ export class TakeProfitManager {
         }
 
         // Cron表达式：每小时0分和1分执行一次
-        const takeProfitCronExpression = "0,1 * * * *";
+        const takeProfitCronExpression = "10 0,1 * * * *";
         logger.info(
             `[扫尾盘策略] 止盈任务已启动，Cron表达式=${takeProfitCronExpression} (时区: ${this.cronTimeZone})`,
         );

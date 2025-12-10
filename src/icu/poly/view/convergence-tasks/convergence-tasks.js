@@ -443,7 +443,6 @@ async function persistRow(rowIndex, hintLabel = "") {
         __dirty: false,
     };
     renderTable();
-    updateTotalBalance();
     showMessage(hintLabel ? `${hintLabel} 已保存` : "配置已保存", "success");
 }
 
@@ -1082,7 +1081,6 @@ function renderBalanceChart() {
     };
 
     // 2. 按小时分组所有业务地址组的余额记录
-    // 对于每个组，如果同一小时内有多条记录（不同pkIdx），选择最大pkIdx的
     const balanceByHour = new Map(); // hourTimestamp -> { groupId -> { time, balance, pkIdx } }
     dataByGroup.forEach((entry, groupId) => {
         entry.points.forEach((point) => {
@@ -1105,11 +1103,19 @@ function renderBalanceChart() {
     });
 
     // 3. 计算每个小时时间点的总余额
+    // 为每个地址组维护最新余额，如果某个小时内缺失记录，使用最新余额
     const sortedHours = Array.from(balanceByHour.keys()).sort((a, b) => a - b);
+    const latestBalanceByGroup = new Map(); // groupId -> balance
+
     const totalPoints = sortedHours.map((hourTime) => {
         const hourData = balanceByHour.get(hourTime);
         let total = 0;
-        hourData.forEach(({ balance }) => {
+        hourData.forEach(({ balance }, groupId) => {
+            // 更新该地址组的最新余额
+            latestBalanceByGroup.set(groupId, balance);
+        });
+        // 累加所有地址组的最新余额（包括当前小时有记录的和之前有记录的）
+        latestBalanceByGroup.forEach((balance) => {
             total += balance;
         });
         return { time: hourTime, balance: total };
@@ -1348,7 +1354,11 @@ function buildCombinedBalanceChart(series) {
     const allTimes = series.flatMap((s) => s.points.map((p) => p.time));
     const allBalances = series.flatMap((s) => s.points.map((p) => p.balance));
     const minX = Math.min(...allTimes);
-    const maxX = Math.max(...allTimes);
+    let maxX = Math.max(...allTimes);
+    // 在右侧留10%的空白
+    if (maxX > minX) {
+        maxX = maxX + (maxX - minX) * 0.1;
+    }
     let minY = Math.min(...allBalances);
     let maxY = Math.max(...allBalances);
 

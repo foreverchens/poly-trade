@@ -136,12 +136,12 @@ export async function get1HourAmp(symbol) {
  * @param {number} limit - 获取的k线数量
  * @returns {Promise<Array>} Binance kline格式数组，每根k线为 [timestamp, open, high, low, close, volume, ...]
  */
-export async function listLimitKlines(symbol, limit = 10) {
+export async function listLimitKlines(symbol,  limit = 10, interval = '1m') {
     try {
         const response = await axios.get('https://api.binance.com/api/v3/klines', {
             params: {
                 symbol: `${symbol}USDT`,
-                interval: '1m',
+                interval: interval,
                 limit: limit,
             },
             timeout: 10000,

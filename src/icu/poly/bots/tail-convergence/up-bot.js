@@ -11,6 +11,7 @@ import { loadConvergenceTaskConfigs } from "../../data/convergence-up.config.js"
 import { getZ } from "../../core/z-score.js";
 import { PolySide } from "../../core/PolyClient.js";
 import { checkDirectionStability, checkPricePositionAndTrend } from "./up-bot-risk.js";
+import { submitMakerSignal } from "./up-bot-maker.js";
 // 基于流动性计算下次tick 时间间隔
 const delay = (liq, t = 100) => {
     const m = liq / t;
@@ -114,6 +115,7 @@ class TailConvergenceStrategy {
             // 从 extra 字段提取的风险检查参数
             weightedThreshold: extraConfig.weightedThreshold,
             pricePositionThreshold: extraConfig.pricePositionThreshold,
+            liquiditySignalWeight: extraConfig.liquiditySignalWeight,
         };
     }
 
@@ -138,6 +140,7 @@ class TailConvergenceStrategy {
          * - liquiditySufficientThreshold：流动性充足的阈值 (默认 2000)。
          * - weightedThreshold：方向稳定性检查的加权平均价格阈值 (默认 0.75)。
          * - pricePositionThreshold：价格位置检查的阈值 (默认 0.2)。
+         * - liquiditySignalWeight：流动性信号的加权值 (默认 0.05)。
          */
         const {
             positionSizeUsdc,
@@ -159,6 +162,7 @@ class TailConvergenceStrategy {
             liquiditySufficientThreshold = 2000,
             weightedThreshold,
             pricePositionThreshold,
+            liquiditySignalWeight = 0.05,
         } = config;
 
         Object.assign(this, {
@@ -180,6 +184,7 @@ class TailConvergenceStrategy {
             liquiditySufficientThreshold,
             weightedThreshold,
             pricePositionThreshold,
+            liquiditySignalWeight,
         });
 
         this.httpTimeout = 10000;
@@ -243,6 +248,7 @@ class TailConvergenceStrategy {
             高波动Z-Score阈值=${this.highVolatilityZThreshold},
             插针防护计数阈值=${this.spikeProtectionCount},
             流动性充足阈值=${this.liquiditySufficientThreshold},
+            流动性信号加权值=${this.liquiditySignalWeight},
             tick间隔=${this.tickIntervalSeconds}s,
             是否测试模式=${this.test},
             Cron表达式=${this.cronExpression},时区=${this.cronTimeZone}`,
@@ -371,6 +377,12 @@ class TailConvergenceStrategy {
             await this.handleSignal(signal);
             // 统一在 handleSignal 执行完毕后输出日志
             if (signal.logArr && signal.logArr.length > 0) {
+                if(this.lastLogTime && dayjs().unix() - this.lastLogTime < 10) {
+                    // 10秒内不重复输出日志
+                    return;
+                }
+                this.lastLogTime = dayjs().unix();
+                // 输出日志
                 logger.info('\n\t'+signal.logArr.join("\n\t"));
             }
         }
@@ -407,9 +419,16 @@ class TailConvergenceStrategy {
         // 先默认yes方向为top方向
         // 如果yesAsk大于0.99、或者 yesAsk为0、且yesBid>=0.98 表明高确定事件、以maker单入场
         const isMakerSignal = (bid,ask,outcome,tokenId) =>{
-            if(ask > 0.99 || (ask === 0 && bid >= 0.98)) {
+            if(ask > 0.99 || (ask === 0 && bid >= 0.95)) {
+                // 如果大于0.99、且小于0.998、说明tickSize为0.001、marker价格为 bestBid+0.001、否则为0.99
                 return {
-                    isMaker: true
+                    isMaker: true,
+                    price: ask > 0.99 && ask < 0.998 ? bid + 0.001 : 0.99,
+                    tokenId: tokenId,
+                    outcome: outcome,
+                    symbol: this.symbol,
+                    currentLoopHour: this.currentLoopHour,
+                    client: this.client,
                 };
             }
             return null;
@@ -418,7 +437,9 @@ class TailConvergenceStrategy {
         const  makerSignal = isMakerSignal(yesBid,yesAsk,"UP",yesTokenId) || isMakerSignal(noBid, noAsk,"DOWN",noTokenId);
         if(makerSignal) {
             // 如果是maker单、兼容度影响、暂还是通过高频tick处理、直接返回
-            this.tickIntervalMs = 100;
+            // 新修改、如果产生maker单信号、则直接提交maker单、不通过高频tick处理、同时结束小时循环
+            await submitMakerSignal(makerSignal);
+            this.stopHourlyLoop();
             return null;
         }
         // 如果都不是、和0.5比较、高于0.5则yes方向、低于0.5则no方向
@@ -586,7 +607,7 @@ class TailConvergenceStrategy {
         }
         // 针对流动性信号进行加权（提高通过率）
         if(isLiquiditySignal) {
-            avgWeiPrice = avgWeiPrice + 0.05;
+            avgWeiPrice = avgWeiPrice + this.liquiditySignalWeight;
         }
         if(avgWeiPrice < this.weightedThreshold) {
             logArr.push(`[${this.symbol}-${this.currentLoopHour}时] 方向稳定性检查不通过-avgWeiPrice=${avgWeiPrice} < ${this.weightedThreshold}`);

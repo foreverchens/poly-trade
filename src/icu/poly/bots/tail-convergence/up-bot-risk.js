@@ -1,5 +1,6 @@
 import dayjs from "dayjs";
 import { listLimitKlines } from "./common.js";
+import { MACD, EMA } from "trading-signals";
 
 /**
  * 检查方向稳定性（基于价格历史，使用加权平均价格）
@@ -86,7 +87,7 @@ export async function checkDirectionStability({
 export async function checkPricePositionAndTrend({
     symbol,
     outcome,
-    pricePositionThreshold = 0.2,
+    pricePositionThreshold = 0.25,
 }) {
     try {
         const curMinute = dayjs().minute();
@@ -166,3 +167,39 @@ export async function checkPricePositionAndTrend({
         return { allowed: false, reason: `风控-价格趋势检查失败: ${error?.message ?? error}` };
     }
 }
+
+/**
+ *  获取乖离率
+ * @param {string} symbol - 交易对符号
+ * @returns
+ */
+export async function getBias(
+    symbol,
+    options = {
+        fastPeriod: 20,
+        slowPeriod: 40,
+        signalPeriod: 15,
+        period: "3m",
+        limit: 40,
+    },
+) {
+    // 获取最近2小时的3min级别k线
+    const limitKlines = await listLimitKlines(symbol, options.limit, options.period);
+    if (!limitKlines || limitKlines.length <= 1) {
+        return 0;
+    }
+    const fastEMA = new EMA(options.fastPeriod);
+    const slowEMA = new EMA(options.slowPeriod);
+    const signalEMA = new EMA(options.signalPeriod);
+    const macd = new MACD(fastEMA, slowEMA, signalEMA);
+    for (const kline of limitKlines) {
+        macd.update(Number(kline[4]), false);
+    }
+    const fastVal = fastEMA.getResult();
+    const slowVal = slowEMA.getResult();
+    const macdVal = macd.getResult();
+    console.log(`fast[${fastVal}] - slow[${slowVal}] = ${fastVal - slowVal}`);
+    console.log(macdVal);
+    return 0;
+}
+

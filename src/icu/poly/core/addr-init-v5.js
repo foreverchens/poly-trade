@@ -32,6 +32,45 @@ const ERC1155_ABI = [
     "function isApprovedForAll(address account, address operator) view returns (bool)"
 ];
 
+// ========== 重试机制辅助函数 ==========
+/**
+ * 带重试的交易发送函数
+ * @param {Function} txFn - 返回 Promise<TransactionResponse> 的函数
+ * @param {string} operationName - 操作名称（用于日志）
+ * @param {ethers.BigNumber} initialGasLimit - 初始 gas limit
+ * @param {number} maxRetries - 最大重试次数（默认 3）
+ * @returns {Promise<ethers.ContractReceipt>} 交易收据
+ */
+async function sendTxWithRetry(txFn, operationName, initialGasLimit, maxRetries = 3) {
+    let currentGasLimit = initialGasLimit;
+    let lastError;
+
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        try {
+            console.log(`[${operationName}] 尝试 ${attempt}/${maxRetries}, Gas Limit: ${currentGasLimit.toString()}`);
+            const tx = await txFn(currentGasLimit);
+            console.log(`[${operationName}] 提交 tx: ${tx.hash}`);
+            const rcpt = await tx.wait();
+            console.log(`[${operationName}] 成功，区块: ${rcpt.blockNumber}, Gas 使用: ${rcpt.gasUsed.toString()}`);
+            return rcpt;
+        } catch (error) {
+            lastError = error;
+            console.error(`[${operationName}] 尝试 ${attempt}/${maxRetries} 失败: ${error.message}`);
+
+            if (attempt < maxRetries) {
+                // 每次重试时增加 20% gas limit
+                currentGasLimit = currentGasLimit.mul(120).div(100);
+                console.log(`[${operationName}] 下次重试将使用 Gas Limit: ${currentGasLimit.toString()}`);
+                // 等待一小段时间再重试
+                await new Promise(resolve => setTimeout(resolve, 1000));
+            }
+        }
+    }
+
+    // 所有重试都失败
+    throw new Error(`${operationName} 在 ${maxRetries} 次尝试后仍然失败。最后错误: ${lastError.message}`);
+}
+
 async function addrInitV5(privateKey) {
     // v5 Provider 实例化
     if (!privateKey) {
@@ -75,11 +114,11 @@ async function addrInitV5(privateKey) {
         if (curAllowance.lt(ethers.constants.MaxUint256.div(2))) {
             console.log("发送 USDC approve(MaxUint256) 交易...");
 
-            // 估算 gas limit 并上浮 20%
+            // 估算 gas limit 并上浮 50%
             let gasLimit;
             try {
                 const estimatedGas = await usdc.estimateGas.approve(t.addr, ethers.constants.MaxUint256);
-                gasLimit = estimatedGas.mul(180).div(100); // 上浮 20%
+                gasLimit = estimatedGas.mul(150).div(100); // 上浮 50%
                 console.log(`[Gas Limit] 估算值: ${estimatedGas.toString()}, 使用值(上浮50%): ${gasLimit.toString()}`);
             } catch (error) {
                 console.warn(`⚠️ Gas 估算失败，使用默认值: ${error.message}`);
@@ -87,16 +126,23 @@ async function addrInitV5(privateKey) {
                 console.log(`[Gas Limit] 使用默认值: ${gasLimit.toString()}`);
             }
 
-            // 发送授权，添加 gas 参数
-            const tx = await usdc.approve(t.addr, ethers.constants.MaxUint256, {
-                maxFeePerGas: gasPrice.maxFeePerGas,
-                maxPriorityFeePerGas: gasPrice.maxPriorityFeePerGas,
-                gasLimit: gasLimit,
-                type: 2  // EIP-1559 transaction
-            });
-            console.log(`提交 tx: ${tx.hash}`);
-            const rcpt = await tx.wait();
-            console.log(`USDC approve 成功，区块: ${rcpt.blockNumber}, Gas 使用: ${rcpt.gasUsed.toString()}`);
+            // 使用重试机制发送授权
+            try {
+                await sendTxWithRetry(
+                    (gasLimitParam) => usdc.approve(t.addr, ethers.constants.MaxUint256, {
+                        maxFeePerGas: gasPrice.maxFeePerGas,
+                        maxPriorityFeePerGas: gasPrice.maxPriorityFeePerGas,
+                        gasLimit: gasLimitParam,
+                        type: 2  // EIP-1559 transaction
+                    }),
+                    "USDC approve",
+                    gasLimit,
+                    3
+                );
+            } catch (error) {
+                console.error(`USDC approve 最终失败: ${error.message}`);
+                throw error;
+            }
         } else {
             console.log("已是大额度授权，跳过 USDC approve。");
         }
@@ -108,28 +154,35 @@ async function addrInitV5(privateKey) {
         if (!approved) {
             console.log("发送 setApprovalForAll(true) 交易...");
 
-            // 估算 gas limit 并上浮 20%
+            // 估算 gas limit 并上浮 50%
             let gasLimit;
             try {
                 const estimatedGas = await ctf.estimateGas.setApprovalForAll(t.addr, true);
-                gasLimit = estimatedGas.mul(180).div(100); // 上浮 20%
-                console.log(`[Gas Limit] 估算值: ${estimatedGas.toString()}, 使用值(上浮80%): ${gasLimit.toString()}`);
+                gasLimit = estimatedGas.mul(150).div(100); // 上浮 50%
+                console.log(`[Gas Limit] 估算值: ${estimatedGas.toString()}, 使用值(上浮50%): ${gasLimit.toString()}`);
             } catch (error) {
                 console.warn(`⚠️ Gas 估算失败，使用默认值: ${error.message}`);
                 gasLimit = ethers.BigNumber.from(50000); // 备用默认值
                 console.log(`[Gas Limit] 使用默认值: ${gasLimit.toString()}`);
             }
 
-            // 添加 gas 参数
-            const tx2 = await ctf.setApprovalForAll(t.addr, true, {
-                maxFeePerGas: gasPrice.maxFeePerGas,
-                maxPriorityFeePerGas: gasPrice.maxPriorityFeePerGas,
-                gasLimit: gasLimit,
-                type: 2  // EIP-1559 transaction
-            });
-            console.log(`提交 tx: ${tx2.hash}`);
-            const rcpt2 = await tx2.wait();
-            console.log(`setApprovalForAll 成功，区块: ${rcpt2.blockNumber}, Gas 使用: ${rcpt2.gasUsed.toString()}`);
+            // 使用重试机制发送交易
+            try {
+                await sendTxWithRetry(
+                    (gasLimitParam) => ctf.setApprovalForAll(t.addr, true, {
+                        maxFeePerGas: gasPrice.maxFeePerGas,
+                        maxPriorityFeePerGas: gasPrice.maxPriorityFeePerGas,
+                        gasLimit: gasLimitParam,
+                        type: 2  // EIP-1559 transaction
+                    }),
+                    "setApprovalForAll",
+                    gasLimit,
+                    3
+                );
+            } catch (error) {
+                console.error(`setApprovalForAll 最终失败: ${error.message}`);
+                throw error;
+            }
         } else {
             console.log("已是 ERC1155 批准状态，跳过 setApprovalForAll。");
         }

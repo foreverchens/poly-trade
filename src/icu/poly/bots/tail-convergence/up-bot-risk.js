@@ -205,5 +205,3 @@ export async function getBias(
         return 0;
     }
 }
-
-console.log(await getBias('BTC'));

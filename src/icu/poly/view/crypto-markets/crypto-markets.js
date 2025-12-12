@@ -36,13 +36,13 @@ const BTC_AXIS_LABEL = "BTC 价格 (USDT)";
 const BTC_INTERVAL_MINUTES = 15;
 const BTC_INTERVAL_MS = BTC_INTERVAL_MINUTES * 60 * 1000;
 const fields = [
-    { key: "question", label: "问题", className: "col-question" },
+    { key: "slug", label: "slug", className: "col-question" },
     // { key: "outcomes", label: "结果" },
     { key: "endDate", label: "结束时间", className: "col-time" },
     { key: "topSide", label: "TOP方向" },
     { key: "topPrice", label: "TOP价格" },
-    { key: "topBestAsk", label: "TOP最优卖价", dynamic: true },
-    { key: "topBestBid", label: "TOP最优买价", dynamic: true },
+    { key: "topBestAskPriceDepth", label: "最优卖方", dynamic: true, className: "col-ask-price-depth" },
+    { key: "topBestBidPriceDepth", label: "最优买方", dynamic: true, className: "col-bid-price-depth" },
     { key: "topSpread", label: "TOP价差", dynamic: true },
     // { key: "volume", label: "交易量" },
     // { key: "liquidityNum", label: "流动性", compact: true },
@@ -95,6 +95,8 @@ const chartHistoryCache = new Map();
 const btcHistoryCache = new Map();
 const tokenBestAskCache = new Map();
 const tokenBestBidCache = new Map();
+const tokenBestBidDepthCache = new Map();
+const tokenBestAskDepthCache = new Map();
 const tokenOrderBookRequests = new Map();
 const tokenOrderBookQueue = [];
 const tokenOrderBookQueued = new Set();
@@ -311,6 +313,8 @@ function getPrimaryEventSlug(item) {
     return trimmed.length ? trimmed : null;
 }
 
+
+
 const EXCLUDED_INTERVAL_PATTERN = /(?:^|[-_\s])(4h|15m)(?:[-_\s]|$)/i;
 
 function getEventEndTimestamp(item) {
@@ -377,6 +381,16 @@ function sortMarketsByTopPrice(list) {
         const topA = Number.isFinite(a?.topPrice) ? a.topPrice : Number.NEGATIVE_INFINITY;
         const topB = Number.isFinite(b?.topPrice) ? b.topPrice : Number.NEGATIVE_INFINITY;
         return topB - topA;
+    });
+}
+
+function sortMarketsBySlug(list) {
+    return [...list].sort((a, b) => {
+        const slugA = typeof a?.slug === "string" ? a.slug.trim().toLowerCase() : "";
+        const slugB = typeof b?.slug === "string" ? b.slug.trim().toLowerCase() : "";
+        if (slugA < slugB) return -1;
+        if (slugA > slugB) return 1;
+        return 0;
     });
 }
 
@@ -519,6 +533,22 @@ function formatPrice(value, { fallback = "—", withUnit = true } = {}) {
     return withUnit ? `${scaled}%` : scaled;
 }
 
+function formatPriceDepth(value) {
+    if (!value || typeof value !== "object") return "—";
+    const { price, depth } = value;
+    const priceNum = typeof price === "number" ? price : Number(price);
+    const depthNum = typeof depth === "number" ? depth : Number(depth);
+
+    if (!Number.isFinite(priceNum) || priceNum <= 0) return "—";
+    if (!Number.isFinite(depthNum) || depthNum <= 0) {
+        return formatPrice(priceNum);
+    }
+
+    const formattedPrice = formatPrice(priceNum, { fallback: "", withUnit: true });
+    const formattedDepth = Math.floor(depthNum).toLocaleString();
+    return `${formattedPrice}@${formattedDepth}`;
+}
+
 function formatValue(value, field) {
     const key = typeof field === "string" ? field : field?.key;
     if (value === null || value === undefined || value === "") return "—";
@@ -543,10 +573,22 @@ function formatValue(value, field) {
     if (key && PRICE_FIELD_KEYS.has(key)) {
         return formatPrice(displayValue);
     }
+    if (key === "topBestBidPriceDepth" || key === "topBestAskPriceDepth") {
+        return formatPriceDepth(displayValue);
+    }
     if (key === "volume") {
         const num = typeof displayValue === "number" ? displayValue : Number(displayValue);
         if (Number.isFinite(num)) {
             return (num / 1000).toFixed(1) + "K";
+        }
+        return "—";
+    }
+    if (key === "topBestBidDepth" || key === "yesBestBidDepth" || key === "noBestBidDepth" ||
+        key === "topBestAskDepth" || key === "yesBestAskDepth" || key === "noBestAskDepth") {
+        const num = typeof displayValue === "number" ? displayValue : Number(displayValue);
+        if (Number.isFinite(num) && num > 0) {
+            // 使用compactFormatter格式化大数字，小数字直接显示
+            return num >= 1000 ? compactFormatter.format(num) : num.toLocaleString();
         }
         return "—";
     }
@@ -644,6 +686,10 @@ function enrichMarketStats(list) {
         const noAsk = resolveBestAskForToken(noTokenId, extractOutcomePrice(item, 1));
         const yesBid = resolveBestBidForToken(yesTokenId);
         const noBid = resolveBestBidForToken(noTokenId);
+        const yesBidDepth = resolveBestBidDepthForToken(yesTokenId);
+        const noBidDepth = resolveBestBidDepthForToken(noTokenId);
+        const yesAskDepth = resolveBestAskDepthForToken(yesTokenId);
+        const noAskDepth = resolveBestAskDepthForToken(noTokenId);
         const yesSpread = calculateSpread(yesAsk, yesBid);
         const noSpread = calculateSpread(noAsk, noBid);
         const { topPrice, topSide } = calculateTopPrice([yesAsk, yesBid, noAsk, noBid]);
@@ -651,8 +697,12 @@ function enrichMarketStats(list) {
             ...item,
             yesBestAsk: yesAsk,
             yesBestBid: yesBid,
+            yesBestBidDepth: yesBidDepth,
+            yesBestAskDepth: yesAskDepth,
             noBestAsk: noAsk,
             noBestBid: noBid,
+            noBestBidDepth: noBidDepth,
+            noBestAskDepth: noAskDepth,
             yesSpread,
             noSpread,
             topPrice,
@@ -677,6 +727,24 @@ function resolveBestBidForToken(tokenId, fallbackPrice = null) {
         return Number.isFinite(cached) ? cached : null;
     }
     return Number.isFinite(fallbackPrice) ? fallbackPrice : null;
+}
+
+function resolveBestBidDepthForToken(tokenId) {
+    if (!tokenId) return null;
+    if (tokenBestBidDepthCache.has(tokenId)) {
+        const cached = tokenBestBidDepthCache.get(tokenId);
+        return Number.isFinite(cached) && cached > 0 ? cached : null;
+    }
+    return null;
+}
+
+function resolveBestAskDepthForToken(tokenId) {
+    if (!tokenId) return null;
+    if (tokenBestAskDepthCache.has(tokenId)) {
+        const cached = tokenBestAskDepthCache.get(tokenId);
+        return Number.isFinite(cached) && cached > 0 ? cached : null;
+    }
+    return null;
 }
 
 function hasTokenBestQuotes(tokenId) {
@@ -727,6 +795,18 @@ function setTokenBestBid(tokenId, price, version) {
     }
 }
 
+function setTokenBestBidDepth(tokenId, depth, version) {
+    if (!tokenId || version !== orderBookVersion) return;
+    const normalized = Number.isFinite(depth) && depth > 0 ? depth : null;
+    tokenBestBidDepthCache.set(tokenId, normalized);
+}
+
+function setTokenBestAskDepth(tokenId, depth, version) {
+    if (!tokenId || version !== orderBookVersion) return;
+    const normalized = Number.isFinite(depth) && depth > 0 ? depth : null;
+    tokenBestAskDepthCache.set(tokenId, normalized);
+}
+
 function extractBestAskFromOrderBook(payload) {
     const asks = Array.isArray(payload?.asks) ? payload.asks : [];
     if (!asks.length) return null;
@@ -743,6 +823,22 @@ function extractBestBidFromOrderBook(payload) {
     return Number.isFinite(price) ? price : null;
 }
 
+function extractBestBidDepthFromOrderBook(payload) {
+    const bids = Array.isArray(payload?.bids) ? payload.bids : [];
+    if (!bids.length) return null;
+    const last = bids[bids.length - 1];
+    const size = Number(last?.size);
+    return Number.isFinite(size) && size > 0 ? size : null;
+}
+
+function extractBestAskDepthFromOrderBook(payload) {
+    const asks = Array.isArray(payload?.asks) ? payload.asks : [];
+    if (!asks.length) return null;
+    const last = asks[asks.length - 1];
+    const size = Number(last?.size);
+    return Number.isFinite(size) && size > 0 ? size : null;
+}
+
 async function fetchOrderBookBestQuotes(tokenId, version) {
     if (!tokenId) {
         return null;
@@ -755,13 +851,19 @@ async function fetchOrderBookBestQuotes(tokenId, version) {
         const data = await res.json();
         const price = extractBestAskFromOrderBook(data);
         const bid = extractBestBidFromOrderBook(data);
+        const bidDepth = extractBestBidDepthFromOrderBook(data);
+        const askDepth = extractBestAskDepthFromOrderBook(data);
         setTokenBestAsk(tokenId, price, version);
         setTokenBestBid(tokenId, bid, version);
-        return { bestAsk: price, bestBid: bid };
+        setTokenBestBidDepth(tokenId, bidDepth, version);
+        setTokenBestAskDepth(tokenId, askDepth, version);
+        return { bestAsk: price, bestBid: bid, bestBidDepth: bidDepth, bestAskDepth: askDepth };
     } catch (err) {
         console.warn("Failed to fetch order book for", tokenId, err);
         setTokenBestAsk(tokenId, null, version);
         setTokenBestBid(tokenId, null, version);
+        setTokenBestBidDepth(tokenId, null, version);
+        setTokenBestAskDepth(tokenId, null, version);
         return null;
     }
 }
@@ -2120,21 +2222,32 @@ function render(data) {
             } else if (f.dynamic) {
                 // 动态字段：根据topSide选择对应的值
                 const topSide = typeof item?.topSide === "number" ? item.topSide : null;
-                if (f.key === "topBestAsk") {
-                    value = topSide === 0 ? item.yesBestAsk : topSide === 1 ? item.noBestAsk : null;
-                } else if (f.key === "topBestBid") {
-                    value = topSide === 0 ? item.yesBestBid : topSide === 1 ? item.noBestBid : null;
+                if (f.key === "topBestBidPriceDepth") {
+                    // 合并最优买价和买方深度
+                    const bid = topSide === 0 ? item.yesBestBid : topSide === 1 ? item.noBestBid : null;
+                    const depth = topSide === 0 ? item.yesBestBidDepth : topSide === 1 ? item.noBestBidDepth : null;
+                    value = { price: bid, depth };
+                } else if (f.key === "topBestAskPriceDepth") {
+                    // 合并最优卖价和卖方深度
+                    const ask = topSide === 0 ? item.yesBestAsk : topSide === 1 ? item.noBestAsk : null;
+                    const depth = topSide === 0 ? item.yesBestAskDepth : topSide === 1 ? item.noBestAskDepth : null;
+                    value = { price: ask, depth };
                 } else if (f.key === "topSpread") {
                     value = topSide === 0 ? item.yesSpread : topSide === 1 ? item.noSpread : null;
                 } else {
                     value = item[f.key];
                 }
             } else {
-                value = item[f.key];
+                if (f.key === "slug") {
+                    // 显示market的slug
+                    value = item?.slug || null;
+                } else {
+                    value = item[f.key];
+                }
             }
             const formattedValue = formatValue(value, f);
             span.textContent = formattedValue;
-            if (f.key === "question" && typeof formattedValue === "string") {
+            if (f.key === "slug" && typeof formattedValue === "string") {
                 span.title = formattedValue;
             } else if (dateFieldRegex.test(f.key) && typeof formattedValue === "string") {
                 span.title = formattedValue;
@@ -2484,10 +2597,26 @@ function refreshView({ skipChart = false } = {}) {
     const outcomeFiltered = filterByOutcomeMode(sanitized);
     updateEventFilterOptions(outcomeFiltered);
     const byGroup = filterByEventGroup(outcomeFiltered);
-    const sorted = sortMarkets(byGroup);
+
+    // UpDown模式下按slug字母顺序升序排列
+    let sorted;
+    if (outcomeMode === "updown") {
+        sorted = sortMarketsBySlug(byGroup);
+    } else {
+        sorted = sortMarkets(byGroup);
+    }
+
     const enriched = enrichMarketStats(sorted);
     const visible = filterMarketsByTopPrice(enriched);
-    const ordered = sortMarketsByTopPrice(visible);
+
+    // UpDown模式下不按topPrice排序，保持slug排序
+    let ordered;
+    if (outcomeMode === "updown") {
+        ordered = visible;
+    } else {
+        ordered = sortMarketsByTopPrice(visible);
+    }
+
     render(ordered);
     updateStatus(ordered.length);
     lastRenderedMarkets = ordered;
@@ -2522,6 +2651,8 @@ async function load(tagId = currentTagId, options = {}) {
         orderBookVersion += 1;
         tokenBestAskCache.clear();
         tokenBestBidCache.clear();
+        tokenBestBidDepthCache.clear();
+        tokenBestAskDepthCache.clear();
         tokenOrderBookRequests.clear();
         tokenOrderBookQueue.length = 0;
         tokenOrderBookQueued.clear();

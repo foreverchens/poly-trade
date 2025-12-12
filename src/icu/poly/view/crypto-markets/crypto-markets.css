@@ -151,6 +151,16 @@ th.col-time,
 td.col-time {
     white-space: nowrap;
 }
+th.col-ask-price-depth,
+td.col-ask-price-depth {
+    min-width: 100px;
+    max-width: 120px;
+}
+th.col-bid-price-depth,
+td.col-bid-price-depth {
+    min-width: 120px;
+    max-width: 150px;
+}
 .detail-panel {
     position: fixed;
     inset: 0;

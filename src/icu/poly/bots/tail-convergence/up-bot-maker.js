@@ -20,7 +20,7 @@ import dayjs from "dayjs";
 export async function submitMakerSignal(signal) {
     const { tokenId, price, outcome, client, symbol } = signal;
 
-    const size = await client.getUsdcEBalance();
+    const size = Math.floor(await client.getUsdcEBalance());
     if (size <= 10) {
         logger.error(`[submitMakerSignal] ${symbol}余额为${size}USDC、不足10USDC、无法提交maker单`);
         return;
@@ -59,7 +59,7 @@ async function handleMakerOrder(signal) {
         if (matchedSize === originalSize) {
             logger.info(`[handleMakerOrder] ${symbol}挂单已完全成交、提交止盈`);
             // 异步处理止盈
-            signal.matchedSize = matchedSize;
+            signal.matchedSize = Math.floor(matchedSize);
             handleTakeProfit(signal).catch((err) => {
                 logger.error(`[handleMakerOrder] ${symbol}提交止盈失败、error=${err?.message ?? err}`);
             });
@@ -75,7 +75,7 @@ async function handleMakerOrder(signal) {
             logger.info(`[handleMakerOrder] ${symbol}落后最优bid超过0.002、取消挂单`);
             await client.cancelOrder(orderId);
             if(matchedSize > 0) {
-                signal.matchedSize = matchedSize;
+                signal.matchedSize = Math.floor(matchedSize);
                 handleTakeProfit(signal).catch((err) => {
                     logger.error(`[handleMakerOrder] ${symbol}提交止盈失败、error=${err?.message ?? err}`);
                 });
@@ -111,7 +111,7 @@ async function handleTakeProfit(signal) {
             await new Promise((resolve) => setTimeout(resolve, 30000));
             continue;
         }
-        const takeProfitOrder = await client.placeOrder("0.999", matchedSize, PolySide.SELL, tokenId);
+        const takeProfitOrder = await client.placeOrder("0.999", Math.floor(matchedSize), PolySide.SELL, tokenId);
         if (!takeProfitOrder?.success) {
             logger.error(
                 `[handleTakeProfit] ${symbol}提交止盈单失败、error=${takeProfitOrder?.error?.message ?? takeProfitOrder.errorMsg}`,

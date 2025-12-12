@@ -638,9 +638,9 @@ class TailConvergenceStrategy {
                     ? bias > biasThreshold  // UP信号要求正乖离率
                     : bias < -biasThreshold; // DOWN信号要求负乖离率
         if (bias !== 0 && !isBiasApproved) {
-            logArr.push(`[${this.symbol}-${this.currentLoopHour}时] 乖离率检查不通过-bias=${bias} < ${biasThreshold}`);
-            logger.info('\n\t'+logArr.join("\n\t"));
-            return null;
+            // logArr.push(`[${this.symbol}-${this.currentLoopHour}时] 乖离率检查不通过-bias=${bias} < ${biasThreshold}`);
+            // logger.info('\n\t'+logArr.join("\n\t"));
+            // return null;
         }
         logArr.push(`[${this.symbol}-${this.currentLoopHour}时] 乖离率检查通过-bias=${bias} >= ${biasThreshold}`);
 

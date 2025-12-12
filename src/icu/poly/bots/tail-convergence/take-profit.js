@@ -131,6 +131,14 @@ export class TakeProfitManager {
 
                 if (matchedSize === 0 || matchedSize < originalSize) {
                     // 未成交，或者部分成交 撤单
+                    // todo 订单价格落后于当前最优买价才撤单、不然以marker单处理
+                    const [yesBid] = await this.client.getBestPrice(takeProfitOrder.tokenId);
+                    if(yesBid <= takeProfitOrder.price) {
+                        logger.info(
+                            `[止盈] ${orderKey} 当前最优买价=${yesBid} 小于等于当前挂单价格=${takeProfitOrder.price}、跳过撤单`,
+                        );
+                        continue;
+                    }
                     try {
                         await this.client.cancelOrder(takeProfitOrder.entryOrderId);
                         cancelledCount++;

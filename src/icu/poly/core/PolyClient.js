@@ -769,7 +769,7 @@ export class PolyClient {
         }
         let markets = await this.getMarketByConditionId([...conditionIds]);
         let conditionIdMap = markets.reduce((rlt, cur) => {
-            rlt[cur.conditionId] = cur.question;
+            rlt[cur.conditionId] = cur.slug;
             return rlt;
         }, {});
 

@@ -823,6 +823,11 @@ export class PolyClient {
             throw new Error(`Failed to fetch token balance: ${error.message}`);
         }
     }
+
+    async getBalance(){
+        let client = await this.getClient();
+        return client.getBalanceAllowance({asset_type: AssetType.COLLATERAL});
+    }
 }
 export const PolySide = Side;
 export const PolyAssetType = AssetType;

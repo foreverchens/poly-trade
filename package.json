@@ -6,6 +6,8 @@
     "test": "node --test test/**/*.test.js",
     "test:single": "node --test --test-name-pattern",
     "start": "node src/icu/poly/web-server.js",
+    "start:all": "node start-all.js",
+    "stop:all": "node stop-all.js",
     "lint": "ESLINT_USE_FLAT_CONFIG=false eslint . --ext .js,.mjs,.cjs",
     "lint:fix": "ESLINT_USE_FLAT_CONFIG=false eslint . --ext .js,.mjs,.cjs --fix",
     "lint:file": "ESLINT_USE_FLAT_CONFIG=false eslint",

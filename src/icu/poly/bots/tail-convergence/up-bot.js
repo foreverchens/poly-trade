@@ -217,6 +217,8 @@ class TailConvergenceStrategy {
         this.loopState = 0;
         // 预防插针、检查持续性
         this.highCnt = 1;
+        // 0 普通模式、1 额外买入已成交、等待信号提交maker单
+        this.makerMode = 0;
     }
 
     /**
@@ -333,6 +335,8 @@ class TailConvergenceStrategy {
         this.loopState = 0;
         // 重置预防插针、检查持续性
         this.highCnt = 1;
+        // 重置maker模式
+        this.makerMode = 0;  
         logger.info(`[扫尾盘策略] 小时循环已结束\n`);
     }
 
@@ -348,14 +352,15 @@ class TailConvergenceStrategy {
             this.stopHourlyLoop();
             return;
         }
-        if (this.initialEntryDone && (this.extraEntryDone || !this.allowExtraEntryAtCeiling)) {
-            // 初始建仓 且 额外买入、则提前结束小时循环
-            logger.info(
-                `[扫尾盘策略] 所有预期建仓均已完成(额外买入=${this.allowExtraEntryAtCeiling}), 提前结束小时循环`,
-            );
-            this.stopHourlyLoop();
-            return;
-        }
+        // 如果额外买入成功、会设置makerMode为1、此时等待机会提交maker单
+        // if (this.initialEntryDone && (this.extraEntryDone || !this.allowExtraEntryAtCeiling)) {
+        //     // 初始建仓 且 额外买入、则提前结束小时循环
+        //     logger.info(
+        //         `[扫尾盘策略] 所有预期建仓均已完成(额外买入=${this.allowExtraEntryAtCeiling}), 提前结束小时循环`,
+        //     );
+        //     this.stopHourlyLoop();
+        //     return;
+        // }
         try {
             await this.tick();
         } catch (err) {
@@ -439,11 +444,14 @@ class TailConvergenceStrategy {
         }
         // 先检查maker单信号
         const  makerSignal = isMakerSignal(yesBid,yesAsk,"UP",yesTokenId) || isMakerSignal(noBid, noAsk,"DOWN",noTokenId);
-        if(makerSignal) {
+        if(this.makerMode || makerSignal) {
+            // 如果是maker模式、说明额外买入已成交、此时等待信号提交maker单
             // 如果是maker单、兼容度影响、暂还是通过高频tick处理、直接返回
             // 新修改、如果产生maker单信号、则直接提交maker单、不通过高频tick处理、同时结束小时循环
-            await submitMakerSignal(makerSignal);
-            this.stopHourlyLoop();
+            if(makerSignal) {
+                await submitMakerSignal(makerSignal);
+                this.stopHourlyLoop();
+            }
             return null;
         }
         // 如果都不是、和0.5比较、高于0.5则yes方向、低于0.5则no方向
@@ -789,6 +797,8 @@ class TailConvergenceStrategy {
             signal,
             isExtra: true,
         });
+        // 如果额外买入成功、则设置taker为true
+        this.makerMode = 1;
     }
 
     /**

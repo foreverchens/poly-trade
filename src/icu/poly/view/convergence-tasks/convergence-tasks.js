@@ -1005,6 +1005,96 @@ function getChartColor(index) {
     return CHART_COLORS[index % CHART_COLORS.length];
 }
 
+function getTotalSeriesIndex(series) {
+    return series.findIndex((s) => s.isTotal);
+}
+
+function getFirstAddressSeriesIndex(series) {
+    return series.findIndex((s) => !s.isTotal);
+}
+
+function getSelectedAddressIndices(series) {
+    const totalIndex = getTotalSeriesIndex(series);
+    return Array.from(balanceChartState.selectedSeries)
+        .filter((index) => index !== totalIndex && series[index] && !series[index].isTotal)
+        .sort((a, b) => a - b);
+}
+
+function computeAggregatedSeriesFromSelected(series) {
+    const totalIndex = getTotalSeriesIndex(series);
+    const selectedAddressIndices = getSelectedAddressIndices(series);
+    const selectedAddressSeries = selectedAddressIndices.map((idx) => series[idx]).filter(Boolean);
+
+    if (!selectedAddressSeries.length) return null;
+
+    const hourSet = new Set();
+    selectedAddressSeries.forEach((s) => {
+        s.points.forEach((p) => hourSet.add(p.time));
+    });
+    const sortedHours = Array.from(hourSet).sort((a, b) => a - b);
+
+    const perSeries = selectedAddressSeries.map((s) => {
+        const byHour = new Map();
+        s.points.forEach((p) => byHour.set(p.time, p.balance));
+        return { byHour, lastBalance: undefined };
+    });
+
+    const points = sortedHours.map((hourTime) => {
+        let total = 0;
+        perSeries.forEach((state) => {
+            if (state.byHour.has(hourTime)) {
+                state.lastBalance = state.byHour.get(hourTime);
+            }
+            if (state.lastBalance !== undefined) {
+                total += state.lastBalance;
+            }
+        });
+        return { time: hourTime, balance: total };
+    });
+
+    const baseTotal = totalIndex >= 0 ? series[totalIndex] : {};
+    const currentValue = points.length ? points[points.length - 1].balance : 0;
+
+    return {
+        ...baseTotal,
+        points,
+        currentValue,
+        label: baseTotal.label || "总余额",
+        color: baseTotal.color || "#22c55e",
+        isTotal: true,
+    };
+}
+
+function getSeriesToRender() {
+    const series = balanceChartState.allSeries;
+    const totalIndex = getTotalSeriesIndex(series);
+    const totalSelected = totalIndex >= 0 && balanceChartState.selectedSeries.has(totalIndex);
+
+    if (totalSelected) {
+        const aggregated = computeAggregatedSeriesFromSelected(series);
+        return aggregated ? [aggregated] : [];
+    }
+
+    const selectedAddressIndices = getSelectedAddressIndices(series);
+    return selectedAddressIndices.map((idx) => series[idx]).filter(Boolean);
+}
+
+function syncTotalLegendValue(chartCard) {
+    const series = balanceChartState.allSeries;
+    const totalIndex = getTotalSeriesIndex(series);
+    if (totalIndex < 0) return;
+
+    const aggregated = computeAggregatedSeriesFromSelected(series);
+    if (!aggregated) return;
+
+    const totalLegendValueEl = chartCard.querySelector(
+        '.balance-chart-legend-item.total-legend .legend-value'
+    );
+    if (totalLegendValueEl) {
+        totalLegendValueEl.textContent = formatUsdcBalance(aggregated.currentValue);
+    }
+}
+
 async function fetchBalanceHistory() {
     if (balanceChartState.loading) return;
     balanceChartState.loading = true;
@@ -1180,17 +1270,17 @@ function renderBalanceChart() {
     // 保存所有曲线数据
     balanceChartState.allSeries = series;
 
-    // 初始化选中状态：默认只显示总余额曲线
+    // 初始化选中状态：默认选中第一个地址 + 总余额
     if (balanceChartState.selectedSeries.size === 0) {
-        // 找到总余额曲线的索引（通常是最后一个）
+        const firstAddressIndex = getFirstAddressSeriesIndex(series);
         const totalIndex = series.findIndex((s) => s.isTotal);
+        if (firstAddressIndex >= 0) {
+            balanceChartState.selectedSeries.add(firstAddressIndex);
+        }
         if (totalIndex >= 0) {
             balanceChartState.selectedSeries.add(totalIndex);
-        } else {
-            // 如果没有总余额曲线，默认选中最后一条
-            if (series.length > 0) {
-                balanceChartState.selectedSeries.add(series.length - 1);
-            }
+        } else if (firstAddressIndex < 0 && series.length > 0) {
+            balanceChartState.selectedSeries.add(series.length - 1);
         }
     } else {
         // 如果已有选中状态，确保索引有效
@@ -1201,13 +1291,21 @@ function renderBalanceChart() {
             }
         });
         balanceChartState.selectedSeries = validIndices;
-        // 如果所有索引都无效，默认只显示总余额曲线
-        if (validIndices.size === 0) {
+
+        // 至少选中一个地址（总余额不计入）
+        const firstAddressIndex = getFirstAddressSeriesIndex(series);
+        if (firstAddressIndex >= 0 && getSelectedAddressIndices(series).length === 0) {
+            balanceChartState.selectedSeries.add(firstAddressIndex);
+        }
+
+        // 如果所有索引都无效，回退到默认选中
+        if (balanceChartState.selectedSeries.size === 0) {
+            if (firstAddressIndex >= 0) {
+                balanceChartState.selectedSeries.add(firstAddressIndex);
+            }
             const totalIndex = series.findIndex((s) => s.isTotal);
             if (totalIndex >= 0) {
                 balanceChartState.selectedSeries.add(totalIndex);
-            } else if (series.length > 0) {
-                balanceChartState.selectedSeries.add(series.length - 1);
             }
         }
     }
@@ -1231,6 +1329,7 @@ function createCombinedChartCard(series) {
     // 创建图例
     const legend = document.createElement("div");
     legend.className = "balance-chart-legend";
+    const aggregatedTotal = computeAggregatedSeriesFromSelected(series);
     series.forEach((s, index) => {
         const isSelected = balanceChartState.selectedSeries.has(index);
         const legendItem = document.createElement("div");
@@ -1261,7 +1360,8 @@ function createCombinedChartCard(series) {
 
         const value = document.createElement("span");
         value.className = "legend-value";
-        value.textContent = formatUsdcBalance(s.currentValue);
+        const legendValue = s.isTotal && aggregatedTotal ? aggregatedTotal.currentValue : s.currentValue;
+        value.textContent = formatUsdcBalance(legendValue);
 
         legendItem.appendChild(checkbox);
         legendItem.appendChild(dot);
@@ -1273,8 +1373,10 @@ function createCombinedChartCard(series) {
     head.appendChild(legend);
     card.appendChild(head);
 
-    // 创建合并图表（只显示选中的曲线）
-    const filteredSeries = series.filter((_, index) => balanceChartState.selectedSeries.has(index));
+    // 创建合并图表：
+    // - 未选中“总余额”时：渲染被勾选的地址曲线（多条）
+    // - 选中“总余额”时：只渲染被勾选地址汇总后的总余额曲线（单条）
+    const filteredSeries = getSeriesToRender();
 
     if (filteredSeries.length === 0) {
         const emptyMsg = document.createElement("div");
@@ -1293,13 +1395,16 @@ function createCombinedChartCard(series) {
 function handleSeriesToggle(event) {
     const index = parseInt(event.target.dataset.seriesIndex, 10);
     const legendItem = event.target.closest(".balance-chart-legend-item");
+    const series = balanceChartState.allSeries;
+    const totalIndex = getTotalSeriesIndex(series);
 
     if (event.target.checked) {
         balanceChartState.selectedSeries.add(index);
         legendItem?.classList.remove("legend-item-unselected");
     } else {
-        // 至少保留一条曲线
-        if (balanceChartState.selectedSeries.size <= 1) {
+        // 至少保留一个地址（总余额不计入）
+        const isAddress = totalIndex !== index && series[index] && !series[index].isTotal;
+        if (isAddress && getSelectedAddressIndices(series).length <= 1) {
             event.target.checked = true;
             return;
         }
@@ -1310,9 +1415,7 @@ function handleSeriesToggle(event) {
     // 重新渲染图表
     const chartCard = balanceChartContainer.querySelector(".balance-chart-item");
     if (chartCard) {
-        const filteredSeries = balanceChartState.allSeries.filter(
-            (_, idx) => balanceChartState.selectedSeries.has(idx)
-        );
+        const filteredSeries = getSeriesToRender();
 
         const oldSvg = chartCard.querySelector('[data-chart-id="balance-chart-svg"]');
         const oldEmpty = chartCard.querySelector(".chart-empty");
@@ -1337,6 +1440,8 @@ function handleSeriesToggle(event) {
                 chartCard.appendChild(newSvg);
             }
         }
+
+        syncTotalLegendValue(chartCard);
     }
 }
 
@@ -1344,6 +1449,8 @@ function buildCombinedBalanceChart(series) {
     const width = 1200;
     const height = 500;
     const padding = { top: 30, right: 80, bottom: 60, left: 20 };
+    const Y_BOTTOM_HEADROOM_RATIO = 0.05;
+    const Y_TOP_HEADROOM_RATIO = 0.10;
 
     const svg = document.createElementNS(SVG_NS, "svg");
     svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
@@ -1359,17 +1466,25 @@ function buildCombinedBalanceChart(series) {
     if (maxX > minX) {
         maxX = maxX + (maxX - minX) * 0.1;
     }
-    let minY = Math.min(...allBalances);
-    let maxY = Math.max(...allBalances);
+    const dataMinY = Math.min(...allBalances);
+    const dataMaxY = Math.max(...allBalances);
+    let minY = dataMinY;
+    let maxY = dataMaxY;
 
     if (minY === maxY) {
         const adjust = minY === 0 ? 1 : Math.abs(minY) * 0.1;
         minY -= adjust;
         maxY += adjust;
+    } else {
+        const dataRange = dataMaxY - dataMinY;
+        const usableRatio = 1 - Y_BOTTOM_HEADROOM_RATIO - Y_TOP_HEADROOM_RATIO;
+        const paddedRange = usableRatio > 0 ? dataRange / usableRatio : dataRange;
+        minY = dataMinY - paddedRange * Y_BOTTOM_HEADROOM_RATIO;
+        maxY = dataMaxY + paddedRange * Y_TOP_HEADROOM_RATIO;
     }
 
     // 计算整数刻度
-    function calculateIntegerTicks(min, max) {
+    function calculateIntegerTicksWithin(min, max) {
         const range = max - min;
         if (range <= 0) {
             return { ticks: [Math.round(min)], minTick: Math.round(min), maxTick: Math.round(max), interval: 1 };
@@ -1387,23 +1502,24 @@ function buildCombinedBalanceChart(series) {
             interval = magnitude * 10;
         }
 
-        // 计算起始和结束的整数刻度
-        const startTick = Math.floor(min / interval) * interval;
-        const endTick = Math.ceil(max / interval) * interval;
+        // 计算起始和结束的整数刻度（限制在可视范围内）
+        const startTick = Math.ceil(min / interval) * interval;
+        const endTick = Math.floor(max / interval) * interval;
 
         // 生成整数刻度数组
         const ticks = [];
-        for (let tick = startTick; tick <= endTick; tick += interval) {
-            ticks.push(tick);
+        if (startTick <= endTick) {
+            for (let tick = startTick; tick <= endTick; tick += interval) {
+                ticks.push(tick);
+            }
+        } else {
+            ticks.push(Math.round((min + max) / 2));
         }
 
         return { ticks, minTick: startTick, maxTick: endTick, interval };
     }
 
-    const { ticks, minTick, maxTick } = calculateIntegerTicks(minY, maxY);
-    // 使用整数刻度范围更新 minY 和 maxY
-    minY = minTick;
-    maxY = maxTick;
+    const { ticks } = calculateIntegerTicksWithin(minY, maxY);
 
     const chartWidth = width - padding.left - padding.right;
     const chartHeight = height - padding.top - padding.bottom;

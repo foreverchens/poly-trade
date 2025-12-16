@@ -416,7 +416,7 @@ export class PolyClient {
         let dataArr = response?.data;
         dataArr = dataArr.filter((ele) => {
             // 过滤掉15min和4h级别的数据
-            if(ele.slug.includes('15m') || ele.slug.includes('4h')) {
+            if(ele.slug.includes('15m') || ele.slug.includes('4h') || ele.slug.includes('5m')) {
                 return false;
             }
             return true;

@@ -15,12 +15,31 @@ import dayjs from "dayjs";
  * @param {number} signal.price
  * @param {string} signal.outcome
  * @param {import("../../core/PolyClient.js").PolyClient} signal.client
+ * @param {number|null|undefined} localUsdcEBalance up-bot内部维护的USDC余额(可选)
  * @returns {Promise<void>}
  */
-export async function submitMakerSignal(signal) {
+export async function submitMakerSignal(signal, localUsdcEBalance) {
     const { tokenId, price, outcome, client, symbol } = signal;
 
-    const size = Math.floor(await client.getUsdcEBalance());
+    let apiUsdcEBalance;
+    try {
+        apiUsdcEBalance = Number(await client.getUsdcEBalance());
+    } catch (err) {
+        apiUsdcEBalance = null;
+        logger.error(`[submitMakerSignal] ${symbol}获取USDC余额失败、error=${err?.message ?? err}`);
+    }
+
+    const localBalance =
+        typeof localUsdcEBalance === "number" && Number.isFinite(localUsdcEBalance) ? localUsdcEBalance : null;
+    const apiBalance = typeof apiUsdcEBalance === "number" && Number.isFinite(apiUsdcEBalance) ? apiUsdcEBalance : null;
+    const effectiveBalance =
+        localBalance !== null && apiBalance !== null
+            ? Math.min(localBalance, apiBalance)
+            : localBalance !== null
+              ? localBalance
+              : apiBalance ?? 0;
+
+    const size = Math.floor(effectiveBalance);
     if (size <= 10) {
         logger.error(`[submitMakerSignal] ${symbol}余额为${size}USDC、不足10USDC、无法提交maker单`);
         return;

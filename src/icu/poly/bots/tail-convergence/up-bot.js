@@ -1,25 +1,25 @@
 import "dotenv/config";
 import dayjs from "dayjs";
 import cron from "node-cron";
-import { buildClient, nextClient } from "../../core/poly-client-manage.js";
-import { threshold, listLimitKlines, get1HourAmp } from "./common.js";
-import { TakeProfitManager } from "./take-profit.js";
-import { UpBotCache } from "./up-bot-cache.js";
-import { saveOrder } from "../../db/repository.js";
+import {buildClient, nextClient} from "../../core/poly-client-manage.js";
+import {threshold, listLimitKlines, get1HourAmp} from "./common.js";
+import {TakeProfitManager} from "./take-profit.js";
+import {UpBotCache} from "./up-bot-cache.js";
+import {saveOrder} from "../../db/repository.js";
 import logger from "../../core/Logger.js";
-import { loadConvergenceTaskConfigs } from "../../data/convergence-up.config.js";
-import { getZ } from "../../core/z-score.js";
-import { PolySide } from "../../core/PolyClient.js";
-import { checkDirectionStability, checkPricePositionAndTrend, getBias } from "./up-bot-risk.js";
-import { submitMakerSignal } from "./up-bot-maker.js";
+import {loadConvergenceTaskConfigs} from "../../data/convergence-up.config.js";
+import {getZ} from "../../core/z-score.js";
+import {PolySide} from "../../core/PolyClient.js";
+import {checkDirectionStability, checkPricePositionAndTrend, getBias} from "./up-bot-risk.js";
+import {submitMakerSignal} from "./up-bot-maker.js";
 // 基于流动性计算下次tick 时间间隔
 const delay = (liq, t = 100) => {
     const m = liq / t;
     return m <= 2
         ? 1000
         : m >= 10
-          ? 10000
-          : 1000 + (9000 * Math.log(1 + 4 * ((m - 2) / 8))) / Math.log(5);
+            ? 10000
+            : 1000 + (9000 * Math.log(1 + 4 * ((m - 2) / 8))) / Math.log(5);
 };
 
 class TailConvergenceStrategy {
@@ -70,7 +70,7 @@ class TailConvergenceStrategy {
      * 将嵌套配置展平为一级对象（向后兼容现有代码逻辑）
      */
     flattenConfig(taskConfig) {
-        const { task, schedule, position, riskControl, extra } = taskConfig;
+        const {task, schedule, position, riskControl, extra} = taskConfig;
 
         // 解析 extra 字段（JSON 字符串）
         let extraConfig = {};
@@ -205,6 +205,9 @@ class TailConvergenceStrategy {
         this.initialEntryDone = false;
         this.extraEntryDone = false;
 
+        // 本地维护可用USDC余额（用于规避链上/接口余额延迟导致的超额下单）
+        this.localUsdcEBalance = null;
+
         // 主循环 setTimeout 句柄
         this.loopTimer = null;
         // 主循环是否正在运行
@@ -301,11 +304,12 @@ class TailConvergenceStrategy {
             return;
         }
         await this.updateTaskConfig();
+        await this.refreshLocalUsdcEBalance();
         this.runTickLoop();
     }
 
     async updateTaskConfig() {
-        const taskConfigs = await loadConvergenceTaskConfigs({ refresh: true });
+        const taskConfigs = await loadConvergenceTaskConfigs({refresh: true});
         const taskConfig = taskConfigs.find((config) => config.task.slug === this.slugTemplate);
         if (!taskConfig) {
             logger.error(`[扫尾盘策略] 未找到任务配置: ${this.slugTemplate}`);
@@ -314,6 +318,23 @@ class TailConvergenceStrategy {
         const config = this.flattenConfig(taskConfig);
         this.initializeConfig(config);
         logger.info(`[扫尾盘策略] 任务配置更新完毕: ${this.slugTemplate}`);
+    }
+
+    async refreshLocalUsdcEBalance() {
+        if (!this.client) {
+            this.localUsdcEBalance = null;
+            return;
+        }
+        try {
+            const usdcEBalance = Number(await this.client.getUsdcEBalance());
+            if (!Number.isFinite(usdcEBalance)) {
+                throw new Error(`invalid usdc eBalance: ${usdcEBalance}`);
+            }
+            this.localUsdcEBalance = usdcEBalance;
+        } catch (err) {
+            logger.error(`[扫尾盘策略] 获取USDC余额失败: ${err?.message ?? err}`);
+            this.localUsdcEBalance = null;
+        }
     }
 
     /**
@@ -336,7 +357,8 @@ class TailConvergenceStrategy {
         // 重置预防插针、检查持续性
         this.highCnt = 1;
         // 重置maker模式
-        this.makerMode = 0;  
+        this.makerMode = 0;
+        this.localUsdcEBalance = null;
         logger.info(`[扫尾盘策略] 小时循环已结束\n`);
     }
 
@@ -347,7 +369,7 @@ class TailConvergenceStrategy {
         if (!this.loopActive) {
             return;
         }
-        if (dayjs().hour() !== this.currentLoopHour && dayjs().hour != 4) {
+        if (dayjs().hour() !== this.currentLoopHour || dayjs().hour() === 4 || dayjs().hour() === 22) {
             // 美股闭盘时间不做
             this.stopHourlyLoop();
             return;
@@ -383,13 +405,13 @@ class TailConvergenceStrategy {
             await this.handleSignal(signal);
             // 统一在 handleSignal 执行完毕后输出日志
             if (signal.logArr && signal.logArr.length > 0) {
-                if(!signal.completed && this.lastLogTime && dayjs().unix() - this.lastLogTime < 10) {
+                if (!signal.completed && this.lastLogTime && dayjs().unix() - this.lastLogTime < 10) {
                     // 10秒内不重复输出日志、如果信号已完成、则不输出日志
                     return;
                 }
                 this.lastLogTime = dayjs().unix();
                 // 输出日志
-                logger.info('\n\t'+signal.logArr.join("\n\t"));
+                logger.info('\n\t' + signal.logArr.join("\n\t"));
             }
         }
     }
@@ -427,8 +449,8 @@ class TailConvergenceStrategy {
         const [noBid, noAsk] = await this.cache.getBestPrice(noTokenId);
         // 先默认yes方向为top方向
         // 如果yesAsk大于0.99、或者 yesAsk为0、且yesBid>=0.98 表明高确定事件、以maker单入场
-        const isMakerSignal = (bid,ask,outcome,tokenId) =>{
-            if(ask > 0.99 || (ask === 0 && bid >= 0.95)) {
+        const isMakerSignal = (bid, ask, outcome, tokenId) => {
+            if (ask > 0.99 || (ask === 0 && bid >= 0.95)) {
                 // 如果大于0.99、且小于0.998、说明tickSize为0.001、marker价格为 bestBid+0.001、否则为0.99
                 return {
                     isMaker: true,
@@ -443,13 +465,13 @@ class TailConvergenceStrategy {
             return null;
         }
         // 先检查maker单信号
-        const  makerSignal = isMakerSignal(yesBid,yesAsk,"UP",yesTokenId) || isMakerSignal(noBid, noAsk,"DOWN",noTokenId);
-        if(this.makerMode || makerSignal) {
+        const makerSignal = isMakerSignal(yesBid, yesAsk, "UP", yesTokenId) || isMakerSignal(noBid, noAsk, "DOWN", noTokenId);
+        if (this.makerMode || makerSignal) {
             // 如果是maker模式、说明额外买入已成交、此时等待信号提交maker单
             // 如果是maker单、兼容度影响、暂还是通过高频tick处理、直接返回
             // 新修改、如果产生maker单信号、则直接提交maker单、不通过高频tick处理、同时结束小时循环
-            if(makerSignal) {
-                await submitMakerSignal(makerSignal);
+            if (makerSignal) {
+                await submitMakerSignal(makerSignal, this.localUsdcEBalance);
                 this.stopHourlyLoop();
             }
             return null;
@@ -510,7 +532,7 @@ class TailConvergenceStrategy {
          * 分支A (常规): 非尾部行情、且流动性充足、校验Z-Score、满足即为常规信号
          * 分支B (尾部): 尾部行情、流动性下降 -> 加速扫描、校验流动性是否充足、不足则触发流动性信号
          */
-        // 使用默认阈值 (通常是1000) 检查基础流动性 检查卖方流动性是否充足
+            // 使用默认阈值 (通常是1000) 检查基础流动性 检查卖方流动性是否充足
         const asksLiq = await this.cache.getAsksLiq(topTokenId);
         if (asksLiq < 1) {
             logger.error(`[${this.symbol}-${this.currentLoopHour}时] 卖方流动性为0,结束信号`);
@@ -532,7 +554,7 @@ class TailConvergenceStrategy {
             if (zVal < this.zMin) {
                 if (topPrice > 0.97 && zVal > this.zMin * 0.8) {
                     logArr.push(`[${this.symbol}-${this.currentLoopHour}时] 常规信号-zVal不达标、asksLiq=${asksLiq}、zVal=${zVal} < ${this.zMin}`);
-                    logger.info('\n\t'+logArr.join("\n\t"));
+                    logger.info('\n\t' + logArr.join("\n\t"));
                 }
                 return null;
             }
@@ -551,7 +573,7 @@ class TailConvergenceStrategy {
         if (topPrice > this.triggerPriceGt || topPrice < priceThreshold) {
             if (topPrice > 0.97) {
                 logArr.push(`[${this.symbol}-${this.currentLoopHour}时] 入场价格检查失败-topPrice=${topPrice} not in range [${priceThreshold}, ${this.triggerPriceGt}]`);
-                logger.info('\n\t'+logArr.join("\n\t"));
+                logger.info('\n\t' + logArr.join("\n\t"));
             }
             return null;
         }
@@ -560,8 +582,9 @@ class TailConvergenceStrategy {
         // UpDown事件：波动率检查
         // 常规信号、检查波动率是否大于 ampMin、流动性信号则跳过
         const amp = await get1HourAmp(this.symbol);
-        if (!isLiquiditySignal && amp < this.ampMin) {
-            logArr.push(`[${this.symbol}-${this.currentLoopHour}时] 常规信号-波动率不达标、amp=${amp.toFixed(4)} < ${this.ampMin}`);
+        const eAmpMin = isLiquiditySignal ? this.ampMin / 2 : this.ampMin;
+        if (amp < eAmpMin) {
+            logArr.push(`[${this.symbol}-${this.currentLoopHour}时] 常规信号-波动率不达标、amp=${amp.toFixed(4)} < ${eAmpMin}`);
             logger.info(logArr.join("\n\t"));
             return null;
         }
@@ -577,21 +600,21 @@ class TailConvergenceStrategy {
         const candidate =
             yesAsk >= noAsk
                 ? {
-                      tokenId: yesTokenId,
-                      price:
-                          canUseMaker && yesAsk - yesBid > 0.02 && !isLiquiditySignal
-                              ? Math.ceil(((yesAsk + yesBid) / 2) * 100) / 100 // 价差较大且时间充裕、尝试做maker单
-                              : yesAsk, // 价差较小或时间紧迫、直接taker单
-                      outcome: "UP",
-                  }
+                    tokenId: yesTokenId,
+                    price:
+                        canUseMaker && yesAsk - yesBid > 0.02 && !isLiquiditySignal
+                            ? Math.ceil(((yesAsk + yesBid) / 2) * 100) / 100 // 价差较大且时间充裕、尝试做maker单
+                            : yesAsk, // 价差较小或时间紧迫、直接taker单
+                    outcome: "UP",
+                }
                 : {
-                      tokenId: noTokenId,
-                      price:
-                          canUseMaker && noAsk - noBid > 0.02 && !isLiquiditySignal
-                              ? Math.ceil(((noAsk + noBid) / 2) * 100) / 100 // 价差较大且时间充裕、尝试做maker单
-                              : noAsk, // 价差较小或时间紧迫、直接taker单
-                      outcome: "DOWN",
-                  };
+                    tokenId: noTokenId,
+                    price:
+                        canUseMaker && noAsk - noBid > 0.02 && !isLiquiditySignal
+                            ? Math.ceil(((noAsk + noBid) / 2) * 100) / 100 // 价差较大且时间充裕、尝试做maker单
+                            : noAsk, // 价差较小或时间紧迫、直接taker单
+                    outcome: "DOWN",
+                };
 
         // 增加风控检查
         // 方向稳定性、价格位置、价格趋势检查
@@ -602,10 +625,10 @@ class TailConvergenceStrategy {
         });
         logArr.push(`[${this.symbol}-${this.currentLoopHour}时] 方向稳定性检查-avgWeiPrice=${avgWeiPrice}`);
         if (avgWeiPrice === 0) {
-            logger.info('\n\t'+logArr.join("\n\t"));
+            logger.info('\n\t' + logArr.join("\n\t"));
             return null;
         }
-            // 基于剩余时间进行非线性加权
+        // 基于剩余时间进行非线性加权
         // 最后3分钟（180秒）时加权系数为0.03，最后1分钟（60秒）时加权系数为0.1
         // 60秒之后保持0.1不再增加
         if (secondsToEnd > 0 && secondsToEnd < 180) {
@@ -618,12 +641,12 @@ class TailConvergenceStrategy {
             avgWeiPrice = avgWeiPrice + timeWeight;
         }
         // 针对流动性信号进行加权（提高通过率）
-        if(isLiquiditySignal) {
+        if (isLiquiditySignal) {
             avgWeiPrice = avgWeiPrice + this.liquiditySignalWeight;
         }
-        if(avgWeiPrice < this.weightedThreshold) {
+        if (avgWeiPrice < this.weightedThreshold) {
             logArr.push(`[${this.symbol}-${this.currentLoopHour}时] 方向稳定性检查不通过-avgWeiPrice=${avgWeiPrice} < ${this.weightedThreshold}`);
-            logger.info('\n\t'+logArr.join("\n\t"));
+            logger.info('\n\t' + logArr.join("\n\t"));
             return null;
         }
 
@@ -635,7 +658,7 @@ class TailConvergenceStrategy {
         });
         logArr.push(`[${this.symbol}-${this.currentLoopHour}时] 价格位置和趋势检查-${priceCheck.reason}`);
         if (!priceCheck.allowed) {
-            logger.info('\n\t'+logArr.join("\n\t"));
+            logger.info('\n\t' + logArr.join("\n\t"));
             return null;
         }
 
@@ -643,8 +666,8 @@ class TailConvergenceStrategy {
         const bias = await getBias(this.symbol);
         const biasThreshold = 0.05;
         const isBiasApproved = candidate.outcome === "UP"
-                    ? bias > biasThreshold  // UP信号要求正乖离率
-                    : bias < -biasThreshold; // DOWN信号要求负乖离率
+            ? bias > biasThreshold  // UP信号要求正乖离率
+            : bias < -biasThreshold; // DOWN信号要求负乖离率
         if (bias !== 0 && !isBiasApproved) {
             // logArr.push(`[${this.symbol}-${this.currentLoopHour}时] 乖离率检查不通过-bias=${bias} < ${biasThreshold}`);
             // logger.info('\n\t'+logArr.join("\n\t"));
@@ -687,19 +710,19 @@ class TailConvergenceStrategy {
 
         // 1. 配置开关检查
         if (!this.allowExtraEntryAtCeiling) {
-            return { allowed: false, reason: "配置不允许额外买入" };
+            return {allowed: false, reason: "配置不允许额外买入"};
         }
 
         // 2. 只允许一次额外买入
         if (this.extraEntryDone) {
-            return { allowed: false, reason: "已用过额外买入" };
+            return {allowed: false, reason: "已用过额外买入"};
         }
 
         // 先检查检查流动性和价格、在进行其他复杂检查
         // 只要流动性尚且充沛或者价格未抵达最高触发价格、就不进行额外买入
         const chosenAsksLiq = await this.cache.getAsksLiq(signal.chosen.tokenId);
         if (chosenAsksLiq < 1) {
-            return { allowed: false, reason: "卖方流动性为0,结束信号" };
+            return {allowed: false, reason: "卖方流动性为0,结束信号"};
         }
         // 美盘时间 为0.99、其他时间为0.98、美盘时间范围为22:00-05:00
         const isAmericanTime = dayjs().hour() >= 22 || dayjs().hour() <= 5;
@@ -718,7 +741,10 @@ class TailConvergenceStrategy {
         // 默认是0.75、额外买入的话 要求高于阈值的1.1倍
         const weiAvgPriceThreshold = Number((this.weightedThreshold * 1.1).toFixed(4));
         if (signal.avgWeiPrice && signal.avgWeiPrice < weiAvgPriceThreshold) {
-            return { allowed: false, reason: `加权平均价格${signal.avgWeiPrice}小于阈值${weiAvgPriceThreshold}，不进行额外买入` };
+            return {
+                allowed: false,
+                reason: `加权平均价格${signal.avgWeiPrice}小于阈值${weiAvgPriceThreshold}，不进行额外买入`
+            };
         }
 
         // const priceCheck = await checkPricePositionAndTrend({
@@ -732,7 +758,7 @@ class TailConvergenceStrategy {
 
         // 3. 流动性信号：直接通过所有检查
         if (signal.liquiditySignal) {
-            return { allowed: true, reason: "流动性信号触发,跳过常规风控检查" };
+            return {allowed: true, reason: "流动性信号触发,跳过常规风控检查"};
         }
 
         signal.logArr.push(`[${this.symbol}-${this.currentLoopHour}时] 风控检查通过: 价格${price}>=${triggerPriceGt} 或流动性已经不足(chosenAsksLiq=${chosenAsksLiq} <= ${this.liquiditySufficientThreshold})`);
@@ -811,7 +837,7 @@ class TailConvergenceStrategy {
      * @param {boolean} param0.isExtra
      * @returns
      */
-    async openPosition({ tokenId, price, sizeUsd, signal, isExtra }) {
+    async openPosition({tokenId, price, sizeUsd, signal, isExtra}) {
         let logArr = signal.logArr;
         const sizeShares = Math.floor(sizeUsd / price);
         logArr.push(`[${this.symbol}-${this.currentLoopHour}时] 建仓 ->
@@ -845,15 +871,16 @@ class TailConvergenceStrategy {
                 this.client = await nextClient(this.pkIdx, this.client);
                 if (!this.client) {
                     logArr.push(`[${this.symbol}-${this.currentLoopHour}时] 切换到下一个PolyClient实例失败，结束任务`);
-                    logger.info('\n\t'+logArr.join("\n\t"));
+                    logger.info('\n\t' + logArr.join("\n\t"));
                     this.stopHourlyLoop();
                     return;
                 }
                 this.pkIdx = this.pkIdx + 1;
                 this.tpManager.client = this.client;
                 this.cache.client = this.client;
+                await this.refreshLocalUsdcEBalance();
                 // 切换后重新建仓
-                await this.openPosition({ tokenId, price, sizeUsd, signal, isExtra });
+                await this.openPosition({tokenId, price, sizeUsd, signal, isExtra});
                 return;
             }
             logArr.push(`[${this.symbol}-${this.currentLoopHour}时] 建仓被拒绝:${entryOrder.error}`);
@@ -862,6 +889,10 @@ class TailConvergenceStrategy {
         const orderId = entryOrder.orderID;
         logArr.push(`[${this.symbol}-${this.currentLoopHour}时] ✅ 建仓成功,订单号=${orderId}`);
         signal.completed = true;
+
+        if (Number.isFinite(this.localUsdcEBalance)) {
+            this.localUsdcEBalance = Math.max(0, this.localUsdcEBalance - sizeShares);
+        }
 
         // 建仓后进入止盈队列、由止盈cron在事件结束后处理
         const takeProfitOrder = {
@@ -905,4 +936,4 @@ class TailConvergenceStrategy {
     }
 }
 
-export { TailConvergenceStrategy };
+export {TailConvergenceStrategy};

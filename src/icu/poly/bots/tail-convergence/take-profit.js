@@ -131,7 +131,6 @@ export class TakeProfitManager {
 
                 if (matchedSize === 0 || matchedSize < originalSize) {
                     // 未成交，或者部分成交 撤单
-                    // todo 订单价格落后于当前最优买价才撤单、不然以marker单处理
                     const [yesBid] = await this.client.getBestPrice(takeProfitOrder.tokenId);
                     logger.info(
                         `[止盈] ${orderKey} 当前最优买价=${yesBid}、当前挂单价格=${order.price}`,
@@ -238,14 +237,17 @@ export class TakeProfitManager {
                 size,
                 PolySide.SELL,
                 takeProfitOrder.tokenId,
-            );
+            ).catch(err=>{
+                logger.error("place order failed", err)
+                return null;
+            });
 
             if (!takeProfitOrderResp?.success) {
                 logger.info(
                     `[止盈] ${orderKey} 止盈订单被拒绝`,
                     takeProfitOrderResp?.message ?? takeProfitOrderResp.errorMsg,
                 );
-                throw new Error(`止盈订单被拒绝: ${takeProfitOrderResp?.message ?? takeProfitOrderResp.errorMsg}`);
+                return false;
             }
 
             const takeProfitOrderId = takeProfitOrderResp.orderID;

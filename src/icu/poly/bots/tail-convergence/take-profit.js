@@ -1,7 +1,7 @@
 import dayjs from "dayjs";
 import cron from "node-cron";
-import { PolySide } from "../../core/PolyClient.js";
-import { updateOrderMatchedAndProfit, updateTakeProfit } from "../../db/repository.js";
+import {PolySide} from "../../core/PolyClient.js";
+import {updateOrderMatchedAndProfit, updateTakeProfit} from "../../db/repository.js";
 import logger from "../../core/Logger.js";
 
 export class TakeProfitManager {
@@ -13,10 +13,12 @@ export class TakeProfitManager {
         this.takeProfitOrders = [];
         this.takeProfitCronTask = null;
         this.takeProfitTimeoutId = null;
+        this.takeProfitTickMs = 30000;
     }
 
     addOrder(order) {
         this.takeProfitOrders.push(order);
+        this.startTakeProfitLoop();
         logger.info(
             `[${order.signal.marketSlug}] 已加入止盈队列,当前止盈队列长度=${this.takeProfitOrders.length}`,
         );
@@ -68,7 +70,7 @@ export class TakeProfitManager {
 
                 if (hasPendingOrders) {
                     // 还有待处理订单，30秒后继续
-                    this.takeProfitTimeoutId = setTimeout(scheduleNext, 30000);
+                    this.takeProfitTimeoutId = setTimeout(scheduleNext, this.takeProfitTickMs);
                 } else {
                     // 没有待处理订单，停止调度
                     this.takeProfitTimeoutId = null;
@@ -76,7 +78,7 @@ export class TakeProfitManager {
             } catch (err) {
                 logger.error(`[扫尾盘策略] 止盈循环调度异常`, err?.message ?? err);
                 // 即使出错也继续调度，避免遗漏
-                this.takeProfitTimeoutId = setTimeout(scheduleNext, 30000);
+                this.takeProfitTimeoutId = setTimeout(scheduleNext, this.takeProfitTickMs);
             }
         };
 
@@ -103,6 +105,7 @@ export class TakeProfitManager {
         let takeProfitCount = 0;
         let errorCount = 0;
         let skippedCount = 0;
+        let nextRunTickTime = this.takeProfitTickMs;
         //  合并止盈不可行、基础建仓和额外建仓买入参数可能不一致、无法合并
         for (const takeProfitOrder of pendingOrders) {
             if (takeProfitOrder.error) {
@@ -129,13 +132,14 @@ export class TakeProfitManager {
                     `[止盈] ${orderKey} 成交情况: ${order.outcome.toUpperCase()}@${matchedSize}/${originalSize}`,
                 );
 
+                const [yesBid] = await this.client.getBestPrice(takeProfitOrder.tokenId);
+                // 未成交 或者部分成交检查
                 if (matchedSize === 0 || matchedSize < originalSize) {
                     // 未成交，或者部分成交 撤单
-                    const [yesBid] = await this.client.getBestPrice(takeProfitOrder.tokenId);
                     logger.info(
                         `[止盈] ${orderKey} 当前最优买价=${yesBid}、当前挂单价格=${order.price}`,
                     );
-                    if(yesBid <= order.price) {
+                    if (yesBid <= order.price) {
                         logger.info(
                             `[止盈] ${orderKey} 当前最优买价=${yesBid} 小于等于当前挂单价格=${order.price}、跳过撤单`,
                         );
@@ -167,12 +171,40 @@ export class TakeProfitManager {
                         );
                     }
                     processedCount++;
-                    if(matchedSize < 1) {
+                    if (matchedSize < 1) {
                         // 事件结束、未成交、视为错误
                         takeProfitOrder.error = "未成交";
                         continue;
                     }
                     // 部分成交、继续处理
+                }
+
+                // 止损判断、如果真的跌破、肯定是全部成交、只需要判断订单成交价格 是否高于当前最优bid价格超过0.02、超过则提高tick频率
+                // 从30秒提高到最快3s、最优bid小于0.9时 触发刚损、不改DB、最少代码 实现所需功能
+                const entryPrice = Number(order.price);
+                if (entryPrice > 0 && yesBid > 0) {
+                    nextRunTickTime = Math.min(entryPrice - yesBid >= 0.02 ? 3000 : 30000,nextRunTickTime);
+                    logger.info(`${orderKey} 当前最优买价${yesBid} 小于订单价格${entryPrice} 提高监控频率`)
+                    if (yesBid < 0.9) {
+                        logger.info(`${orderKey} 当前最优卖价跌破0.9、触发刚损、刚损数量:${matchedSize}`)
+                        const stopLossResp = await this.client.placeOrder(
+                            yesBid - 0.05, //模拟市价平仓
+                            matchedSize,
+                            PolySide.SELL,
+                            takeProfitOrder.tokenId,
+                        ).catch((err) => {
+                            logger.info(`${orderKey} 当前最优卖价跌破0.9、触发刚损、刚损失败${err}`);
+                            return null;
+                        });
+                        if (stopLossResp?.success) {
+                            takeProfitOrder.takeProfitOrderId = stopLossResp.orderID;
+                            logger.info(
+                                `[止盈] ${orderKey} ✅ 触发刚损, 订单号=${stopLossResp.orderID}`,
+                            );
+                        }
+                        processedCount++;
+                        continue;
+                    }
                 }
 
                 // 完全成交，执行止盈
@@ -193,6 +225,8 @@ export class TakeProfitManager {
                 takeProfitOrder.error = err?.message ?? err;
             }
         }
+
+        this.takeProfitTickMs = nextRunTickTime;
 
         // logger.info(
         //     `[止盈] 处理完成: 总计=${processedCount}, 已止盈=${takeProfitCount}, 已撤单=${cancelledCount}, 跳过=${skippedCount}, 错误=${errorCount}`,
@@ -237,7 +271,7 @@ export class TakeProfitManager {
                 size,
                 PolySide.SELL,
                 takeProfitOrder.tokenId,
-            ).catch(err=>{
+            ).catch(err => {
                 logger.error("place order failed", err)
                 return null;
             });
@@ -279,4 +313,3 @@ export class TakeProfitManager {
         }
     }
 }
-

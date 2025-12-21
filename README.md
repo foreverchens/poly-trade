@@ -8,7 +8,7 @@
 - **自动做市机器人** - 基于订单簿深度的动态报价做市
 - **网格交易机器人** - 单市场网格策略，系统化低买高卖
 - **扫尾收敛策略** - 事件驱动的加密货币市场收敛交易
-  - Up Bot: 追踪比特币/加密货币"涨跌"市场
+  - Up Bot: 专注加密货币"涨跌"类型尾盘策略（Up/Down）
   - Yes Bot: 通用的是/否市场收敛策略
 
 ### 分析与监控
@@ -85,24 +85,26 @@ npx prisma db push
 
 ### 配置
 
-在项目根目录创建 `.env` 文件：
+目前 `.env` 仅用于数据库连接（如 `DATABASE_URL="file:./dev.db"`）。交易相关环境变量从 `~/.zshrc`（或你的 shell 配置文件）导出。
 
-```env
+建议在 `~/.zshrc` 中配置：
+
+```bash
 # 钱包配置
-poly_mnemonic="你的 12 个单词助记词"
-poly_mnemonic_idx=0
+export poly_mnemonic="你的 12 个单词助记词"
+export poly_mnemonic_idx=0
 
 # 可选：覆盖默认端点
-RPC_URL=https://polygon-rpc.com
-# CLOB_HOST=https://clob.polymarket.com
+export RPC_URL=https://polygon-rpc.com
+# export CLOB_HOST=https://clob.polymarket.com
 
 # 服务器配置
-PORT=3001
-BTC_PRICE_SOURCE=https://api.binance.com/api/v3/klines
-BTC_PRICE_SYMBOL=BTCUSDT
+export PORT=3001
+export BTC_PRICE_SOURCE=https://api.binance.com/api/v3/klines
+export BTC_PRICE_SYMBOL=BTCUSDT
 ```
 
-⚠️ **安全警告**: 切勿将 `.env` 文件或私钥提交到版本控制系统！
+⚠️ **安全警告**: 切勿将私钥或助记词写入仓库，建议仅存在本机 shell 配置中！
 
 ## 🎯 使用方法
 
@@ -273,8 +275,81 @@ PUT /api/bot-orders/{id}
 4. 管理止盈和风险控制
 
 **特化版本**:
-- **Up Bot**: 专为比特币"高于/低于"每日市场优化
+- **Up Bot**: 专为加密货币 Up/Down 市场优化
 - **Yes Bot**: 通用的是/否市场收敛
+
+### 4. Up Bot 涨跌类型尾盘策略（重点）
+
+**适用市场**: 以小时级别的 Up/Down 事件为主（如 `bitcoin-up-or-down-...`、`ethereum-up-or-down-...`）。
+
+**核心思路**:
+- **尾盘入场**: 只在接近结算时段扫描，降低信息噪音。
+- **多信号确认**: `z-score` 偏离、1小时振幅、动态阈值函数共同触发。
+- **流动性与反转风控**: 检查卖盘流动性、插针持续性、价格位置与短期趋势。
+- **分层建仓**: 初始建仓 + 可选额外买入（allowExtraEntryAtCeiling）。
+- **止盈机制**: 固定止盈价 `takeProfitPrice`，由独立监控器执行。
+
+**主要参数 (DB 配置项)**:
+- `positionSizeUsdc` / `extraSizeUsdc`: 初始与额外建仓金额
+- `triggerPriceGt`: 超过该价格不建仓（顶区保护）
+- `zMin` / `ampMin`: 统计与波动门槛
+- `maxMinutesToEnd`: 最大剩余分钟数
+- `takeProfitPrice`: 止盈挂单价格
+- `liquidity.sufficientThreshold`: 卖盘流动性阈值
+- `spikeProtection.count`: 插针持续性检查次数
+- `schedule.cronExpression`: 扫描调度窗口
+- `extra` (JSON 字符串): `weightedThreshold`、`pricePositionThreshold`、`liquiditySignalWeight`
+
+---
+
+## 🧩 Up Bot 个人配置与使用
+
+### 1) 环境变量
+
+在 `~/.zshrc` 中准备基础密钥配置（Up Bot 依赖助记词派生地址）：
+
+```bash
+export poly_mnemonic="你的 12 个单词助记词"
+export poly_mnemonic_idx=0
+export RPC_URL=https://polygon-rpc.com
+```
+
+如需自定义 CLOB 或数据源，追加：
+
+```bash
+# export CLOB_HOST=https://clob.polymarket.com
+# export BTC_PRICE_SOURCE=https://api.binance.com/api/v3/klines
+```
+
+### 2) 生成/更新 Up Bot 任务配置
+
+编辑 `src/icu/poly/db/seed-convergence-task-configs.js`，常改字段：
+
+- `task.slug`: Up/Down 事件 slug，支持 `${day}` `${hour}` `${am_pm}`
+- `task.symbol`: `BTC` / `ETH` / `SOL` 等
+- `position` / `riskControl`: 建仓、阈值、止盈参数
+- `schedule`: 扫描时间窗口
+- `extra`: 扩展风控参数（JSON 字符串）
+
+示例 `extra`：
+
+```js
+extra: '{"weightedThreshold":0.75,"pricePositionThreshold":0.2,"liquiditySignalWeight":0.05}',
+```
+
+写入数据库：
+
+```bash
+node src/icu/poly/db/seed-convergence-task-configs.js
+```
+
+### 3) 启动 Up Bot
+
+```bash
+node src/icu/poly/tail-bot-start-up.js
+```
+
+想只跑测试模式，可将配置里的 `task.test` 设为 `true`。
 
 ## 🧪 开发指南
 
@@ -424,4 +499,3 @@ ISC
 - **日志目录**: `logs/`
 - **命名格式**: `YYYYMMDD-{level}.log`
 - **自动轮转**: 每日创建新文件
-

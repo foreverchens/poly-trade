@@ -183,8 +183,10 @@ export class TakeProfitManager {
                 // 从30秒提高到最快3s、最优bid小于0.9时 触发刚损、不改DB、最少代码 实现所需功能
                 const entryPrice = Number(order.price);
                 if (entryPrice > 0 && yesBid > 0) {
-                    nextRunTickTime = Math.min(entryPrice - yesBid >= 0.02 ? 3000 : 30000,nextRunTickTime);
-                    logger.info(`${orderKey} 当前最优买价${yesBid} 小于订单价格${entryPrice} 提高监控频率`)
+                    if (entryPrice - yesBid > 0.02) {
+                        logger.info(`${orderKey} 当前最优买价${yesBid} 小于订单价格${entryPrice} 提高监控频率`)
+                        nextRunTickTime = 3000;
+                    }
                     if (yesBid < 0.9) {
                         logger.info(`${orderKey} 当前最优卖价跌破0.9、触发刚损、刚损数量:${matchedSize}`)
                         const stopLossResp = await this.client.placeOrder(

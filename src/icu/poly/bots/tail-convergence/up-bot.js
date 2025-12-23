@@ -50,7 +50,7 @@ class TailConvergenceStrategy {
             slug: this.slugTemplate,
             maxMinutesToEnd: this.maxMinutesToEnd,
             maxSizeUsdc: this.extraSizeUsdc + this.positionSizeUsdc,
-            cronExpression: "* 30-59 * * * *",
+            cronExpression: "* 3-59 * * * *",
             client: this.client,
             pkIdx: this.pkIdx,
         });
@@ -58,7 +58,6 @@ class TailConvergenceStrategy {
         // 初始化止盈管理器
         this.tpManager = new TakeProfitManager({
             cronTimeZone: this.cronTimeZone,
-            takeProfitPrice: this.takeProfitPrice,
             client: this.client,
         });
 

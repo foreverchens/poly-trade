@@ -549,7 +549,10 @@ async function fetchTradesFor(addresses = []) {
         }
         try {
             const trades = await fetchTrades(address);
-            return trades;
+            return (Array.isArray(trades) ? trades : []).map((trade) => ({
+                ...trade,
+                __accountAddress: normalized,
+            }));
         } catch (error) {
             return [];
         }
@@ -598,7 +601,7 @@ async function refreshTradesSection(addresses = getActiveAddresses()) {
         if (tradeHint) tradeHint.textContent = "成交刷新失败";
         const tbody = $("tradeBody");
         if (tbody) {
-            tbody.innerHTML = `<tr><td colspan="9" class="muted" data-th="提示">成交刷新失败</td></tr>`;
+            tbody.innerHTML = `<tr><td colspan="10" class="muted" data-th="提示">成交刷新失败</td></tr>`;
         }
     } finally {
         if (tradeHint) tradeHint.classList.remove("loading");
@@ -658,8 +661,6 @@ async function cancelOpenOrder(orderId, pkIdx, button) {
         alert("未找到托管账号，无法撤单");
         return;
     }
-    const confirmed = confirm(`确认撤销订单 ${shorten(orderId)} 吗？`);
-    if (!confirmed) return;
     const originalText = button.textContent;
     button.disabled = true;
     button.textContent = "撤单中…";
@@ -699,7 +700,7 @@ function renderTrades(trades) {
     if (!flatTrades.length) {
         status.textContent = "最近3天暂无成交";
         const tr = document.createElement("tr");
-        tr.innerHTML = `<td colspan="9" class="muted" data-th="提示">最近3天暂无成交</td>`;
+        tr.innerHTML = `<td colspan="10" class="muted" data-th="提示">最近3天暂无成交</td>`;
         tbody.appendChild(tr);
         return;
     }
@@ -717,13 +718,15 @@ function renderTrades(trades) {
         const marketLabel = trade.question || "—";
         const orderIdLabel = shorten(trade.order_id || trade.orderId || "");
         const outcome = trade.outcome || "—";
-        const accountAddress = trade.__accountAddress || "";
+        const accountAddress = trade.__accountAddress || trade.address || trade.ownerAddress || "";
+        const accountLabel = accountAddress ? shorten(accountAddress) : "—";
         if (accountAddress) {
             ensureManualAccountMeta(accountAddress);
         }
         const trEl = document.createElement("tr");
         trEl.innerHTML = `
   <td data-th="市场">${marketLabel}</td>
+  <td data-th="地址">${accountLabel}</td>
   <td data-th="订单ID">${orderIdLabel}</td>
   <td data-th="市场方向">${outcome}</td>
   <td data-th="订单方向"><span class="${trade.side === "BUY" ? "green" : "red"}">${trade.side || "—"}</span></td>

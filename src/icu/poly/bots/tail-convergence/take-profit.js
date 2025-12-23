@@ -7,7 +7,7 @@ import logger from "../../core/Logger.js";
 export class TakeProfitManager {
     constructor(config) {
         this.cronTimeZone = config.cronTimeZone;
-        this.takeProfitPrice = config.takeProfitPrice;
+        this.takeProfitPrice = '0.999';
         this.client = config.client;
 
         this.takeProfitOrders = [];
@@ -187,7 +187,7 @@ export class TakeProfitManager {
                         logger.info(`${orderKey} 当前最优买价${yesBid} 小于订单价格${entryPrice} 提高监控频率`)
                         nextRunTickTime = 3000;
                     }
-                    if (yesBid < 0.9) {
+                    if (yesBid < 0.85) {
                         logger.info(`${orderKey} 当前最优卖价跌破0.9、触发刚损、刚损数量:${matchedSize}`)
                         const stopLossResp = await this.client.placeOrder(
                             yesBid - 0.05, //模拟市价平仓

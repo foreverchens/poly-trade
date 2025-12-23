@@ -41,7 +41,7 @@ let currentPolyClient = null;
 let currentIndex = parseInt(process.env.poly_mnemonic_idx || "0", 10);
 let clientMap = new Map();
 const accountConfigs = convergenceTaskConfigs;
-const activeAccountConfigs = accountConfigs.filter((config) => config.task.active);
+const activeAccountConfigs = accountConfigs.filter((config) => config.task);
 activeAccountConfigs.forEach((config) => {
     const client = buildClient(config.task.pkIdx, config.task.creds);
     client.pkIdx = config.task.pkIdx;

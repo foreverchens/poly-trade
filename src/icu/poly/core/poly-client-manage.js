@@ -270,8 +270,10 @@ export async function nextClient(idx, oldClient) {
         const polBalance = await provider.getBalance(oldAddress);
         const polBalanceFormatted = ethers.utils.formatEther(polBalance);
         if (parseFloat(polBalanceFormatted) > 0.01) {
-            const amountToTransfer = (parseFloat(polBalanceFormatted) - 0.01).toFixed(6);
-            await transferPOL(oldClient.privateKey, newAccount.address, amountToTransfer);
+            const amountToTransfer = (parseFloat(polBalanceFormatted) - 0.2).toFixed(6);
+            await transferPOL(oldClient.privateKey, newAccount.address, amountToTransfer,{
+                gasLimit:80000
+            });
             logger.info(`  ✓ POL 转移成功: ${amountToTransfer}`);
         }else{
             logger.info("  - POL 余额太少，跳过处理");
@@ -311,6 +313,7 @@ export const activeClientMap = () => {
     return clientMap
 }
 // 初始化PolyClient
-// console.log(getAccount(301));
-// var polyClient = buildClient(200,null);
-// nextClient(200,polyClient)
+const idx = 0;
+// console.log(getAccount(idx));
+// var polyClient = buildClient(idx,null);
+// nextClient(idx,polyClient)

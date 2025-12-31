@@ -214,7 +214,7 @@ export async function transferPOL(privateKeyFrom, addressTo, amount, options = {
         nonce: currentNonce,
         maxFeePerGas: finalMaxFeePerGas,
         maxPriorityFeePerGas: finalMaxPriorityFeePerGas,
-        gasLimit: gasLimit || 21000,
+        gasLimit: gasLimit || 42000,
         chainId: CHAIN_ID,
         type: 2, // EIP-1559 transaction
     };

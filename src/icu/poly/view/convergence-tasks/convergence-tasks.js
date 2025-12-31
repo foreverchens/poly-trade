@@ -1451,6 +1451,9 @@ function buildCombinedBalanceChart(series) {
     const padding = { top: 30, right: 80, bottom: 60, left: 20 };
     const Y_BOTTOM_HEADROOM_RATIO = 0.05;
     const Y_TOP_HEADROOM_RATIO = 0.10;
+    const MIN_Y_TICKS = 4;
+    const Y_TICK_DISPLAY_TOP_RATIO = 0.2;
+    const Y_TICK_DISPLAY_BOTTOM_RATIO = 0.9;
 
     const svg = document.createElementNS(SVG_NS, "svg");
     svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
@@ -1487,39 +1490,57 @@ function buildCombinedBalanceChart(series) {
     function calculateIntegerTicksWithin(min, max) {
         const range = max - min;
         if (range <= 0) {
-            return { ticks: [Math.round(min)], minTick: Math.round(min), maxTick: Math.round(max), interval: 1 };
+            const centerTick = Math.round(min);
+            return { ticks: [centerTick], minTick: centerTick, maxTick: centerTick, interval: 1 };
         }
-        // 计算合适的刻度间隔（100, 200, 500, 1000等）
-        const magnitude = Math.pow(10, Math.floor(Math.log10(range)));
-        let interval = magnitude;
-        if (range / magnitude > 5) {
-            interval = magnitude * 2;
-        }
-        if (range / magnitude > 10) {
-            interval = magnitude * 5;
-        }
-        if (range / magnitude > 20) {
-            interval = magnitude * 10;
+        function getNiceIntegerInterval(rawInterval) {
+            if (!Number.isFinite(rawInterval) || rawInterval <= 1) {
+                return 1;
+            }
+            const magnitude = Math.pow(10, Math.floor(Math.log10(rawInterval)));
+            const candidates = [1, 2, 5, 10].map((base) => base * magnitude);
+            const choice = candidates.find((candidate) => candidate >= rawInterval) || candidates[candidates.length - 1];
+            return Math.max(1, Math.round(choice));
         }
 
-        // 计算起始和结束的整数刻度（限制在可视范围内）
-        const startTick = Math.ceil(min / interval) * interval;
-        const endTick = Math.floor(max / interval) * interval;
+        let startTick = Math.floor(min);
+        let endTick = Math.ceil(max);
+        if (startTick === endTick) {
+            startTick -= 1;
+            endTick += 1;
+        }
 
-        // 生成整数刻度数组
-        const ticks = [];
-        if (startTick <= endTick) {
+        let interval = getNiceIntegerInterval((endTick - startTick) / (MIN_Y_TICKS - 1));
+        startTick = Math.floor(startTick / interval) * interval;
+        endTick = Math.ceil(endTick / interval) * interval;
+
+        let ticks = [];
+        for (let tick = startTick; tick <= endTick; tick += interval) {
+            ticks.push(tick);
+        }
+
+        while (ticks.length < MIN_Y_TICKS) {
+            if (interval > 1) {
+                interval = Math.max(1, Math.floor(interval / 2));
+                startTick = Math.floor(startTick / interval) * interval;
+                endTick = Math.ceil(endTick / interval) * interval;
+            } else {
+                startTick -= 1;
+                endTick += 1;
+            }
+            ticks = [];
             for (let tick = startTick; tick <= endTick; tick += interval) {
                 ticks.push(tick);
             }
-        } else {
-            ticks.push(Math.round((min + max) / 2));
         }
 
         return { ticks, minTick: startTick, maxTick: endTick, interval };
     }
 
-    const { ticks } = calculateIntegerTicksWithin(minY, maxY);
+    const yRange = maxY - minY;
+    const displayMinValue = minY + (1 - Y_TICK_DISPLAY_BOTTOM_RATIO) * yRange;
+    const displayMaxValue = minY + (1 - Y_TICK_DISPLAY_TOP_RATIO) * yRange;
+    const { ticks } = calculateIntegerTicksWithin(displayMinValue, displayMaxValue);
 
     const chartWidth = width - padding.left - padding.right;
     const chartHeight = height - padding.top - padding.bottom;
@@ -1664,6 +1685,23 @@ function buildCombinedBalanceChart(series) {
         // 移除虚线样式，改为实线
         svg.appendChild(path);
 
+        // 绘制第一个数据点的余额标签（显示在曲线上方）
+        if (s.points.length > 0) {
+            const firstPoint = s.points[0];
+            const firstX = scaleX(firstPoint.time);
+            const firstY = scaleY(firstPoint.balance);
+            const firstLabel = document.createElementNS(SVG_NS, "text");
+            firstLabel.setAttribute("x", firstX);
+            firstLabel.setAttribute("y", firstY - 14);
+            firstLabel.setAttribute("text-anchor", "middle");
+            firstLabel.setAttribute("fill", s.color);
+            firstLabel.setAttribute("font-size", "12");
+            firstLabel.setAttribute("font-weight", "600");
+            firstLabel.setAttribute("font-family", "system-ui, -apple-system, sans-serif");
+            firstLabel.textContent = Math.round(firstPoint.balance);
+            svg.appendChild(firstLabel);
+        }
+
         // 绘制最高点数值
         if (s.points.length > 0) {
             // 找到最高点
@@ -1673,6 +1711,10 @@ function buildCombinedBalanceChart(series) {
 
             const maxX = scaleX(maxPoint.time);
             const maxY = scaleY(maxPoint.balance);
+
+            if (maxPoint.time === s.points[0].time && maxPoint.balance === s.points[0].balance) {
+                return;
+            }
 
             // 显示在顶点正上方
             const labelX = maxX;

@@ -10,7 +10,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 const WEB_SERVER = join(__dirname, "src/icu/poly/web-server.js");
-const TAIL_BOT = join(__dirname, "src/icu/poly/tail-bot-start-up.js");
+// const TAIL_BOT = join(__dirname, "src/icu/poly/tail-bot-start-up.js");
 const LOGS_DIR = join(__dirname, "logs");
 const PID_FILE = join(__dirname, "logs", "start-all.pids");
 
@@ -60,7 +60,7 @@ console.log(chalk.blue("后台启动 Poly 服务"));
 console.log(chalk.blue("=".repeat(50)));
 
 startProcess("Web Server", WEB_SERVER);
-startProcess("Tail Bot", TAIL_BOT);
+// startProcess("Tail Bot", TAIL_BOT);
 
 // 保存 PID
 savePids();

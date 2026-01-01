@@ -445,9 +445,11 @@ app.get("/api/current-address", async (req, res) => {
 app.get("/api/accounts", async (_req, res) => {
     try {
         const configs = await listConvergenceTaskConfigs();
+        const isActiveTask = (value) => value === true || value === 1 || value === "true";
+        const activeConfigs = configs.filter((config) => isActiveTask(config?.task?.active));
         const uniqueIndices = [
             ...new Set(
-                configs
+                activeConfigs
                     .map((config) => (Number.isInteger(config?.task?.pkIdx) ? config.task.pkIdx : null))
                     .filter((idx) => Number.isInteger(idx)),
             ),

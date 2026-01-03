@@ -50,7 +50,7 @@ class TailConvergenceStrategy {
             slug: this.slugTemplate,
             maxMinutesToEnd: this.maxMinutesToEnd,
             maxSizeUsdc: this.extraSizeUsdc + this.positionSizeUsdc,
-            cronExpression: "* 3-59 * * * *",
+            cronExpression: "* 0-59 * * * *",
             client: this.client,
             pkIdx: this.pkIdx,
         });

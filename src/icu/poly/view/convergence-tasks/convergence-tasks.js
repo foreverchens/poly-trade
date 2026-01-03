@@ -557,7 +557,7 @@ function updateTotalBalance() {
     const uniqueAccounts = new Map();
     state.items.forEach((item) => {
         const account = item.account;
-        if (account?.address && account.usdcBalance !== null && account.usdcBalance !== undefined) {
+        if (item.task.active && account?.address && account.usdcBalance !== null && account.usdcBalance !== undefined) {
             if (!uniqueAccounts.has(account.address)) {
                 uniqueAccounts.set(account.address, account.usdcBalance);
             }

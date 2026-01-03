@@ -1,15 +1,15 @@
 import "dotenv/config";
 import pkg from "@polymarket/clob-client";
-import { PriceHistoryInterval } from "@polymarket/clob-client/dist/types.js";
-import { SignatureType } from "@polymarket/order-utils";
-import { ethers } from "ethers";
-import { Wallet as EthersV5Wallet } from "@ethersproject/wallet";
-import { JsonRpcProvider } from "@ethersproject/providers";
+import {PriceHistoryInterval} from "@polymarket/clob-client/dist/types.js";
+import {SignatureType} from "@polymarket/order-utils";
+import {ethers} from "ethers";
+import {Wallet as EthersV5Wallet} from "@ethersproject/wallet";
+import {JsonRpcProvider} from "@ethersproject/providers";
 import axios from "axios";
 import dayjs from "dayjs";
-import { generateAccountFromMnemonic } from "./gen-key.js";
+import {generateAccountFromMnemonic} from "./gen-key.js";
 
-const { ClobClient, OrderType, Side, AssetType } = pkg;
+const {ClobClient, OrderType, Side, AssetType} = pkg;
 
 const DEFAULT_HOST = "https://clob.polymarket.com";
 const DEFAULT_CHAIN_ID = 137;
@@ -47,7 +47,7 @@ export async function initCreds(pk) {
 }
 
 export class PolyClient {
-    constructor(pk = null,creds = null, mock = false) {
+    constructor(pk = null, creds = null, mock = false) {
         if (pk) {
             this.privateKey = pk;
         } else {
@@ -79,7 +79,7 @@ export class PolyClient {
         //     process.exit(1);
         // });
         // 如果creds存在、则使用creds初始化client
-        if(creds){
+        if (creds) {
             this.creds = creds;
             this.client = new ClobClient(this.host, this.chainId, this.signer, this.creds, this.signatureType, this.funderAddress);
         }
@@ -116,7 +116,7 @@ export class PolyClient {
         let cnt = 0;
         do {
             try {
-                resp = await axios.get(url, { timeout: DEFAULT_HTTP_TIMEOUT });
+                resp = await axios.get(url, {timeout: DEFAULT_HTTP_TIMEOUT});
                 break;
             } catch (err) {
                 cnt++;
@@ -175,7 +175,7 @@ export class PolyClient {
             throw new Error("Failed to fetch price history: unexpected response shape");
         }
 
-        return { history };
+        return {history};
     }
 
     /**
@@ -294,21 +294,21 @@ export class PolyClient {
      * }}
      */
     async listRewardMarket({
-        orderBy = "rate_per_day",
-        position = "DESC",
-        limit = 100,
-        query = "",
-        showFavorites = false,
-        tagSlug = "all",
-        makerAddress = "",
-        authenticationType = "eoa",
-        nextCursor = "MA==",
-        requestPath = "/rewards/user/markets",
-        onlyMergeable = false,
-        noCompetition = false,
-        onlyOpenOrders = false,
-        onlyPositions = false,
-    } = {}) {
+                               orderBy = "rate_per_day",
+                               position = "DESC",
+                               limit = 100,
+                               query = "",
+                               showFavorites = false,
+                               tagSlug = "all",
+                               makerAddress = "",
+                               authenticationType = "eoa",
+                               nextCursor = "MA==",
+                               requestPath = "/rewards/user/markets",
+                               onlyMergeable = false,
+                               noCompetition = false,
+                               onlyOpenOrders = false,
+                               onlyPositions = false,
+                           } = {}) {
         const url = `${this.rewardsHost}/rewards/markets`;
         const response = await axios.get(url, {
             params: {
@@ -416,7 +416,7 @@ export class PolyClient {
         let dataArr = response?.data;
         dataArr = dataArr.filter((ele) => {
             // 过滤掉15min和4h级别的数据
-            if(ele.slug.includes('15m') || ele.slug.includes('4h') || ele.slug.includes('5m')) {
+            if (ele.slug.includes('15m') || ele.slug.includes('4h') || ele.slug.includes('5m')) {
                 return false;
             }
             return true;
@@ -431,13 +431,13 @@ export class PolyClient {
         const params = new URLSearchParams();
         conditionIds.forEach((id) => params.append("condition_ids", id));
         const url = `${this.marketHost}/markets?${params.toString()}`;
-        const response = await axios.get(url, { params: params, timeout: DEFAULT_HTTP_TIMEOUT });
+        const response = await axios.get(url, {params: params, timeout: DEFAULT_HTTP_TIMEOUT});
         return response?.data;
     }
 
     async getMarketBySlug(slug) {
         const url = `${this.marketHost}/markets/slug/${slug}`;
-        const response = await axios.get(url, { timeout: DEFAULT_HTTP_TIMEOUT });
+        const response = await axios.get(url, {timeout: DEFAULT_HTTP_TIMEOUT});
         return response?.data;
     }
 
@@ -530,7 +530,7 @@ export class PolyClient {
      * @param assetId
      * @returns {Promise<import("@polymarket/clob-client").OpenOrder[]>}
      */
-    async listOpenOrders({ market, assetId, id } = {}) {
+    async listOpenOrders({market, assetId, id} = {}) {
         const client = await this.getClient();
         const params = {};
         if (market) {
@@ -619,6 +619,41 @@ export class PolyClient {
         return await client.createAndPostOrder(orderRequest, orderOptions, this.orderType);
     }
 
+    async placeMarketOrder(tokenId, amount, side, price) {
+        if (amount <= 0) throw new Error(`invalid amount (${amount}), must be greater than 0`);
+        if (!tokenId) throw new Error("tokenId is required");
+        if (!side || (side !== Side.BUY && side !== Side.SELL)) {
+            throw new Error(`invalid side: ${side}, must be Side.BUY or Side.SELL`);
+        }
+
+        // 如果提供了价格，验证价格范围
+        if (price !== undefined) {
+            if (price < 0 || price > 1) {
+                throw new Error(`invalid price (${price}), min: 0 - max: 1`);
+            }
+        }
+
+        const client = await this.getClient();
+
+        const negRisk = await client.getNegRisk(tokenId);
+        const tickSize = await client.getTickSize(tokenId);
+
+        const marketOrderRequest = {
+            tokenID: tokenId,
+            amount,
+            side,
+            feeRateBps: 0,
+            orderType: OrderType.FAK,
+        };
+
+        // 如果提供了价格保护，添加到请求中
+        if (price !== undefined) {
+            marketOrderRequest.price = price;
+        }
+        const orderOptions = {tickSize, negRisk};
+        return client.createAndPostMarketOrder(marketOrderRequest, orderOptions, OrderType.FAK);
+    }
+
     /**
      *
      * @param orderID
@@ -635,7 +670,7 @@ export class PolyClient {
         }
 
         const client = await this.getClient();
-        return client.cancelOrder({ orderID });
+        return client.cancelOrder({orderID});
     }
 
     /*================持仓API===================*/
@@ -654,7 +689,7 @@ export class PolyClient {
             user: address,
         };
 
-        const response = await axios.get(url, { params, timeout: DEFAULT_HTTP_TIMEOUT });
+        const response = await axios.get(url, {params, timeout: DEFAULT_HTTP_TIMEOUT});
         return response?.data;
     }
 
@@ -673,7 +708,7 @@ export class PolyClient {
         // 只会返回一个openOrder 如果挂单被成交、则会返回其他openOrder、需要从成交列表中继续查询我们需要的订单信息
 
         // const rlt = await client.getOrder({ orderId }); 该API有BUG
-        const rlt = await this.listOpenOrders({ id: orderId });
+        const rlt = await this.listOpenOrders({id: orderId});
         if (rlt.length === 0) {
             return null;
         }
@@ -695,7 +730,7 @@ export class PolyClient {
      *         "side": "SELL"
      *     }]}
      */
-    async listMyTrades({ makerAddress } = {}) {
+    async listMyTrades({makerAddress} = {}) {
         const client = await this.getClient();
         const resolvedAddress = (
             makerAddress ||
@@ -779,6 +814,7 @@ export class PolyClient {
         });
         return rltArr;
     }
+
     /**
      * 获取 USDC.e 余额（ERC20 代币）
      * @returns {Promise<string>}
@@ -824,10 +860,11 @@ export class PolyClient {
         }
     }
 
-    async getBalance(){
+    async getBalance() {
         let client = await this.getClient();
         return client.getBalanceAllowance({asset_type: AssetType.COLLATERAL});
     }
 }
+
 export const PolySide = Side;
 export const PolyAssetType = AssetType;

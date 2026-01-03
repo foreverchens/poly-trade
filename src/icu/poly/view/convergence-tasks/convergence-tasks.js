@@ -553,6 +553,17 @@ function formatDateTime(value) {
     return `${date.toLocaleDateString()} ${date.toLocaleTimeString(undefined, { hour12: false })}`;
 }
 
+function formatBalanceChartTime(value) {
+    if (!value) return "-";
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return "-";
+    const month = String(date.getMonth() + 1).padStart(2, "0");
+    const day = String(date.getDate()).padStart(2, "0");
+    const hours = String(date.getHours()).padStart(2, "0");
+    const minutes = String(date.getMinutes()).padStart(2, "0");
+    return `${month}-${day} ${hours}:${minutes}`;
+}
+
 function updateTotalBalance() {
     const uniqueAccounts = new Map();
     state.items.forEach((item) => {
@@ -1378,16 +1389,23 @@ function createCombinedChartCard(series) {
     // - 选中“总余额”时：只渲染被勾选地址汇总后的总余额曲线（单条）
     const filteredSeries = getSeriesToRender();
 
+    const chartCanvas = document.createElement("div");
+    chartCanvas.className = "balance-chart-canvas";
+    const tooltip = createBalanceChartTooltip();
+    chartCanvas.appendChild(tooltip);
+
     if (filteredSeries.length === 0) {
         const emptyMsg = document.createElement("div");
         emptyMsg.className = "chart-empty";
         emptyMsg.textContent = "请至少选择一条曲线";
-        card.appendChild(emptyMsg);
+        chartCanvas.appendChild(emptyMsg);
     } else {
-        const svg = buildCombinedBalanceChart(filteredSeries);
+        const svg = buildCombinedBalanceChart(filteredSeries, { chartCanvas, tooltip });
         svg.dataset.chartId = "balance-chart-svg";
-        card.appendChild(svg);
+        chartCanvas.appendChild(svg);
     }
+
+    card.appendChild(chartCanvas);
 
     return card;
 }
@@ -1415,10 +1433,12 @@ function handleSeriesToggle(event) {
     // 重新渲染图表
     const chartCard = balanceChartContainer.querySelector(".balance-chart-item");
     if (chartCard) {
+        const chartCanvas = chartCard.querySelector(".balance-chart-canvas");
+        const tooltip = chartCanvas?.querySelector(".balance-chart-tooltip");
         const filteredSeries = getSeriesToRender();
 
-        const oldSvg = chartCard.querySelector('[data-chart-id="balance-chart-svg"]');
-        const oldEmpty = chartCard.querySelector(".chart-empty");
+        const oldSvg = chartCanvas?.querySelector('[data-chart-id="balance-chart-svg"]');
+        const oldEmpty = chartCanvas?.querySelector(".chart-empty");
 
         if (filteredSeries.length === 0) {
             if (oldSvg) oldSvg.remove();
@@ -1426,18 +1446,22 @@ function handleSeriesToggle(event) {
                 const emptyMsg = document.createElement("div");
                 emptyMsg.className = "chart-empty";
                 emptyMsg.textContent = "请至少选择一条曲线";
-                chartCard.appendChild(emptyMsg);
+                chartCanvas?.appendChild(emptyMsg);
+            }
+            if (tooltip) {
+                tooltip.classList.remove("active");
+                tooltip.setAttribute("aria-hidden", "true");
             }
         } else {
             if (oldEmpty) oldEmpty.remove();
             if (oldSvg) {
-                const newSvg = buildCombinedBalanceChart(filteredSeries);
+                const newSvg = buildCombinedBalanceChart(filteredSeries, { chartCanvas, tooltip });
                 newSvg.dataset.chartId = "balance-chart-svg";
                 oldSvg.replaceWith(newSvg);
             } else {
-                const newSvg = buildCombinedBalanceChart(filteredSeries);
+                const newSvg = buildCombinedBalanceChart(filteredSeries, { chartCanvas, tooltip });
                 newSvg.dataset.chartId = "balance-chart-svg";
-                chartCard.appendChild(newSvg);
+                chartCanvas?.appendChild(newSvg);
             }
         }
 
@@ -1445,7 +1469,54 @@ function handleSeriesToggle(event) {
     }
 }
 
-function buildCombinedBalanceChart(series) {
+function createBalanceChartTooltip() {
+    const tooltip = document.createElement("div");
+    tooltip.className = "balance-chart-tooltip";
+    tooltip.setAttribute("aria-hidden", "true");
+    tooltip.innerHTML = `
+        <strong class="balance-chart-tooltip-title"></strong>
+        <div class="balance-chart-tooltip-row">
+            <span>时间</span>
+            <span class="balance-chart-tooltip-time"></span>
+        </div>
+        <div class="balance-chart-tooltip-row">
+            <span>余额</span>
+            <span class="balance-chart-tooltip-value"></span>
+        </div>
+    `;
+    tooltip._titleEl = tooltip.querySelector(".balance-chart-tooltip-title");
+    tooltip._timeEl = tooltip.querySelector(".balance-chart-tooltip-time");
+    tooltip._valueEl = tooltip.querySelector(".balance-chart-tooltip-value");
+    return tooltip;
+}
+
+function findClosestPointByTime(points, targetTime) {
+    if (!points || points.length === 0) return null;
+    let left = 0;
+    let right = points.length - 1;
+    if (targetTime <= points[left].time) return points[left];
+    if (targetTime >= points[right].time) return points[right];
+
+    while (right - left > 1) {
+        const mid = Math.floor((left + right) / 2);
+        if (points[mid].time === targetTime) {
+            return points[mid];
+        }
+        if (points[mid].time < targetTime) {
+            left = mid;
+        } else {
+            right = mid;
+        }
+    }
+
+    const leftPoint = points[left];
+    const rightPoint = points[right];
+    return Math.abs(leftPoint.time - targetTime) <= Math.abs(rightPoint.time - targetTime)
+        ? leftPoint
+        : rightPoint;
+}
+
+function buildCombinedBalanceChart(series, hoverContext = {}) {
     const width = 1200;
     const height = 500;
     const padding = { top: 30, right: 80, bottom: 60, left: 20 };
@@ -1747,6 +1818,101 @@ function buildCombinedBalanceChart(series) {
         //     svg.appendChild(circle);
         // });
     });
+
+    const hoverLayer = document.createElementNS(SVG_NS, "g");
+    const hoverLine = document.createElementNS(SVG_NS, "line");
+    hoverLine.setAttribute("y1", padding.top);
+    hoverLine.setAttribute("y2", padding.top + chartHeight);
+    hoverLine.setAttribute("stroke", "rgba(255,255,255,0.22)");
+    hoverLine.setAttribute("stroke-dasharray", "4 4");
+    hoverLine.setAttribute("stroke-width", "1");
+    hoverLine.setAttribute("opacity", "0");
+    hoverLayer.appendChild(hoverLine);
+
+    const hoverDot = document.createElementNS(SVG_NS, "circle");
+    hoverDot.setAttribute("r", "4.5");
+    hoverDot.setAttribute("fill", "#ffffff");
+    hoverDot.setAttribute("stroke", "#0f172a");
+    hoverDot.setAttribute("stroke-width", "1.2");
+    hoverDot.setAttribute("opacity", "0");
+    hoverLayer.appendChild(hoverDot);
+
+    svg.appendChild(hoverLayer);
+
+    const { chartCanvas, tooltip } = hoverContext;
+    if (chartCanvas && tooltip) {
+        const hideHover = () => {
+            hoverLine.setAttribute("opacity", "0");
+            hoverDot.setAttribute("opacity", "0");
+            tooltip.classList.remove("active");
+            tooltip.setAttribute("aria-hidden", "true");
+        };
+
+        const showHover = (point, seriesItem) => {
+            const pointX = scaleX(point.time);
+            const pointY = scaleY(point.balance);
+            hoverLine.setAttribute("x1", pointX);
+            hoverLine.setAttribute("x2", pointX);
+            hoverLine.setAttribute("opacity", "1");
+            hoverDot.setAttribute("cx", pointX);
+            hoverDot.setAttribute("cy", pointY);
+            hoverDot.setAttribute("fill", seriesItem.color);
+            hoverDot.setAttribute("opacity", "1");
+
+            tooltip._titleEl.textContent = seriesItem.label;
+            tooltip._timeEl.textContent = formatBalanceChartTime(point.time);
+            tooltip._valueEl.textContent = formatUsdcBalance(point.balance);
+            tooltip.style.setProperty("--tooltip-accent", seriesItem.color);
+            tooltip.classList.add("active");
+            tooltip.setAttribute("aria-hidden", "false");
+
+            const canvasRect = chartCanvas.getBoundingClientRect();
+            const tooltipRect = tooltip.getBoundingClientRect();
+            const tooltipX = (pointX / width) * canvasRect.width + 12;
+            const tooltipY = (pointY / height) * canvasRect.height - tooltipRect.height - 12;
+            const maxLeft = canvasRect.width - tooltipRect.width - 8;
+            const clampedLeft = Math.max(8, Math.min(tooltipX, maxLeft));
+            const clampedTop = Math.max(8, Math.min(tooltipY, canvasRect.height - tooltipRect.height - 8));
+
+            tooltip.style.left = `${clampedLeft}px`;
+            tooltip.style.top = `${clampedTop}px`;
+        };
+
+        svg.addEventListener("pointerleave", hideHover);
+        svg.addEventListener("pointercancel", hideHover);
+        svg.addEventListener("pointermove", (event) => {
+            const rect = svg.getBoundingClientRect();
+            const x = ((event.clientX - rect.left) / rect.width) * width;
+            const y = ((event.clientY - rect.top) / rect.height) * height;
+            const withinX = x >= padding.left && x <= padding.left + chartWidth;
+            const withinY = y >= padding.top && y <= padding.top + chartHeight;
+            if (!withinX || !withinY) {
+                hideHover();
+                return;
+            }
+
+            const targetTime = minX + ((x - padding.left) / chartWidth) * (maxX - minX);
+            let closest = null;
+
+            series.forEach((s) => {
+                const point = findClosestPointByTime(s.points, targetTime);
+                if (!point) return;
+                const px = scaleX(point.time);
+                const py = scaleY(point.balance);
+                const dist = Math.hypot(px - x, py - y);
+                if (!closest || dist < closest.dist) {
+                    closest = { point, seriesItem: s, dist };
+                }
+            });
+
+            if (!closest) {
+                hideHover();
+                return;
+            }
+
+            showHover(closest.point, closest.seriesItem);
+        });
+    }
 
     return svg;
 }

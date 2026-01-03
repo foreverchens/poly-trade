@@ -313,13 +313,16 @@ export const activeClientMap = () => {
     return clientMap
 }
 // 初始化PolyClient
-const idx = 0;
-// console.log(getAccount(idx));
-// var polyClient = buildClient(idx,null);
+const idx = 303;
+console.log(getAccount(idx));
+var polyClient = buildClient(idx,null);
 // nextClient(idx,polyClient)
 
-// const tokenId= '95939793622122424818318502799416673616418813129214198509770530118361656067201';
+const tokenId= '';
 // polyClient.placeOrder('0.94',500,'BUY',tokenId)
 //     .then(ele=> console.log(ele))
 //     .catch(err=> console.log(err))
+// polyClient.placeMarketOrder(tokenId,100,'SELL','0.9')
+//     .then(console.log)
+//     .catch(console.log);
 

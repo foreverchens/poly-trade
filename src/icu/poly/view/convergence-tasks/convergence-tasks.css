@@ -741,6 +741,64 @@ td.actions button {
     max-height: 500px;
 }
 
+.balance-chart-canvas {
+    position: relative;
+}
+
+.balance-chart-tooltip {
+    position: absolute;
+    left: 0;
+    top: 0;
+    min-width: 180px;
+    padding: 10px 12px;
+    border-radius: 10px;
+    border: 1px solid var(--line);
+    background: rgba(7, 16, 29, 0.95);
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+    color: var(--text);
+    font-size: 12px;
+    opacity: 0;
+    transform: translateY(6px);
+    transition: opacity 0.15s ease, transform 0.15s ease;
+    pointer-events: none;
+    z-index: 3;
+}
+
+.balance-chart-tooltip.active {
+    opacity: 1;
+    transform: translateY(0);
+}
+
+.balance-chart-tooltip-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    font-weight: 600;
+    margin-bottom: 6px;
+}
+
+.balance-chart-tooltip-title::before {
+    content: "";
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--tooltip-accent, var(--accent));
+}
+
+.balance-chart-tooltip-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    color: rgba(255, 255, 255, 0.7);
+    font-variant-numeric: tabular-nums;
+}
+
+.balance-chart-tooltip-value {
+    color: var(--tooltip-accent, var(--accent));
+    font-weight: 600;
+}
+
 .chart-loading,
 .chart-empty {
     text-align: center;
